@@ -61,6 +61,35 @@ class ContentMetrics(Base):
     recorded_at = Column(DateTime, default=datetime.now)
 
 
+class AgentThread(Base):
+    """Persisted Agent chat thread."""
+
+    __tablename__ = "agent_threads"
+
+    id = Column(String(80), primary_key=True)
+    title = Column(Text, nullable=True)
+    last_provider = Column(String(50), nullable=True)
+    last_model = Column(String(200), nullable=True)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class AgentMessage(Base):
+    """Persisted Agent chat message."""
+
+    __tablename__ = "agent_messages"
+
+    id = Column(Integer, primary_key=True)
+    thread_id = Column(String(80), ForeignKey("agent_threads.id"), nullable=False)
+    role = Column(String(20), nullable=False)
+    content = Column(Text, nullable=False)
+    provider = Column(String(50), nullable=True)
+    model = Column(String(200), nullable=True)
+    tool_events = Column(Text, nullable=True)
+    status = Column(String(20), default="completed")
+    created_at = Column(DateTime, default=datetime.now)
+
+
 class ContentStore:
     """内容存储管理类"""
 
@@ -235,3 +264,160 @@ class ContentStore:
             return {"total_contents": total, "by_type": by_type, "by_status": by_status}
         finally:
             session.close()
+
+    def upsert_agent_thread(
+        self,
+        thread_id: str,
+        title: str | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+    ) -> Dict[str, Any]:
+        session = self._get_session()
+        try:
+            thread = session.query(AgentThread).filter(AgentThread.id == thread_id).first()
+            now = datetime.now()
+            if not thread:
+                thread = AgentThread(
+                    id=thread_id,
+                    title=title,
+                    last_provider=provider,
+                    last_model=model,
+                    created_at=now,
+                    updated_at=now,
+                )
+                session.add(thread)
+            else:
+                if title and not thread.title:
+                    thread.title = title
+                thread.last_provider = provider or thread.last_provider
+                thread.last_model = model or thread.last_model
+                thread.updated_at = now
+            session.commit()
+            return self._agent_thread_to_dict(thread, session)
+        finally:
+            session.close()
+
+    def list_agent_threads(self, limit: int = 30) -> List[Dict[str, Any]]:
+        session = self._get_session()
+        try:
+            threads = (
+                session.query(AgentThread)
+                .order_by(AgentThread.updated_at.desc())
+                .limit(limit)
+                .all()
+            )
+            return [self._agent_thread_to_dict(thread, session) for thread in threads]
+        finally:
+            session.close()
+
+    def get_agent_thread(self, thread_id: str) -> Optional[Dict[str, Any]]:
+        session = self._get_session()
+        try:
+            thread = session.query(AgentThread).filter(AgentThread.id == thread_id).first()
+            if not thread:
+                return None
+            return self._agent_thread_to_dict(thread, session)
+        finally:
+            session.close()
+
+    def save_agent_message(
+        self,
+        thread_id: str,
+        role: str,
+        content: str,
+        provider: str | None = None,
+        model: str | None = None,
+        tool_events: list[dict] | None = None,
+        status: str = "completed",
+    ) -> int:
+        session = self._get_session()
+        try:
+            thread = session.query(AgentThread).filter(AgentThread.id == thread_id).first()
+            if not thread:
+                thread = AgentThread(
+                    id=thread_id,
+                    title=self._make_thread_title(content) if role == "user" else None,
+                    last_provider=provider,
+                    last_model=model,
+                )
+                session.add(thread)
+            elif role == "user" and not thread.title:
+                thread.title = self._make_thread_title(content)
+
+            thread.last_provider = provider or thread.last_provider
+            thread.last_model = model or thread.last_model
+            thread.updated_at = datetime.now()
+
+            message = AgentMessage(
+                thread_id=thread_id,
+                role=role,
+                content=content,
+                provider=provider,
+                model=model,
+                tool_events=json.dumps(tool_events or [], ensure_ascii=False),
+                status=status,
+            )
+            session.add(message)
+            session.commit()
+            return message.id
+        finally:
+            session.close()
+
+    def list_agent_messages(self, thread_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+        session = self._get_session()
+        try:
+            messages = (
+                session.query(AgentMessage)
+                .filter(AgentMessage.thread_id == thread_id)
+                .order_by(AgentMessage.created_at.desc())
+                .limit(limit)
+                .all()
+            )
+            return [self._agent_message_to_dict(message) for message in reversed(messages)]
+        finally:
+            session.close()
+
+    def delete_agent_thread(self, thread_id: str) -> bool:
+        session = self._get_session()
+        try:
+            thread = session.query(AgentThread).filter(AgentThread.id == thread_id).first()
+            if not thread:
+                return False
+            session.query(AgentMessage).filter(AgentMessage.thread_id == thread_id).delete()
+            session.delete(thread)
+            session.commit()
+            return True
+        finally:
+            session.close()
+
+    @staticmethod
+    def _make_thread_title(content: str) -> str:
+        title = " ".join(content.strip().split())
+        return title[:40] or "Untitled thread"
+
+    @staticmethod
+    def _agent_message_to_dict(message: AgentMessage) -> Dict[str, Any]:
+        return {
+            "id": message.id,
+            "thread_id": message.thread_id,
+            "role": message.role,
+            "content": message.content,
+            "provider": message.provider,
+            "model": message.model,
+            "tool_events": json.loads(message.tool_events) if message.tool_events else [],
+            "status": message.status,
+            "created_at": message.created_at.isoformat() if message.created_at else None,
+        }
+
+    @staticmethod
+    def _agent_thread_to_dict(thread: AgentThread, session: Session) -> Dict[str, Any]:
+        message_count = session.query(AgentMessage).filter(AgentMessage.thread_id == thread.id).count()
+        return {
+            "id": thread.id,
+            "title": thread.title,
+            "last_provider": thread.last_provider,
+            "last_model": thread.last_model,
+            "message_count": message_count,
+            "created_at": thread.created_at.isoformat() if thread.created_at else None,
+            "updated_at": thread.updated_at.isoformat() if thread.updated_at else None,
+        }
