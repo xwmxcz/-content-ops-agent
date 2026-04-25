@@ -24,7 +24,7 @@ The current product flow focuses on one practical content operations loop:
 
 ### Commercial Boundary
 
-This repository is a local, demo-ready SaaS prototype.
+This repository is a demo-ready SaaS prototype.
 
 It does not claim to include production-grade login, team permissions, billing, multi-tenant isolation, cloud deployment, or real publishing integrations. Those are natural commercialization directions, but they are intentionally outside this version so the current implementation stays honest, reviewable, and runnable for interviews.
 
@@ -56,54 +56,66 @@ Core implementation areas:
 - `src/storage/content_store.py`: SQLAlchemy models and CRUD for content, calendar events, metrics, and Agent threads.
 - `tests/`: contract tests for health, content generation, Agent pipeline, Agent chat persistence, tool events, and model listing.
 
-### Current Startup
+### Portable Setup
 
-Install dependencies:
+Prerequisites:
 
-```powershell
-conda activate only
-pip install -r requirements.txt
+- Python 3.10+
+- Node.js 18+
+- An API key for at least one supported LLM provider if you want live generation. Demo seed data does not call external APIs.
+
+Install backend dependencies:
+
+```bash
+python -m venv .venv
+
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+
+# macOS / Linux
+source .venv/bin/activate
+
+python -m pip install -r requirements.txt
 ```
 
-Create local configuration:
+Create runtime configuration from the example file:
 
-```powershell
-Copy-Item .env.example .env
+```bash
+cp .env.example .env
 ```
 
-Seed local demo data without calling any LLM provider:
+If your shell does not provide `cp`, copy `.env.example` to `.env` with your system's file copy command. Then set the provider key you want to use.
 
-```powershell
+Optional: seed demo data without calling any LLM provider:
+
+```bash
 python examples/seed_demo_data.py
 ```
 
 Start the backend:
 
-```powershell
+```bash
 python server.py
 ```
 
 Start the frontend in a second terminal:
 
-```powershell
+```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-Open:
-
-- Frontend: `http://localhost:5173`
-- Backend health check: `http://localhost:8000/api/health`
-- API docs: `http://localhost:8000/docs`
+The backend and frontend URLs are printed in your terminal when the servers start. Ports can be changed through `.env` for the API and `frontend/vite.config.ts` for the frontend dev server. Open the API docs by visiting `/docs` on the backend server URL.
 
 ### Verification
 
-```powershell
-F:\miniconda\envs\only\python.exe -m pytest tests -q
-F:\miniconda\envs\only\python.exe -m compileall src tests examples
+```bash
+python -m pytest tests -q
+python -m compileall src tests examples
+
 cd frontend
-npm.cmd run build
+npm run build
 ```
 
 ### API Surface
@@ -130,7 +142,7 @@ See [RESUME.md](RESUME.md) for resume-ready Chinese and English bullets, and [DE
 
 ## 中文
 
-AI Content Ops 是一个可本地演示的 AI 内容运营 SaaS 原型。项目把 Vue 3 内容工作台、FastAPI 后端、多模型路由、四阶段 Agent pipeline、工具型对话 Agent 和内容运营数据持久化串成一个完整闭环。
+AI Content Ops 是一个可演示的 AI 内容运营 SaaS 原型。项目把 Vue 3 内容工作台、FastAPI 后端、多模型路由、四阶段 Agent pipeline、工具型对话 Agent 和内容运营数据持久化串成一个完整闭环。
 
 这个项目适合作为 AI 全栈工程师作品集项目：重点展示产品闭环、Agent 编排、LLM 接入、API contract tests 和端到端前后端实现。它不是已经上线的生产级 SaaS，也不夸大为已有真实商业收入的产品。
 
@@ -148,7 +160,7 @@ AI Content Ops 是一个可本地演示的 AI 内容运营 SaaS 原型。项目�
 
 ### 商业化边界
 
-本仓库是一个本地可演示的 SaaS 原型。
+本仓库是一个可演示的 SaaS 原型。
 
 当前版本不包含生产级登录、团队权限、计费、多租户隔离、云部署或真实平台发布集成。这些是后续商业化方向，但不是当前实现范围。这样可以保证项目表达准确，适合面试和代码审查。
 
@@ -180,54 +192,66 @@ graph LR
 - `src/storage/content_store.py`：SQLAlchemy 持久化内容、日历、指标、Agent thread 和消息。
 - `tests/`：覆盖健康检查、内容生成、Agent pipeline、Agent chat、tool events 和模型列表的 contract tests。
 
-### 当前启动方式
+### 通用启动方式
 
-安装依赖：
+环境要求：
 
-```powershell
-conda activate only
-pip install -r requirements.txt
+- Python 3.10+
+- Node.js 18+
+- 如果要调用真实模型，需要配置至少一个 LLM provider 的 API key。演示数据脚本不会调用外部 API。
+
+安装后端依赖：
+
+```bash
+python -m venv .venv
+
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+
+# macOS / Linux
+source .venv/bin/activate
+
+python -m pip install -r requirements.txt
 ```
 
-创建本地配置：
+从示例文件创建运行配置：
 
-```powershell
-Copy-Item .env.example .env
+```bash
+cp .env.example .env
 ```
 
-可选：导入本地演示数据，不调用外部 LLM：
+如果当前 shell 没有 `cp` 命令，可以用系统自带的复制命令把 `.env.example` 复制成 `.env`。然后在 `.env` 里填写你要使用的 provider API key。
 
-```powershell
+可选：导入演示数据，不调用外部 LLM：
+
+```bash
 python examples/seed_demo_data.py
 ```
 
 启动后端：
 
-```powershell
+```bash
 python server.py
 ```
 
 另开一个终端启动前端：
 
-```powershell
+```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-访问地址：
-
-- 前端：`http://localhost:5173`
-- 后端健康检查：`http://localhost:8000/api/health`
-- API 文档：`http://localhost:8000/docs`
+后端和前端服务地址会在启动成功后显示在终端里。API 端口可以通过 `.env` 配置，前端开发端口可以在 `frontend/vite.config.ts` 中调整。API 文档地址是在后端服务地址后追加 `/docs`。
 
 ### 验证命令
 
-```powershell
-F:\miniconda\envs\only\python.exe -m pytest tests -q
-F:\miniconda\envs\only\python.exe -m compileall src tests examples
+```bash
+python -m pytest tests -q
+python -m compileall src tests examples
+
 cd frontend
-npm.cmd run build
+npm run build
 ```
 
 ### API 接口
