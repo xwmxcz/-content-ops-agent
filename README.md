@@ -1,87 +1,176 @@
-# Content Ops Agent
+# AI Content Ops SaaS Prototype
 
-智能内容运营 Agent - 自动化内容创作、优化和发布
+AI Content Ops is a demonstrable SaaS prototype for content operations teams. It combines a Vue 3 workspace, a FastAPI backend, multi-provider LLM routing, a 4-stage content Agent pipeline, a tool-calling chat Agent, and persistent content operations data.
 
-## 功能特性
+The project is packaged as an AI full-stack engineering portfolio project: it shows product thinking, Agent orchestration, model integration, API contracts, and an end-to-end frontend workflow without claiming that it is already a production SaaS.
 
-- 🎯 多平台内容生成（小红书、微博、博客、视频脚本）
-- 🤖 多 LLM API 支持（Claude、硅基流动、DeepSeek、Moonshot）
-- ✨ 智能文案优化和改写
-- 📦 批量内容生成
-- 🎨 内容模板系统
-- 💰 成本优化（最多节省 96% API 费用）
+## Product Scope
 
-## 🌟 多 API 支持
+The current product flow focuses on one practical content operations loop:
 
-支持 4 个 LLM 提供商，灵活选择：
+- Content Studio: run a Strategy / Writer / Editor / Review Agent pipeline and save the final draft.
+- Agent Chat: use a persistent tool-calling Agent with model selection and thread history.
+- Content Library: review saved drafts and generated variants.
+- Refinement: polish an existing content item and save the revised version.
+- Calendar: schedule saved content for future publishing dates.
+- Stats: view content distribution by type and status.
+- Model Console: select Claude, SiliconFlow, DeepSeek, or Moonshot models through the same API surface.
 
-| 提供商 | 优势 | 成本 | 适用场景 |
-|--------|------|------|---------|
-| Claude | 质量最高 | $$ | 重要内容 |
-| 硅基流动 | 便宜快速 | $ | 批量生成 |
-| DeepSeek | 性价比高 | $ | 日常使用 |
-| Moonshot | 长上下文 | $$ | 长文章 |
+## Commercial Boundary
 
-详见 [MULTI_API_GUIDE.md](MULTI_API_GUIDE.md)
+This repository is a local, demo-ready SaaS prototype.
 
-## 快速开始
+It does not claim to include production-grade login, team permissions, billing, multi-tenant isolation, cloud deployment, or real publishing integrations. Those are natural commercialization directions, but they are intentionally outside this version so the current implementation stays honest, reviewable, and runnable for interviews.
 
-```bash
-# 1. 安装依赖
+## Architecture
+
+```mermaid
+graph LR
+  A[Vue 3 + Vite + Element Plus] --> B[FastAPI REST API]
+  B --> C[Content Services]
+  B --> D[Agent Services]
+  C --> E[LiteLLM Adapter]
+  D --> E
+  D --> F[LangChain Tool Calling]
+  E --> G[Claude]
+  E --> H[SiliconFlow]
+  E --> I[DeepSeek]
+  E --> J[Moonshot]
+  B --> K[SQLAlchemy ORM]
+  K --> L[(SQLite content_ops.db)]
+```
+
+Core implementation areas:
+
+- `frontend/`: Vue 3 application, Element Plus UI, ECharts stats, and model/content API clients.
+- `src/api/`: FastAPI routes, schemas, services, dependency injection, and contract-tested API behavior.
+- `src/api/services/agent_pipeline.py`: 4-stage Agent pipeline for strategy, drafting, editing, and review.
+- `src/api/services/chat_agent.py`: persistent chat Agent with 9 content operations tools.
+- `src/llm/`: LiteLLM and provider adapters for Claude, SiliconFlow, DeepSeek, and Moonshot.
+- `src/storage/content_store.py`: SQLAlchemy models and CRUD for content, calendar events, metrics, and Agent threads.
+- `tests/`: contract tests for health, content generation, Agent pipeline, Agent chat persistence, tool events, and model listing.
+
+## Local Demo
+
+Prerequisites:
+
+- Python 3.10+
+- Node.js 18+
+- A provider API key only if you want to run live LLM generation. Seeded demo data does not call external APIs.
+
+Install Python dependencies:
+
+```powershell
 conda activate only
 pip install -r requirements.txt
+```
 
-# 2. 配置环境变量
-cp .env.example .env
-# 编辑 .env 文件：
-# - 设置 LLM_PROVIDER (claude/siliconflow/deepseek/moonshot)
-# - 添加对应的 API Key
+Create local configuration:
 
-# 3. 运行旧版 CLI
-python run.py
+```powershell
+Copy-Item .env.example .env
+```
 
-# 4. 运行新版 FastAPI 后端
+Set the provider you want to use in `.env`, for example:
+
+```env
+LLM_PROVIDER=siliconflow
+SILICONFLOW_API_KEY=your_key_here
+DATABASE_URL=sqlite:///./data/content_ops.db
+```
+
+Seed local demo data without calling any LLM provider:
+
+```powershell
+python examples/seed_demo_data.py
+```
+
+Start the backend:
+
+```powershell
 python server.py
+```
 
-# 5. 运行新版 Vue 前端
+Start the frontend in a second terminal:
+
+```powershell
 cd frontend
 npm install
 npm run dev
-
-# 6. 测试多 API
-python examples/multi_api_demo.py
 ```
 
-## 技术栈
+Open the app:
 
-- Python 3.10+
-- 多 LLM API (Claude, SiliconFlow, DeepSeek, Moonshot)
-- 抽象接口设计 + 工厂模式
-- LangGraph
-- FastAPI REST API
-- Vue 3 + Vite + Element Plus
-- Streamlit（迁移期保留）
+- Frontend: `http://localhost:5173`
+- Backend health check: `http://localhost:8000/api/health`
+- API docs: `http://localhost:8000/docs`
 
-## 项目结构
+The seed script is safe to run repeatedly. It removes only rows marked with the demo provider/model before inserting fresh content, calendar events, metrics, and a sample Agent thread.
 
-```
-content-ops-agent/
-├── src/
-│   ├── models/          # 数据模型
-│   ├── api/             # FastAPI 后端接口
-│   ├── tools/           # 内容生成工具
-│   ├── graph/           # LangGraph 工作流
-│   ├── utils/           # 工具函数
-│   └── main.py          # 主程序
-├── frontend/            # Vue 3 前端
-├── examples/            # 示例代码
-├── tests/               # 测试
-├── data/                # 数据存储
-├── run.py               # 旧版 CLI 启动脚本
-├── server.py            # 新版 API 启动脚本
-└── requirements.txt     # Python 依赖
+## Useful Commands
+
+Run the modern API:
+
+```powershell
+python server.py
 ```
 
-## 开发计划
+Run the Vue frontend:
 
-详见 [PROJECT_PLAN.md](PROJECT_PLAN.md)
+```powershell
+cd frontend
+npm run dev
+```
+
+Run the legacy CLI:
+
+```powershell
+python run.py
+```
+
+Run the legacy Streamlit interface:
+
+```powershell
+streamlit run src/web/app.py
+```
+
+Run verification:
+
+```powershell
+F:\miniconda\envs\only\python.exe -m pytest tests -q
+F:\miniconda\envs\only\python.exe -m compileall src tests examples
+cd frontend
+npm.cmd run build
+```
+
+## API Surface
+
+Primary REST endpoints:
+
+- `GET /api/health`: backend health check.
+- `GET /api/models`: configured provider and model options.
+- `POST /api/agent/run`: run the 4-stage content pipeline.
+- `POST /api/agent/chat`: run the persistent tool-calling Agent.
+- `GET /api/agent/threads`: list persisted Agent conversations.
+- `GET /api/content`: list saved content.
+- `POST /api/content/generate`: generate and save a draft.
+- `POST /api/content/refine`: refine and save a content variant.
+- `GET /api/calendar/events`: view scheduled content.
+- `POST /api/calendar/events`: schedule content.
+- `GET /api/stats`: content count distribution by type and status.
+
+## Resume Positioning
+
+Use this project as an AI full-stack engineering case study, not as a claim of a mature commercial SaaS. Good keywords include:
+
+- Agent orchestration
+- Tool-calling Agent
+- LLM integration
+- Multi-provider model routing
+- FastAPI
+- Vue 3
+- SQLAlchemy
+- Contract tests
+- Content workflow automation
+
+See [RESUME.md](RESUME.md) for resume-ready Chinese and English bullets, and [DEMO.md](DEMO.md) for a 3-5 minute interview demo script.
