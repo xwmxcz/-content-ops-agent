@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"from src.web.pages import generate_page, refine_page, calendar_page, history_page, stats_page; print\\('✅ All pages imported successfully'\\)\")",
+      "Bash(python -c \"from src.web.pages import generate_page\")",
+      "Bash(python -m py_compile src/web/pages/generate_page.py)",
+      "Bash(pip show *)",
+      "Bash(conda activate *)",
+      "Bash(conda run *)",
+      "Bash(findstr -i \"streamlit pandas plotly\")",
+      "Bash(findstr \"8501\")",
+      "Bash(curl *)",
+      "mcp__chrome-devtools__take_screenshot",
+      "mcp__plugin_oh-my-claudecode_t__state_write",
+      "mcp__context7__resolve-library-id",
+      "mcp__context7__query-docs"
+    ]
+  }
+}
