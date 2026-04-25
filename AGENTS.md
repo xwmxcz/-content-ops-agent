@@ -2,39 +2,43 @@
 
 ## Project Structure & Module Organization
 
-This is a Python content operations agent with CLI and Streamlit interfaces.
+This is an AI content operations SaaS prototype with a FastAPI backend and Vue 3 frontend.
 
-- `src/main.py` contains the interactive CLI entry point used by `run.py`.
+- `server.py` starts the FastAPI application in `src/api/main.py`.
+- `src/api/` contains REST routes, Pydantic schemas, dependencies, and service-layer orchestration.
+- `src/api/services/agent_pipeline.py` contains the Strategy / Writer / Editor / Review pipeline.
+- `src/api/services/chat_agent.py` contains the persistent tool-calling chat Agent.
 - `src/models/` defines request and generated-content data structures.
-- `src/llm/` contains provider clients and the LLM factory for Claude, SiliconFlow, DeepSeek, and Moonshot.
-- `src/tools/` holds content generation, prompt templates, calendar, and content helper tools.
-- `src/graph/` contains the LangGraph workflow and state definitions.
-- `src/storage/` manages persisted content, backed by `data/content_ops.db`.
-- `src/web/` contains the Streamlit app and page modules.
-- `examples/` contains runnable demos. Root-level `test_setup.py` and `test_api.py` are smoke tests.
+- `src/llm/` contains the current LiteLLM adapter.
+- `src/tools/prompt_templates.py` contains reusable content prompt templates.
+- `src/storage/` manages persisted content, calendar events, metrics, Agent threads, and messages.
+- `frontend/` contains the Vue 3 + Vite + Element Plus application.
+- `examples/seed_demo_data.py` creates repeatable local demo data without external LLM calls.
+- `tests/` contains pytest contract tests for the API and configuration behavior.
 
 ## Build, Test, and Development Commands
 
-- `pip install -r requirements.txt` installs runtime dependencies.
-- `cp .env.example .env` creates local configuration; then set the chosen provider API key.
-- `python run.py` starts the CLI agent.
-- `streamlit run src/web/app.py` starts the web UI. On Windows, `run_web.bat` runs the same app through the `only` conda environment.
-- `python examples/quick_start.py` runs a basic usage example.
-- `python examples/multi_api_demo.py` exercises multiple LLM providers.
-- `python test_setup.py` checks imports, config, models, and generator initialization.
-- `python test_api.py` tests SiliconFlow connectivity and requires a valid API key.
+- `pip install -r requirements.txt` installs Python dependencies.
+- `cp .env.example .env` creates local configuration; then set the chosen provider API key for live LLM calls.
+- `python examples/seed_demo_data.py` seeds local demo data without calling any provider.
+- `python server.py` starts the FastAPI backend.
+- `cd frontend && npm install` installs frontend dependencies.
+- `cd frontend && npm run dev` starts the Vue frontend.
+- `cd frontend && npm run build` builds the frontend.
+- `python -m pytest tests -q` runs the API/config contract tests.
+- `python -m compileall src tests examples` checks Python syntax.
 
 ## Coding Style & Naming Conventions
 
-Use standard Python style: 4-space indentation, `snake_case` for functions and variables, `PascalCase` for classes and dataclasses, and uppercase names for enum members and constants. Keep provider-specific logic isolated under `src/llm/` and shared orchestration in `src/graph/`. Prefer type hints for new public functions and small dataclasses or enums for structured content concepts.
+Use standard Python style: 4-space indentation, `snake_case` for functions and variables, `PascalCase` for classes and dataclasses, and uppercase names for enum members and constants. Keep provider routing behind the LiteLLM adapter and shared orchestration under `src/api/services/`. Prefer type hints for new public functions and small dataclasses or enums for structured content concepts.
 
 ## Testing Guidelines
 
-Current tests are script-based smoke checks rather than a pytest suite. Add focused tests near the repository root or introduce a `tests/` package if adding broader coverage. Name new test files `test_*.py`. Avoid real API calls in default tests unless clearly documented; mock provider clients or gate live calls behind environment variables.
+Default tests must not require real API calls. Mock provider clients or use fake LLM clients for contract tests. Add focused tests under `tests/` and name new files `test_*.py`.
 
 ## Commit & Pull Request Guidelines
 
-No local Git history is available in this workspace, so use concise imperative commits such as `Add Streamlit history page` or `Fix SiliconFlow timeout handling`. Pull requests should include a short change summary, test commands run, configuration changes, and screenshots for web UI updates.
+Use concise imperative commits such as `Add Agent workflow tests` or `Clean legacy startup paths`. Pull requests should include a short change summary, test commands run, configuration changes, and screenshots for web UI updates.
 
 ## Security & Configuration Tips
 

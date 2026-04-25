@@ -46,7 +46,7 @@ Core implementation areas:
 - `src/api/`: FastAPI routes, schemas, services, dependency injection, and contract-tested API behavior.
 - `src/api/services/agent_pipeline.py`: 4-stage Agent pipeline for strategy, drafting, editing, and review.
 - `src/api/services/chat_agent.py`: persistent chat Agent with 9 content operations tools.
-- `src/llm/`: LiteLLM and provider adapters for Claude, SiliconFlow, DeepSeek, and Moonshot.
+- `src/llm/`: LiteLLM adapter used for Claude, SiliconFlow, DeepSeek, and Moonshot routing.
 - `src/storage/content_store.py`: SQLAlchemy models and CRUD for content, calendar events, metrics, and Agent threads.
 - `tests/`: contract tests for health, content generation, Agent pipeline, Agent chat persistence, tool events, and model listing.
 
@@ -107,31 +107,25 @@ Open the app:
 
 The seed script is safe to run repeatedly. It removes only rows marked with the demo provider/model before inserting fresh content, calendar events, metrics, and a sample Agent thread.
 
-## Useful Commands
+## Current Startup
 
-Run the modern API:
+Run the backend:
 
 ```powershell
 python server.py
 ```
 
-Run the Vue frontend:
+Run the frontend:
 
 ```powershell
 cd frontend
 npm run dev
 ```
 
-Run the legacy CLI:
+Optional demo data reset:
 
 ```powershell
-python run.py
-```
-
-Run the legacy Streamlit interface:
-
-```powershell
-streamlit run src/web/app.py
+python examples/seed_demo_data.py
 ```
 
 Run verification:

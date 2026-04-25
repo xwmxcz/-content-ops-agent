@@ -1,13 +1,13 @@
-from src.tools.content_generator import ContentGenerator
+from src.utils import config
 
 
-def test_content_generator_uses_explicit_provider_credentials():
-    generator = ContentGenerator(
-        provider="siliconflow",
-        api_key="test-key",
-        model="Qwen/Qwen2.5-7B-Instruct",
+def test_litellm_model_names_are_provider_prefixed_when_required():
+    assert config.get_litellm_model("siliconflow", "Qwen/Qwen2.5-7B-Instruct") == (
+        "openai/Qwen/Qwen2.5-7B-Instruct"
     )
+    assert config.get_litellm_model("deepseek", "deepseek-chat") == "deepseek/deepseek-chat"
+    assert config.get_litellm_model("moonshot", "moonshot-v1-8k") == "moonshot/moonshot-v1-8k"
 
-    assert generator.provider == "siliconflow"
-    assert generator.api_key == "test-key"
-    assert generator.model == "Qwen/Qwen2.5-7B-Instruct"
+
+def test_claude_litellm_model_name_is_not_rewritten():
+    assert config.get_litellm_model("claude", "claude-sonnet-4-20250514") == "claude-sonnet-4-20250514"
