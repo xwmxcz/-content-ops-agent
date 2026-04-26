@@ -236,39 +236,3 @@ python -m compileall src tests examples
 cd frontend
 npm run build
 ```
-
-## API 接口
-
-同步接口：
-
-- `GET /api/health`: 健康检查。
-- `GET /api/models`: 获取 provider 和模型列表。
-- `POST /api/agent/run`: 直接执行四阶段内容 Agent 流程。
-- `POST /api/agent/chat`: 执行持久化工具型对话 Agent。
-- `GET /api/agent/threads`: 获取持久化会话列表。
-- `GET /api/agent/threads/{thread_id}/messages`: 获取单个会话消息。
-- `DELETE /api/agent/threads/{thread_id}`: 删除持久化会话。
-- `GET /api/content`: 获取内容列表。
-- `GET /api/content/{content_id}`: 获取单条内容。
-- `POST /api/content/generate`: 直接生成并保存内容。
-- `POST /api/content/refine`: 直接打磨并保存内容版本。
-- `POST /api/content/titles`: 生成标题候选。
-- `POST /api/content/seo`: 生成 SEO 建议。
-- `GET /api/calendar/events`: 查看发布日历。
-- `POST /api/calendar/events`: 创建发布日程。
-- `GET /api/stats`: 查看内容类型和状态统计。
-
-任务接口：
-
-- `POST /api/jobs/content-generation`: 创建内容生成任务。
-- `POST /api/jobs/agent-run`: 创建四阶段 Agent 流程任务。
-- `POST /api/jobs/refine`: 创建内容打磨任务。
-- `POST /api/jobs/titles`: 创建标题生成任务。
-- `POST /api/jobs/seo`: 创建 SEO 分析任务。
-- `GET /api/jobs/{job_id}`: 查询任务状态和结果。
-
-## 简历定位
-
-这个项目更适合作为 AI 全栈工程案例，而不是成熟商业 SaaS 的宣传材料。推荐关键词包括 Agent orchestration、tool-calling Agent、LLM integration、multi-provider model routing、FastAPI、Vue 3、SQLAlchemy、Redis、RQ 和 contract tests。
-
-简历版项目描述见 [RESUME.md](RESUME.md)，3 到 5 分钟面试演示路线见 [DEMO.md](DEMO.md)。

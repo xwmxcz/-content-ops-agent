@@ -236,39 +236,3 @@ python -m compileall src tests examples
 cd frontend
 npm run build
 ```
-
-## API Surface
-
-Synchronous API endpoints:
-
-- `GET /api/health`: backend health check.
-- `GET /api/models`: configured provider and model options.
-- `POST /api/agent/run`: run the 4-stage content pipeline directly.
-- `POST /api/agent/chat`: run the persistent tool-calling Agent.
-- `GET /api/agent/threads`: list persisted Agent conversations.
-- `GET /api/agent/threads/{thread_id}/messages`: list messages for one Agent thread.
-- `DELETE /api/agent/threads/{thread_id}`: delete a persisted Agent thread.
-- `GET /api/content`: list saved content.
-- `GET /api/content/{content_id}`: fetch one saved content item.
-- `POST /api/content/generate`: generate and save a draft directly.
-- `POST /api/content/refine`: refine and save a content variant directly.
-- `POST /api/content/titles`: generate title options.
-- `POST /api/content/seo`: generate SEO suggestions.
-- `GET /api/calendar/events`: view scheduled content.
-- `POST /api/calendar/events`: schedule content.
-- `GET /api/stats`: content count distribution by type and status.
-
-Job-backed API endpoints:
-
-- `POST /api/jobs/content-generation`: enqueue content generation.
-- `POST /api/jobs/agent-run`: enqueue the 4-stage Agent pipeline.
-- `POST /api/jobs/refine`: enqueue a refine job.
-- `POST /api/jobs/titles`: enqueue title generation.
-- `POST /api/jobs/seo`: enqueue SEO analysis.
-- `GET /api/jobs/{job_id}`: poll a job status/result.
-
-## Resume Positioning
-
-Use this project as an AI full-stack engineering case study, not as a claim of a mature commercial SaaS. Good keywords include Agent orchestration, tool-calling Agent, LLM integration, multi-provider model routing, FastAPI, Vue 3, SQLAlchemy, Redis, RQ, and contract tests.
-
-See [RESUME.md](RESUME.md) for resume-ready Chinese and English bullets, and [DEMO.md](DEMO.md) for a 3-5 minute interview demo script.
