@@ -52,6 +52,20 @@ Core implementation areas:
 - `src/storage/content_store.py`: SQLAlchemy models and CRUD for content, calendar events, metrics, Agent threads, and jobs.
 - `tests/`: contract tests for health, jobs, content generation, Agent pipeline, Agent chat persistence, tool events, and model listing.
 
+## Screenshots
+
+### Content Studio
+
+![Content Studio](docs/screenshots/studio.png)
+
+### Refine Workspace
+
+![Refine Workspace](docs/screenshots/refine.png)
+
+### Agent Chat
+
+![Agent Chat](docs/screenshots/chat.png)
+
 ## Runtime Modes
 
 This project supports two practical startup modes:

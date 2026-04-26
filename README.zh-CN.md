@@ -52,6 +52,20 @@ graph LR
 - `src/storage/content_store.py`: SQLAlchemy 持久化内容、日历、统计、Agent 会话和任务状态。
 - `tests/`: 健康检查、任务接口、内容生成、Agent 流程、对话持久化、工具事件和模型列表的契约测试。
 
+## 界面截图
+
+### 内容工作台
+
+![内容工作台](docs/screenshots/studio.png)
+
+### 内容打磨
+
+![内容打磨](docs/screenshots/refine.png)
+
+### Agent 对话
+
+![Agent 对话](docs/screenshots/chat.png)
+
 ## 运行模式
 
 项目目前支持两种实际可用的启动方式：
