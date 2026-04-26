@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
 from src.api.dependencies import get_litellm_client, get_store
 from src.api.schemas.content import (
@@ -12,7 +12,7 @@ from src.api.schemas.content import (
     TitleRequest,
 )
 from src.api.services import content_service
-from src.llm.litellm_client import LiteLLMClient
+from src.llm.litellm_client import LLMConfigurationError, LLMGenerationError, LiteLLMClient
 from src.storage import ContentStore
 
 
@@ -31,7 +31,7 @@ def list_contents(
 
 
 @router.get("/{content_id}", response_model=ContentResponse)
-def get_content(content_id: int, store: ContentStore = Depends(get_store)) -> dict:
+def get_content(content_id: int = Path(..., gt=0), store: ContentStore = Depends(get_store)) -> dict:
     content = store.get_content(content_id)
     if not content:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Content not found")
@@ -46,6 +46,10 @@ async def generate_content(
 ) -> dict:
     try:
         content_id, generated, provider, model = await content_service.generate_content(request, llm, store)
+    except LLMConfigurationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except LLMGenerationError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return {
@@ -71,6 +75,10 @@ async def refine_content(
 ) -> dict:
     try:
         content_id, refined, provider, model = await content_service.refine_content(request, llm, store)
+    except LLMConfigurationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except LLMGenerationError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
@@ -99,6 +107,10 @@ async def generate_titles(
 ) -> TextResult:
     try:
         return TextResult(result=await content_service.generate_titles(request, llm, store))
+    except LLMConfigurationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except LLMGenerationError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
@@ -113,6 +125,10 @@ async def analyze_seo(
 ) -> TextResult:
     try:
         return TextResult(result=await content_service.analyze_seo(request, llm, store))
+    except LLMConfigurationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except LLMGenerationError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:

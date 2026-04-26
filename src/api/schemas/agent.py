@@ -58,7 +58,7 @@ class AgentRunRequest(BaseModel):
     content_type: ContentType
     style: ContentStyle = ContentStyle.CASUAL
     keywords: Optional[list[str]] = None
-    length: str = "medium"
+    length: Literal["short", "medium", "long"] = "medium"
     provider: Optional[str] = None
     model: Optional[str] = None
     temperature: float = Field(0.7, ge=0.0, le=1.0)
@@ -83,7 +83,7 @@ class AgentFinalContent(BaseModel):
     content: str
     content_type: str
     style: str
-    tags: list[str] = []
+    tags: list[str] = Field(default_factory=list)
     status: str = "agent_final"
 
 

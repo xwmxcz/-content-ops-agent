@@ -13,7 +13,7 @@ from src.api.schemas.agent import ChatRequest, ChatResponse, ChatToolEvent
 from src.api.schemas.content import GenerateRequest, RefineRequest, SeoRequest, TitleRequest
 from src.api.services import content_service
 from src.api.services.content_service import resolve_provider
-from src.llm.litellm_client import LiteLLMClient
+from src.llm.litellm_client import LLMConfigurationError, LiteLLMClient
 from src.models import ContentStyle, ContentType
 from src.storage import ContentStore
 from src.utils import config
@@ -68,6 +68,8 @@ class ChatAgentService:
                 temperature=request.temperature,
                 max_tokens=request.max_tokens,
             )
+        except LLMConfigurationError:
+            raise
         except Exception as exc:
             failure = f"Agent execution failed: {exc}"
             self.store.save_agent_message(

@@ -1,9 +1,22 @@
 """LiteLLM-based unified LLM client."""
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from src.utils import config
+
+
+class LLMClientError(RuntimeError):
+    """Base error for LLM client failures safe enough for API mapping."""
+
+
+class LLMConfigurationError(ValueError):
+    """Raised when provider configuration is invalid or incomplete."""
+
+
+class LLMGenerationError(LLMClientError):
+    """Raised when an LLM request fails after validation."""
 
 
 class LiteLLMClient:
@@ -20,12 +33,12 @@ class LiteLLMClient:
         try:
             import litellm
         except ImportError as exc:
-            raise RuntimeError("litellm is not installed. Run pip install -r requirements.txt") from exc
+            raise LLMGenerationError("LLM dependency is not installed") from exc
 
         provider = provider.lower()
         api_key = self._api_key(provider)
         if not api_key:
-            raise ValueError(f"Missing API key for provider: {provider}")
+            raise LLMConfigurationError(f"Missing API key for provider: {provider}")
 
         request: dict[str, Any] = {
             "model": config.get_litellm_model(provider, model),
@@ -38,8 +51,22 @@ class LiteLLMClient:
         if api_base:
             request["api_base"] = api_base
 
-        response = await litellm.acompletion(**request)
-        return response.choices[0].message.content or ""
+        try:
+            response = await asyncio.wait_for(
+                litellm.acompletion(**request),
+                timeout=config.LLM_TIMEOUT_SECONDS,
+            )
+        except TimeoutError as exc:
+            raise LLMGenerationError(
+                f"LLM request timed out after {config.LLM_TIMEOUT_SECONDS:g} seconds"
+            ) from exc
+        except Exception as exc:
+            raise LLMGenerationError("LLM request failed") from exc
+
+        content = response.choices[0].message.content or ""
+        if not content.strip():
+            raise LLMGenerationError("LLM returned an empty response")
+        return content
 
     async def generate_from_prompts(
         self,
@@ -71,4 +98,4 @@ class LiteLLMClient:
             return config.DEEPSEEK_API_KEY
         if provider == "moonshot":
             return config.MOONSHOT_API_KEY
-        raise ValueError(f"Unsupported provider: {provider}")
+        raise LLMConfigurationError(f"Unsupported provider: {provider}")

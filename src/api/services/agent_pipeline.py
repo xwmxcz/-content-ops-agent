@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from src.api.schemas.agent import AgentFinalContent, AgentRunRequest, AgentRunResponse, AgentStep
 from src.api.services.content_service import resolve_provider
-from src.llm.litellm_client import LiteLLMClient
+from src.llm.litellm_client import LLMConfigurationError, LLMGenerationError, LiteLLMClient
 from src.models import GeneratedContent
 from src.storage import ContentStore
 from src.utils import config
@@ -100,12 +100,20 @@ async def run_agent_pipeline(
             )
             step.status = "completed"
             outputs[agent.id] = step.output
-        except Exception as exc:  # noqa: BLE001 - converted into an API-level pipeline error.
+        except LLMConfigurationError:
+            raise
+        except LLMGenerationError as exc:
             step.status = "failed"
             step.error = str(exc)
             step.duration_ms = _elapsed_ms(started)
             steps.append(step)
             raise PipelineExecutionError(f"{agent.name} failed: {exc}", steps) from exc
+        except Exception as exc:  # noqa: BLE001 - converted into an API-level pipeline error.
+            step.status = "failed"
+            step.error = "Agent step failed unexpectedly"
+            step.duration_ms = _elapsed_ms(started)
+            steps.append(step)
+            raise PipelineExecutionError(f"{agent.name} failed unexpectedly", steps) from exc
         step.duration_ms = _elapsed_ms(started)
         steps.append(step)
 

@@ -13,7 +13,10 @@ from src.utils import config
 
 
 def resolve_provider(provider: str | None) -> str:
-    return (provider or config.LLM_PROVIDER).lower()
+    resolved = (provider or config.LLM_PROVIDER).lower()
+    if resolved not in config.get_supported_providers():
+        raise ValueError(f"Unknown provider: {resolved}")
+    return resolved
 
 
 def build_generation_prompts(request: GenerateRequest) -> tuple[str, str]:
@@ -43,20 +46,25 @@ def build_generation_prompts(request: GenerateRequest) -> tuple[str, str]:
 
 def parse_generated_content(content_text: str, content_type: ContentType) -> GeneratedContent:
     title = None
-    content = content_text.strip()
+    normalized = content_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    content = normalized
     tags = None
 
-    title_match = re.search(r"【标题】\s*\n(.+?)(?:\n|$)", content_text)
+    title_match = re.search(r"【\s*标题\s*】\s*\n(.+?)(?:\n|$)", normalized)
     if title_match:
         title = title_match.group(1).strip()
 
-    body_match = re.search(r"【(?:正文|脚本)】\s*\n(.*?)(?:【标签】|$)", content_text, re.DOTALL)
+    body_match = re.search(
+        r"【\s*(?:正文|脚本)\s*】\s*\n(.*?)(?=\n?【\s*标签\s*】|$)",
+        normalized,
+        re.DOTALL,
+    )
     if body_match:
         content = body_match.group(1).strip()
     elif title_match:
-        content = content_text[title_match.end():].strip()
+        content = normalized[title_match.end():].strip()
 
-    tags_match = re.search(r"【标签】\s*\n(.+?)$", content_text, re.DOTALL)
+    tags_match = re.search(r"【\s*标签\s*】\s*\n(.+?)\s*$", normalized, re.DOTALL)
     if tags_match:
         tags_text = tags_match.group(1).strip()
         tags = [tag.strip() for tag in re.split(r"[,，\s]+", tags_text) if tag.strip()]

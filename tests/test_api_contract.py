@@ -10,6 +10,7 @@ from src.api.schemas.content import GenerateRequest
 from src.api.services.chat_agent import ChatAgentService
 from src.api.schemas.models import ModelInfo
 from src.api.routes import models as model_routes
+from src.llm.litellm_client import LLMGenerationError
 from src.models import ContentType
 from src.storage import ContentStore
 
@@ -22,7 +23,7 @@ class FakeLLMClient:
     async def generate_from_prompts(self, **kwargs):
         self.calls.append(kwargs)
         if self.fail_on_call == len(self.calls):
-            raise RuntimeError("simulated llm failure")
+            raise LLMGenerationError("LLM request failed")
 
         system_prompt = kwargs.get("system_prompt", "")
         if "senior content strategist" in system_prompt:
@@ -265,6 +266,49 @@ def test_generate_request_schema_accepts_core_fields():
     assert request.length == "medium"
 
 
+def test_generate_rejects_invalid_provider(client):
+    response = client.post(
+        "/api/content/generate",
+        json={
+            "topic": "测试主题",
+            "content_type": "xiaohongshu",
+            "provider": "unknown",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Unknown provider: unknown"
+
+
+def test_generate_rejects_invalid_length(client):
+    response = client.post(
+        "/api/content/generate",
+        json={
+            "topic": "测试主题",
+            "content_type": "xiaohongshu",
+            "length": "extra-long",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_generate_maps_llm_failures_to_bad_gateway(client, fake_llm):
+    fake_llm.fail_on_call = 1
+
+    response = client.post(
+        "/api/content/generate",
+        json={
+            "topic": "测试主题",
+            "content_type": "xiaohongshu",
+            "provider": "siliconflow",
+        },
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "LLM request failed"
+
+
 def test_generate_persists_style_keywords_and_tags(client, store):
     response = client.post(
         "/api/content/generate",
@@ -332,7 +376,7 @@ def test_agent_run_returns_failed_step_detail(client, fake_llm):
 
     assert response.status_code == 502
     detail = response.json()["detail"]
-    assert "Editor Agent failed" in detail["message"]
+    assert detail["message"] == "Editor Agent failed: LLM request failed"
     assert detail["steps"][-1]["id"] == "editor"
     assert detail["steps"][-1]["status"] == "failed"
-    assert detail["steps"][-1]["error"] == "simulated llm failure"
+    assert detail["steps"][-1]["error"] == "LLM request failed"

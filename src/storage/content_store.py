@@ -4,7 +4,7 @@ from datetime import datetime, date
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 
-from sqlalchemy import create_engine, Column, Integer, String, Text, Float, DateTime, Date, ForeignKey
+from sqlalchemy import Column, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, create_engine, func, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
@@ -34,6 +34,11 @@ class Content(Base):
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
+Index("ix_contents_created_at", Content.created_at)
+Index("ix_contents_status", Content.status)
+Index("ix_contents_content_type", Content.content_type)
+
+
 class CalendarEvent(Base):
     """内容日历表"""
     __tablename__ = "calendar_events"
@@ -45,6 +50,9 @@ class CalendarEvent(Base):
     status = Column(String(20), default="planned")
     published_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.now)
+
+
+Index("ix_calendar_events_scheduled_date", CalendarEvent.scheduled_date)
 
 
 class ContentMetrics(Base):
@@ -74,6 +82,9 @@ class AgentThread(Base):
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
+Index("ix_agent_threads_updated_at", AgentThread.updated_at)
+
+
 class AgentMessage(Base):
     """Persisted Agent chat message."""
 
@@ -90,6 +101,34 @@ class AgentMessage(Base):
     created_at = Column(DateTime, default=datetime.now)
 
 
+Index("ix_agent_messages_thread_created", AgentMessage.thread_id, AgentMessage.created_at)
+
+
+class Job(Base):
+    """Persisted background job state."""
+
+    __tablename__ = "jobs"
+
+    id = Column(String(80), primary_key=True)
+    job_type = Column(String(80), nullable=False)
+    status = Column(String(20), nullable=False, default="queued")
+    payload = Column(Text, nullable=False)
+    result = Column(Text, nullable=True)
+    error = Column(Text, nullable=True)
+    provider = Column(String(50), nullable=True)
+    model = Column(String(200), nullable=True)
+    progress = Column(Integer, default=0)
+    attempts = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+
+Index("ix_jobs_status_created", Job.status, Job.created_at)
+Index("ix_jobs_provider_status", Job.provider, Job.status)
+
+
 class ContentStore:
     """内容存储管理类"""
 
@@ -98,13 +137,30 @@ class ContentStore:
             db_file = Path(db_path)
             db_file.parent.mkdir(parents=True, exist_ok=True)
             database_url = f"sqlite:///{db_file.as_posix()}"
+            url = make_url(database_url)
         else:
             url = make_url(database_url)
             if url.drivername.startswith("sqlite") and url.database and url.database != ":memory:":
                 Path(url.database).parent.mkdir(parents=True, exist_ok=True)
 
-        connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
-        self.engine = create_engine(database_url, echo=False, connect_args=connect_args)
+        if url.drivername.startswith("sqlite"):
+            connect_args = {"check_same_thread": False, "timeout": 30}
+            engine_kwargs = {"connect_args": connect_args}
+        else:
+            from src.utils import config
+
+            engine_kwargs = {
+                "pool_size": config.DB_POOL_SIZE,
+                "max_overflow": config.DB_MAX_OVERFLOW,
+                "pool_timeout": config.DB_POOL_TIMEOUT_SECONDS,
+                "pool_pre_ping": True,
+            }
+        self.database_url = database_url
+        self.engine = create_engine(database_url, echo=False, **engine_kwargs)
+        if url.drivername.startswith("sqlite"):
+            with self.engine.connect() as connection:
+                connection.execute(text("PRAGMA journal_mode=WAL"))
+                connection.execute(text("PRAGMA busy_timeout=30000"))
         Base.metadata.create_all(self.engine)
         self.SessionLocal = sessionmaker(bind=self.engine)
 
@@ -139,6 +195,9 @@ class ContentStore:
             session.add(content)
             session.commit()
             return content.id
+        except Exception:
+            session.rollback()
+            raise
         finally:
             session.close()
 
@@ -177,6 +236,9 @@ class ContentStore:
             content.updated_at = datetime.now()
             session.commit()
             return True
+        except Exception:
+            session.rollback()
+            raise
         finally:
             session.close()
 
@@ -217,6 +279,9 @@ class ContentStore:
             session.add(event)
             session.commit()
             return event.id
+        except Exception:
+            session.rollback()
+            raise
         finally:
             session.close()
 
@@ -251,17 +316,113 @@ class ContentStore:
         session = self._get_session()
         try:
             total = session.query(Content).count()
-            by_type = {}
-            for ct in ["xiaohongshu", "weibo", "blog", "video_script", "twitter"]:
-                count = session.query(Content).filter(Content.content_type == ct).count()
-                if count > 0:
-                    by_type[ct] = count
-            by_status = {}
-            for st in ["draft", "refined", "published", "archived"]:
-                count = session.query(Content).filter(Content.status == st).count()
-                if count > 0:
-                    by_status[st] = count
+            by_type = {
+                content_type: count
+                for content_type, count in (
+                    session.query(Content.content_type, func.count(Content.id))
+                    .group_by(Content.content_type)
+                    .all()
+                )
+                if content_type
+            }
+            by_status = {
+                status: count
+                for status, count in (
+                    session.query(Content.status, func.count(Content.id))
+                    .group_by(Content.status)
+                    .all()
+                )
+                if status
+            }
             return {"total_contents": total, "by_type": by_type, "by_status": by_status}
+        finally:
+            session.close()
+
+    def create_job(
+        self,
+        job_id: str,
+        job_type: str,
+        payload: dict,
+        provider: str | None = None,
+        model: str | None = None,
+    ) -> Dict[str, Any]:
+        session = self._get_session()
+        try:
+            now = datetime.now()
+            job = Job(
+                id=job_id,
+                job_type=job_type,
+                status="queued",
+                payload=json.dumps(payload, ensure_ascii=False),
+                provider=provider,
+                model=model,
+                progress=0,
+                attempts=0,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(job)
+            session.commit()
+            return self._job_to_dict(job)
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
+        session = self._get_session()
+        try:
+            job = session.query(Job).filter(Job.id == job_id).first()
+            if not job:
+                return None
+            return self._job_to_dict(job)
+        finally:
+            session.close()
+
+    def update_job(self, job_id: str, **fields) -> Optional[Dict[str, Any]]:
+        session = self._get_session()
+        try:
+            job = session.query(Job).filter(Job.id == job_id).first()
+            if not job:
+                return None
+
+            now = datetime.now()
+            status = fields.pop("status", None)
+            if status:
+                job.status = status
+                if status == "running" and not job.started_at:
+                    job.started_at = now
+                if status in {"completed", "failed"}:
+                    job.completed_at = now
+
+            if "payload" in fields:
+                job.payload = json.dumps(fields.pop("payload"), ensure_ascii=False)
+            if "result" in fields:
+                result = fields.pop("result")
+                job.result = json.dumps(result, ensure_ascii=False) if result is not None else None
+            if "error" in fields:
+                job.error = fields.pop("error")
+
+            for key, value in fields.items():
+                if hasattr(job, key):
+                    setattr(job, key, value)
+            job.updated_at = now
+            session.commit()
+            return self._job_to_dict(job)
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def count_inflight_jobs(self, provider: str | None = None) -> int:
+        session = self._get_session()
+        try:
+            query = session.query(Job).filter(Job.status.in_(["queued", "running"]))
+            if provider:
+                query = query.filter(Job.provider == provider)
+            return query.count()
         finally:
             session.close()
 
@@ -294,6 +455,9 @@ class ContentStore:
                 thread.updated_at = now
             session.commit()
             return self._agent_thread_to_dict(thread, session)
+        except Exception:
+            session.rollback()
+            raise
         finally:
             session.close()
 
@@ -360,6 +524,9 @@ class ContentStore:
             session.add(message)
             session.commit()
             return message.id
+        except Exception:
+            session.rollback()
+            raise
         finally:
             session.close()
 
@@ -387,6 +554,9 @@ class ContentStore:
             session.delete(thread)
             session.commit()
             return True
+        except Exception:
+            session.rollback()
+            raise
         finally:
             session.close()
 
@@ -420,4 +590,23 @@ class ContentStore:
             "message_count": message_count,
             "created_at": thread.created_at.isoformat() if thread.created_at else None,
             "updated_at": thread.updated_at.isoformat() if thread.updated_at else None,
+        }
+
+    @staticmethod
+    def _job_to_dict(job: Job) -> Dict[str, Any]:
+        return {
+            "id": job.id,
+            "job_type": job.job_type,
+            "status": job.status,
+            "payload": json.loads(job.payload) if job.payload else {},
+            "result": json.loads(job.result) if job.result else None,
+            "error": job.error,
+            "provider": job.provider,
+            "model": job.model,
+            "progress": job.progress or 0,
+            "attempts": job.attempts or 0,
+            "created_at": job.created_at.isoformat() if job.created_at else None,
+            "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+            "started_at": job.started_at.isoformat() if job.started_at else None,
+            "completed_at": job.completed_at.isoformat() if job.completed_at else None,
         }

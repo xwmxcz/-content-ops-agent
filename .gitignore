@@ -25,6 +25,8 @@ dist/
 
 # Data
 data/*.db
+data/*.db-shm
+data/*.db-wal
 data/*.sqlite3
 data/chroma/
 data/pytest*/

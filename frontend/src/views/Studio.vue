@@ -99,7 +99,10 @@
               <h2>模型与执行参数</h2>
             </div>
           </div>
-          <ModelSelector v-model="modelConfig" />
+          <ModelSelector
+            :model-value="modelConfig"
+            @update:model-value="Object.assign(modelConfig, $event)"
+          />
         </section>
       </aside>
 
@@ -274,7 +277,8 @@ import {
 } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import ModelSelector from '../components/ModelSelector.vue'
-import { runAgentPipeline, type AgentRunPayload, type AgentRunResponse, type AgentStep } from '../api/agent'
+import type { AgentRunPayload, AgentRunResponse, AgentStep } from '../api/agent'
+import { createAgentRunJob, extractAgentRun, waitForJobResult, type JobResponse } from '../api/jobs'
 
 const router = useRouter()
 
@@ -358,6 +362,7 @@ const loading = ref(false)
 const errorMessage = ref('')
 const runResult = ref<AgentRunResponse>()
 const editableContent = ref('')
+const currentJob = ref<JobResponse>()
 
 const keywordList = computed(() => parseKeywords())
 const platformLabel = computed(() => {
@@ -380,7 +385,16 @@ const qualityTone = computed(() => {
   return reviewOutput.value ? '已附带审核意见' : '已完成生成'
 })
 const pipelineState = computed(() => {
-  if (loading.value) return '运行中'
+  if (loading.value && currentJob.value) {
+    const labels: Record<string, string> = {
+      queued: '排队中',
+      running: '运行中',
+      completed: '已完成',
+      failed: '失败'
+    }
+    return `${labels[currentJob.value.status] ?? currentJob.value.status} ${currentJob.value.progress}%`
+  }
+  if (loading.value) return '提交中'
   if (runResult.value) return '已完成'
   return '待运行'
 })
@@ -410,6 +424,7 @@ async function runPipeline() {
   errorMessage.value = ''
   runResult.value = undefined
   editableContent.value = ''
+  currentJob.value = undefined
 
   const payload: AgentRunPayload = {
     topic: form.topic.trim(),
@@ -425,7 +440,10 @@ async function runPipeline() {
   }
 
   try {
-    runResult.value = await runAgentPipeline(payload)
+    currentJob.value = await createAgentRunJob(payload)
+    runResult.value = await waitForJobResult(currentJob.value.id, extractAgentRun, job => {
+      currentJob.value = job
+    })
     editableContent.value = runResult.value.final_content.content
     ElMessage.success(
       runResult.value.saved_content_id ? `流程已完成，内容已保存 #${runResult.value.saved_content_id}` : '流程已完成'
@@ -444,6 +462,7 @@ function resetWorkspace() {
   runResult.value = undefined
   editableContent.value = ''
   errorMessage.value = ''
+  currentJob.value = undefined
 }
 
 async function copyFinal() {

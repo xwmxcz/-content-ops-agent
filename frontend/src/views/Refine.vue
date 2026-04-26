@@ -58,7 +58,10 @@
           </div>
         </div>
 
-        <ModelSelector v-model="modelConfig" />
+        <ModelSelector
+          :model-value="modelConfig"
+          @update:model-value="Object.assign(modelConfig, $event)"
+        />
         <div class="section-divider"></div>
 
         <el-tabs v-model="activeTab">
@@ -95,7 +98,10 @@
             <span class="section-kicker">Result</span>
             <h2>输出结果</h2>
           </div>
-          <el-button :icon="DocumentCopy" :disabled="!resultText" @click="copyResult">复制</el-button>
+          <div class="hero-actions">
+            <span v-if="currentJob" class="section-pill">{{ jobState }}</span>
+            <el-button :icon="DocumentCopy" :disabled="!resultText" @click="copyResult">复制</el-button>
+          </div>
         </div>
 
         <el-empty v-if="!resultText && !loading" description="操作结果会显示在这里" />
@@ -109,12 +115,13 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import { DocumentCopy, Refresh, Search } from '@element-plus/icons-vue'
 import ModelSelector from '../components/ModelSelector.vue'
-import { analyzeSeo, generateTitles, getContent, getContents, refineContent, type ContentItem } from '../api/content'
+import { getContent, getContents, type ContentItem } from '../api/content'
+import { createRefineJob, createSeoJob, createTitlesJob, extractContent, extractText, waitForJobResult, type JobResponse } from '../api/jobs'
 import { STYLE_OPTIONS, getContentTypeLabel, getStatusLabel, getStyleLabel } from '../constants/content'
 
 const route = useRoute()
@@ -130,6 +137,18 @@ const titleCount = ref(5)
 const resultText = ref('')
 const loading = ref(false)
 const loadingList = ref(false)
+const currentJob = ref<JobResponse>()
+
+const jobState = computed(() => {
+  if (!currentJob.value) return ''
+  const labels: Record<string, string> = {
+    queued: '排队中',
+    running: '运行中',
+    completed: '已完成',
+    failed: '失败'
+  }
+  return `${labels[currentJob.value.status] ?? currentJob.value.status} ${currentJob.value.progress}%`
+})
 
 async function loadRecent() {
   loadingList.value = true
@@ -159,6 +178,7 @@ async function run(task: () => Promise<string>) {
     return
   }
   loading.value = true
+  currentJob.value = undefined
   try {
     resultText.value = await task()
   } catch (error) {
@@ -170,7 +190,7 @@ async function run(task: () => Promise<string>) {
 
 function rewrite() {
   run(async () => {
-    const result = await refineContent({
+    const job = await createRefineJob({
       content_id: contentId.value,
       instruction: instruction.value,
       provider: modelConfig.provider,
@@ -178,13 +198,18 @@ function rewrite() {
       temperature: modelConfig.temperature,
       max_tokens: modelConfig.max_tokens
     })
+    currentJob.value = job
+    const result = await waitForJobResult(job.id, extractContent, nextJob => {
+      currentJob.value = nextJob
+    })
+    await loadRecent()
     return result.content
   })
 }
 
 function switchStyle() {
   run(async () => {
-    const result = await refineContent({
+    const job = await createRefineJob({
       content_id: contentId.value,
       new_style: newStyle.value,
       provider: modelConfig.provider,
@@ -192,29 +217,42 @@ function switchStyle() {
       temperature: modelConfig.temperature,
       max_tokens: modelConfig.max_tokens
     })
+    currentJob.value = job
+    const result = await waitForJobResult(job.id, extractContent, nextJob => {
+      currentJob.value = nextJob
+    })
+    await loadRecent()
     return result.content
   })
 }
 
 function titles() {
-  run(() =>
-    generateTitles({
+  run(async () => {
+    const job = await createTitlesJob({
       content_id: contentId.value,
       count: titleCount.value,
       provider: modelConfig.provider,
       model: modelConfig.model
     })
-  )
+    currentJob.value = job
+    return waitForJobResult(job.id, extractText, nextJob => {
+      currentJob.value = nextJob
+    })
+  })
 }
 
 function seo() {
-  run(() =>
-    analyzeSeo({
+  run(async () => {
+    const job = await createSeoJob({
       content_id: contentId.value,
       provider: modelConfig.provider,
       model: modelConfig.model
     })
-  )
+    currentJob.value = job
+    return waitForJobResult(job.id, extractText, nextJob => {
+      currentJob.value = nextJob
+    })
+  })
 }
 
 async function copyResult() {

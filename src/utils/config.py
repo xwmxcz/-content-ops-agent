@@ -30,9 +30,20 @@ class Config:
     # Generation Settings
     MAX_TOKENS = int(os.getenv("MAX_TOKENS", "4096"))
     TEMPERATURE = float(os.getenv("TEMPERATURE", "0.7"))
+    LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "120"))
 
     # Database
     DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/content_ops.db")
+    DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "10"))
+    DB_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "20"))
+    DB_POOL_TIMEOUT_SECONDS = int(os.getenv("DB_POOL_TIMEOUT_SECONDS", "30"))
+
+    # Background job settings
+    JOB_QUEUE_MODE = os.getenv("JOB_QUEUE_MODE", "background").lower()  # background or rq
+    JOB_QUEUE_NAME = os.getenv("JOB_QUEUE_NAME", "content_ops")
+    JOB_TIMEOUT_SECONDS = int(os.getenv("JOB_TIMEOUT_SECONDS", "300"))
+    REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    MAX_PROVIDER_INFLIGHT_JOBS = int(os.getenv("MAX_PROVIDER_INFLIGHT_JOBS", "8"))
 
     # App Settings
     DEBUG = os.getenv("DEBUG", "False").lower() == "true"
@@ -50,6 +61,8 @@ class Config:
     def validate(cls, provider: str | None = None):
         """验证配置"""
         provider = (provider or cls.LLM_PROVIDER).lower()
+        if provider not in cls.get_supported_providers():
+            raise ValueError(f"Unknown provider: {provider}")
 
         if provider == "claude" and not cls.ANTHROPIC_API_KEY:
             raise ValueError("ANTHROPIC_API_KEY is required for Claude provider")

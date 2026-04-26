@@ -96,7 +96,10 @@
       </main>
 
       <aside class="control-panel">
-        <ModelSelector v-model="modelConfig" />
+        <ModelSelector
+          :model-value="modelConfig"
+          @update:model-value="Object.assign(modelConfig, $event)"
+        />
 
         <section class="tool-panel">
           <div class="panel-head">

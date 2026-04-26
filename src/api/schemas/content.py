@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -10,7 +10,7 @@ class GenerateRequest(BaseModel):
     content_type: ContentType
     style: ContentStyle = ContentStyle.CASUAL
     keywords: Optional[list[str]] = None
-    length: str = "medium"
+    length: Literal["short", "medium", "long"] = "medium"
     provider: Optional[str] = None
     model: Optional[str] = None
     temperature: float = Field(0.7, ge=0.0, le=1.0)
@@ -18,7 +18,7 @@ class GenerateRequest(BaseModel):
 
 
 class RefineRequest(BaseModel):
-    content_id: int
+    content_id: int = Field(..., gt=0)
     instruction: Optional[str] = None
     new_style: Optional[ContentStyle] = None
     provider: Optional[str] = None
@@ -29,7 +29,7 @@ class RefineRequest(BaseModel):
 
 class TitleRequest(BaseModel):
     topic: Optional[str] = None
-    content_id: Optional[int] = None
+    content_id: Optional[int] = Field(default=None, gt=0)
     content_type: ContentType = ContentType.XIAOHONGSHU
     count: int = Field(5, ge=1, le=10)
     provider: Optional[str] = None
@@ -37,7 +37,7 @@ class TitleRequest(BaseModel):
 
 
 class SeoRequest(BaseModel):
-    content_id: int
+    content_id: int = Field(..., gt=0)
     provider: Optional[str] = None
     model: Optional[str] = None
 
@@ -48,7 +48,7 @@ class ContentResponse(BaseModel):
     content: str
     content_type: str
     style: str
-    tags: list[str] = []
+    tags: list[str] = Field(default_factory=list)
     status: str
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
