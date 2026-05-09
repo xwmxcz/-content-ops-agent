@@ -1,17 +1,20 @@
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 import pytest
+from sqlalchemy import text
 
-from src.api.dependencies import get_chat_agent_service, get_litellm_client, get_store
+from src.api.dependencies import get_chat_agent_service, get_litellm_client, get_publish_service, get_store
 from src.api.main import app
 from src.api.schemas.content import GenerateRequest
 from src.api.services.chat_agent import ChatAgentService
+from src.api.services.publish_service import PublishService
 from src.api.schemas.models import ModelInfo
 from src.api.routes import models as model_routes
 from src.llm.litellm_client import LLMGenerationError
-from src.models import ContentType
+from src.models import ContentType, GeneratedContent
 from src.storage import ContentStore
 
 
@@ -87,6 +90,22 @@ class FakeChatModel:
         return AIMessage(content="Agent reply")
 
 
+class FakeXiaohongshuMcpClient:
+    def __init__(self):
+        self.calls = []
+
+    async def check_login_status(self):
+        return {"text": "Logged in", "data": {"logged_in": True}}
+
+    async def publish_content(self, arguments):
+        self.calls.append(("publish_content", arguments))
+        return {"text": "Image post published", "data": {"post_id": "xhs-image-1"}}
+
+    async def publish_with_video(self, arguments):
+        self.calls.append(("publish_with_video", arguments))
+        return {"text": "Video post published", "data": {"post_id": "xhs-video-1"}}
+
+
 @pytest.fixture
 def fake_llm():
     return FakeLLMClient()
@@ -95,6 +114,11 @@ def fake_llm():
 @pytest.fixture
 def fake_chat_factory():
     return FakeChatFactory()
+
+
+@pytest.fixture
+def fake_xhs_mcp():
+    return FakeXiaohongshuMcpClient()
 
 
 @pytest.fixture
@@ -110,13 +134,18 @@ def store():
 
 
 @pytest.fixture
-def client(store, fake_llm, fake_chat_factory):
+def client(store, fake_llm, fake_chat_factory, fake_xhs_mcp, monkeypatch):
     app.dependency_overrides[get_store] = lambda: store
     app.dependency_overrides[get_litellm_client] = lambda: fake_llm
     app.dependency_overrides[get_chat_agent_service] = lambda: ChatAgentService(
         store=store,
         llm=fake_llm,
         model_factory=fake_chat_factory,
+    )
+    app.dependency_overrides[get_publish_service] = lambda: PublishService(store=store, mcp_client=fake_xhs_mcp)
+    monkeypatch.setattr(
+        "src.jobs.runner.create_publish_service",
+        lambda current_store: PublishService(store=current_store, mcp_client=fake_xhs_mcp),
     )
     with TestClient(app) as test_client:
         yield test_client
@@ -380,3 +409,184 @@ def test_agent_run_returns_failed_step_detail(client, fake_llm):
     assert detail["steps"][-1]["id"] == "editor"
     assert detail["steps"][-1]["status"] == "failed"
     assert detail["steps"][-1]["error"] == "LLM request failed"
+
+
+def test_publish_login_status_returns_connected(client):
+    response = client.get("/api/publish/xiaohongshu/login-status")
+
+    assert response.status_code == 200
+    assert response.json()["connected"] is True
+
+
+def test_media_upload_and_image_publish_flow(client, store, fake_xhs_mcp):
+    content_id = store.save_content(
+        GeneratedContent(
+            title="测试图文",
+            content="这是一条准备发布到小红书的图文内容。",
+            tags=["AI", "效率"],
+            content_type=ContentType.XIAOHONGSHU,
+        ),
+        style="casual",
+    )
+
+    upload_response = client.post(
+        "/api/media/upload",
+        data={"content_id": str(content_id), "media_type": "image"},
+        files={"file": ("cover.jpg", b"fake-image", "image/jpeg")},
+    )
+
+    assert upload_response.status_code == 201
+    media_payload = upload_response.json()
+    assert media_payload["media_type"] == "image"
+    assert media_payload["file_url"] == f"/api/media/{media_payload['id']}/file"
+
+    list_response = client.get(f"/api/content/{content_id}/media")
+    assert list_response.status_code == 200
+    assert len(list_response.json()) == 1
+
+    publish_response = client.post(
+        "/api/publish/xiaohongshu",
+        json={"content_id": content_id, "publish_type": "image_post"},
+    )
+
+    assert publish_response.status_code == 202
+    job_id = publish_response.json()["job_id"]
+    job_response = client.get(f"/api/jobs/{job_id}")
+
+    assert job_response.status_code == 200
+    job_payload = job_response.json()
+    assert job_payload["job_type"] == "publish_xiaohongshu"
+    assert job_payload["status"] == "completed"
+    assert job_payload["result"]["publication"]["status"] == "completed"
+    assert store.get_content(content_id)["status"] == "published"
+    assert fake_xhs_mcp.calls[0][0] == "publish_content"
+    assert len(fake_xhs_mcp.calls[0][1]["images"]) == 1
+
+
+def test_publish_rejects_text_only_content(client, store):
+    content_id = store.save_content(
+        GeneratedContent(
+            title="纯文字草稿",
+            content="只有文字，没有媒体。",
+            tags=["纯文字"],
+            content_type=ContentType.XIAOHONGSHU,
+        ),
+        style="casual",
+    )
+
+    response = client.post(
+        "/api/publish/xiaohongshu",
+        json={"content_id": content_id, "publish_type": "image_post"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Image posts require at least one uploaded image"
+
+
+def test_schedule_publication_marks_content_scheduled_and_creates_calendar_event(client, store):
+    content_id = store.save_content(
+        GeneratedContent(
+            title="定时内容",
+            content="定时图文内容。",
+            tags=["定时"],
+            content_type=ContentType.XIAOHONGSHU,
+        ),
+        style="casual",
+    )
+    client.post(
+        "/api/media/upload",
+        data={"content_id": str(content_id), "media_type": "image"},
+        files={"file": ("cover.jpg", b"fake-image", "image/jpeg")},
+    )
+
+    scheduled_at = (datetime.now() + timedelta(days=1)).replace(microsecond=0).isoformat()
+    response = client.post(
+        "/api/publish/xiaohongshu/schedule",
+        json={
+            "content_id": content_id,
+            "publish_type": "image_post",
+            "scheduled_at": scheduled_at,
+        },
+    )
+
+    assert response.status_code == 202
+    job_response = client.get(f"/api/jobs/{response.json()['job_id']}")
+    assert job_response.status_code == 200
+    assert job_response.json()["result"]["publication"]["status"] == "scheduled"
+    assert store.get_content(content_id)["status"] == "scheduled"
+
+    events = store.get_calendar_events(datetime.now().date(), (datetime.now() + timedelta(days=2)).date())
+    assert any(event["content_id"] == content_id and event["platform"] == "xiaohongshu" for event in events)
+
+
+def test_archive_content_updates_status(client, store):
+    content_id = store.save_content(
+        GeneratedContent(
+            title="Archive me",
+            content="Archive this local record.",
+            tags=["archive"],
+            content_type=ContentType.XIAOHONGSHU,
+        ),
+        style="casual",
+    )
+
+    response = client.post(f"/api/content/{content_id}/archive")
+
+    assert response.status_code == 200
+    assert response.json() == {"archived": True}
+    assert store.get_content(content_id)["status"] == "archived"
+
+
+def test_delete_content_cascades_local_records_and_files(client, store):
+    content_id = store.save_content(
+        GeneratedContent(
+            title="Delete me",
+            content="Delete this local record and all linked data.",
+            tags=["cleanup"],
+            content_type=ContentType.XIAOHONGSHU,
+        ),
+        style="casual",
+    )
+    upload_response = client.post(
+        "/api/media/upload",
+        data={"content_id": str(content_id), "media_type": "image"},
+        files={"file": ("cover.jpg", b"fake-image", "image/jpeg")},
+    )
+    media_payload = upload_response.json()
+    media_path = Path(media_payload["file_path"])
+
+    store.create_publication(
+        content_id=content_id,
+        platform="xiaohongshu",
+        publish_type="image_post",
+        status="failed",
+        title="Delete me",
+        body="Delete this local record and all linked data.",
+        request_payload={"images": [media_payload["file_path"]]},
+    )
+    store.save_calendar_event(content_id, "xiaohongshu", datetime.now().date())
+    with store.engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO content_metrics (content_id, platform, views, likes, comments, shares) "
+                "VALUES (:content_id, :platform, 10, 2, 1, 0)"
+            ),
+            {"content_id": content_id, "platform": "xiaohongshu"},
+        )
+
+    response = client.delete(f"/api/content/{content_id}")
+
+    assert response.status_code == 200
+    assert response.json() == {"deleted": True}
+    assert store.get_content(content_id) is None
+    assert store.list_media_assets(content_id) == []
+    assert store.list_publications(content_id) == []
+    assert store.get_calendar_events(datetime.now().date(), datetime.now().date()) == []
+    with store.engine.begin() as connection:
+        metrics_count = connection.execute(
+            text("SELECT COUNT(*) FROM content_metrics WHERE content_id = :content_id"),
+            {"content_id": content_id},
+        ).scalar_one()
+    assert metrics_count == 0
+    assert not media_path.exists()
+    assert not (Path("data/media") / str(content_id)).exists()

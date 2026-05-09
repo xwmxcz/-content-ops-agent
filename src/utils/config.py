@@ -45,6 +45,14 @@ class Config:
     REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     MAX_PROVIDER_INFLIGHT_JOBS = int(os.getenv("MAX_PROVIDER_INFLIGHT_JOBS", "8"))
 
+    # Media and MCP integration
+    MEDIA_STORAGE_ROOT = os.getenv("MEDIA_STORAGE_ROOT", "data/media")
+    MEDIA_MAX_IMAGE_COUNT = int(os.getenv("MEDIA_MAX_IMAGE_COUNT", "9"))
+    MEDIA_MAX_VIDEO_SIZE_MB = int(os.getenv("MEDIA_MAX_VIDEO_SIZE_MB", "512"))
+    XHS_MCP_ENABLED = os.getenv("XHS_MCP_ENABLED", "true").lower() == "true"
+    XHS_MCP_URL = os.getenv("XHS_MCP_URL", "http://127.0.0.1:18060/mcp")
+    XHS_MCP_TIMEOUT_SECONDS = float(os.getenv("XHS_MCP_TIMEOUT_SECONDS", "120"))
+
     # App Settings
     DEBUG = os.getenv("DEBUG", "False").lower() == "true"
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

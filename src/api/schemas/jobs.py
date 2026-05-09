@@ -7,7 +7,7 @@ from src.api.schemas.content import GenerateRequest, RefineRequest, SeoRequest, 
 
 
 JobStatus = Literal["queued", "running", "completed", "failed"]
-JobType = Literal["content_generation", "agent_run", "refine", "titles", "seo"]
+JobType = Literal["content_generation", "agent_run", "refine", "titles", "seo", "publish_xiaohongshu"]
 
 
 class JobResponse(BaseModel):

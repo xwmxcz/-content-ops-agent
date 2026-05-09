@@ -69,6 +69,53 @@ class ContentMetrics(Base):
     recorded_at = Column(DateTime, default=datetime.now)
 
 
+class MediaAsset(Base):
+    """Persisted uploaded or generated media tied to content."""
+
+    __tablename__ = "media_assets"
+
+    id = Column(Integer, primary_key=True)
+    content_id = Column(Integer, ForeignKey("contents.id"), nullable=False)
+    media_type = Column(String(20), nullable=False)
+    source_type = Column(String(20), nullable=False, default="upload")
+    file_name = Column(Text, nullable=False)
+    file_path = Column(Text, nullable=False)
+    mime_type = Column(String(120), nullable=True)
+    sort_order = Column(Integer, default=0)
+    provider = Column(String(80), nullable=True)
+    generation_params = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.now)
+
+
+Index("ix_media_assets_content_created", MediaAsset.content_id, MediaAsset.created_at)
+
+
+class PlatformPublication(Base):
+    """Persisted publication requests sent to an external platform."""
+
+    __tablename__ = "platform_publications"
+
+    id = Column(Integer, primary_key=True)
+    content_id = Column(Integer, ForeignKey("contents.id"), nullable=False)
+    platform = Column(String(50), nullable=False)
+    publish_type = Column(String(30), nullable=False)
+    status = Column(String(20), nullable=False, default="draft")
+    title = Column(Text, nullable=True)
+    body = Column(Text, nullable=False)
+    scheduled_at = Column(DateTime, nullable=True)
+    published_at = Column(DateTime, nullable=True)
+    external_post_id = Column(String(120), nullable=True)
+    request_payload = Column(Text, nullable=True)
+    response_payload = Column(Text, nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+Index("ix_platform_publications_content_status", PlatformPublication.content_id, PlatformPublication.status)
+Index("ix_platform_publications_platform_created", PlatformPublication.platform, PlatformPublication.created_at)
+
+
 class AgentThread(Base):
     """Persisted Agent chat thread."""
 
@@ -207,20 +254,7 @@ class ContentStore:
             content = session.query(Content).filter(Content.id == content_id).first()
             if not content:
                 return None
-            return {
-                "id": content.id,
-                "title": content.title,
-                "content": content.content,
-                "content_type": content.content_type,
-                "style": content.style,
-                "keywords": json.loads(content.keywords) if content.keywords else [],
-                "tags": json.loads(content.tags) if content.tags else [],
-                "status": content.status,
-                "version": content.version,
-                "parent_id": content.parent_id,
-                "created_at": content.created_at.isoformat() if content.created_at else None,
-                "updated_at": content.updated_at.isoformat() if content.updated_at else None,
-            }
+            return self._content_to_dict(content)
         finally:
             session.close()
 
@@ -335,6 +369,215 @@ class ContentStore:
                 if status
             }
             return {"total_contents": total, "by_type": by_type, "by_status": by_status}
+        finally:
+            session.close()
+
+    def archive_content(self, content_id: int) -> bool:
+        session = self._get_session()
+        try:
+            content = session.query(Content).filter(Content.id == content_id).first()
+            if not content:
+                return False
+            content.status = "archived"
+            content.updated_at = datetime.now()
+            session.commit()
+            return True
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def delete_content(self, content_id: int) -> Optional[Dict[str, Any]]:
+        session = self._get_session()
+        try:
+            content = session.query(Content).filter(Content.id == content_id).first()
+            if not content:
+                return None
+
+            media_assets = (
+                session.query(MediaAsset)
+                .filter(MediaAsset.content_id == content_id)
+                .order_by(MediaAsset.created_at)
+                .all()
+            )
+            deleted = {
+                "content": self._content_to_dict(content),
+                "media_assets": [self._media_asset_to_dict(asset) for asset in media_assets],
+            }
+
+            session.query(Content).filter(Content.parent_id == content_id).update(
+                {Content.parent_id: None},
+                synchronize_session=False,
+            )
+            session.query(CalendarEvent).filter(CalendarEvent.content_id == content_id).delete(synchronize_session=False)
+            session.query(ContentMetrics).filter(ContentMetrics.content_id == content_id).delete(synchronize_session=False)
+            session.query(MediaAsset).filter(MediaAsset.content_id == content_id).delete(synchronize_session=False)
+            session.query(PlatformPublication).filter(
+                PlatformPublication.content_id == content_id
+            ).delete(synchronize_session=False)
+            session.delete(content)
+            session.commit()
+            return deleted
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def save_media_asset(
+        self,
+        content_id: int,
+        media_type: str,
+        source_type: str,
+        file_name: str,
+        file_path: str,
+        mime_type: str | None = None,
+        provider: str | None = None,
+        generation_params: dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        session = self._get_session()
+        try:
+            current_order = (
+                session.query(func.max(MediaAsset.sort_order))
+                .filter(MediaAsset.content_id == content_id, MediaAsset.media_type == media_type)
+                .scalar()
+            )
+            asset = MediaAsset(
+                content_id=content_id,
+                media_type=media_type,
+                source_type=source_type,
+                file_name=file_name,
+                file_path=file_path,
+                mime_type=mime_type,
+                sort_order=(current_order or 0) + 1,
+                provider=provider,
+                generation_params=json.dumps(generation_params, ensure_ascii=False) if generation_params else None,
+            )
+            session.add(asset)
+            session.commit()
+            session.refresh(asset)
+            return self._media_asset_to_dict(asset)
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def get_media_asset(self, media_id: int) -> Optional[Dict[str, Any]]:
+        session = self._get_session()
+        try:
+            asset = session.query(MediaAsset).filter(MediaAsset.id == media_id).first()
+            if not asset:
+                return None
+            return self._media_asset_to_dict(asset)
+        finally:
+            session.close()
+
+    def list_media_assets(self, content_id: int, media_type: str | None = None) -> List[Dict[str, Any]]:
+        session = self._get_session()
+        try:
+            query = session.query(MediaAsset).filter(MediaAsset.content_id == content_id)
+            if media_type:
+                query = query.filter(MediaAsset.media_type == media_type)
+            assets = query.order_by(MediaAsset.media_type, MediaAsset.sort_order, MediaAsset.created_at).all()
+            return [self._media_asset_to_dict(asset) for asset in assets]
+        finally:
+            session.close()
+
+    def delete_media_asset(self, media_id: int) -> Optional[Dict[str, Any]]:
+        session = self._get_session()
+        try:
+            asset = session.query(MediaAsset).filter(MediaAsset.id == media_id).first()
+            if not asset:
+                return None
+            data = self._media_asset_to_dict(asset)
+            session.delete(asset)
+            session.commit()
+            return data
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def create_publication(
+        self,
+        content_id: int,
+        platform: str,
+        publish_type: str,
+        status: str,
+        title: str | None,
+        body: str,
+        scheduled_at: datetime | None = None,
+        request_payload: dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        session = self._get_session()
+        try:
+            publication = PlatformPublication(
+                content_id=content_id,
+                platform=platform,
+                publish_type=publish_type,
+                status=status,
+                title=title,
+                body=body,
+                scheduled_at=scheduled_at,
+                request_payload=json.dumps(request_payload, ensure_ascii=False) if request_payload else None,
+            )
+            session.add(publication)
+            session.commit()
+            session.refresh(publication)
+            return self._publication_to_dict(publication)
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def get_publication(self, publication_id: int) -> Optional[Dict[str, Any]]:
+        session = self._get_session()
+        try:
+            publication = session.query(PlatformPublication).filter(PlatformPublication.id == publication_id).first()
+            if not publication:
+                return None
+            return self._publication_to_dict(publication)
+        finally:
+            session.close()
+
+    def list_publications(self, content_id: int) -> List[Dict[str, Any]]:
+        session = self._get_session()
+        try:
+            publications = (
+                session.query(PlatformPublication)
+                .filter(PlatformPublication.content_id == content_id)
+                .order_by(PlatformPublication.created_at.desc())
+                .all()
+            )
+            return [self._publication_to_dict(publication) for publication in publications]
+        finally:
+            session.close()
+
+    def update_publication(self, publication_id: int, **fields) -> Optional[Dict[str, Any]]:
+        session = self._get_session()
+        try:
+            publication = session.query(PlatformPublication).filter(PlatformPublication.id == publication_id).first()
+            if not publication:
+                return None
+
+            for key in ("request_payload", "response_payload"):
+                if key in fields and fields[key] is not None:
+                    fields[key] = json.dumps(fields[key], ensure_ascii=False)
+
+            for key, value in fields.items():
+                if hasattr(publication, key):
+                    setattr(publication, key, value)
+            publication.updated_at = datetime.now()
+            session.commit()
+            session.refresh(publication)
+            return self._publication_to_dict(publication)
+        except Exception:
+            session.rollback()
+            raise
         finally:
             session.close()
 
@@ -590,6 +833,59 @@ class ContentStore:
             "message_count": message_count,
             "created_at": thread.created_at.isoformat() if thread.created_at else None,
             "updated_at": thread.updated_at.isoformat() if thread.updated_at else None,
+        }
+
+    @staticmethod
+    def _content_to_dict(content: Content) -> Dict[str, Any]:
+        return {
+            "id": content.id,
+            "title": content.title,
+            "content": content.content,
+            "content_type": content.content_type,
+            "style": content.style,
+            "keywords": json.loads(content.keywords) if content.keywords else [],
+            "tags": json.loads(content.tags) if content.tags else [],
+            "status": content.status,
+            "version": content.version,
+            "parent_id": content.parent_id,
+            "created_at": content.created_at.isoformat() if content.created_at else None,
+            "updated_at": content.updated_at.isoformat() if content.updated_at else None,
+        }
+
+    @staticmethod
+    def _media_asset_to_dict(asset: MediaAsset) -> Dict[str, Any]:
+        return {
+            "id": asset.id,
+            "content_id": asset.content_id,
+            "media_type": asset.media_type,
+            "source_type": asset.source_type,
+            "file_name": asset.file_name,
+            "file_path": asset.file_path,
+            "mime_type": asset.mime_type,
+            "sort_order": asset.sort_order or 0,
+            "provider": asset.provider,
+            "generation_params": json.loads(asset.generation_params) if asset.generation_params else None,
+            "created_at": asset.created_at.isoformat() if asset.created_at else None,
+        }
+
+    @staticmethod
+    def _publication_to_dict(publication: PlatformPublication) -> Dict[str, Any]:
+        return {
+            "id": publication.id,
+            "content_id": publication.content_id,
+            "platform": publication.platform,
+            "publish_type": publication.publish_type,
+            "status": publication.status,
+            "title": publication.title,
+            "body": publication.body,
+            "scheduled_at": publication.scheduled_at.isoformat() if publication.scheduled_at else None,
+            "published_at": publication.published_at.isoformat() if publication.published_at else None,
+            "external_post_id": publication.external_post_id,
+            "request_payload": json.loads(publication.request_payload) if publication.request_payload else None,
+            "response_payload": json.loads(publication.response_payload) if publication.response_payload else None,
+            "error_message": publication.error_message,
+            "created_at": publication.created_at.isoformat() if publication.created_at else None,
+            "updated_at": publication.updated_at.isoformat() if publication.updated_at else None,
         }
 
     @staticmethod

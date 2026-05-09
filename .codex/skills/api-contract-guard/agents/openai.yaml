@@ -1,0 +1,4 @@
+interface:
+  display_name: "API Contract Guard"
+  short_description: "Guard FastAPI contract changes with minimal checks"
+  default_prompt: "Use $api-contract-guard to choose and run the minimum safe verification commands for my changed files."

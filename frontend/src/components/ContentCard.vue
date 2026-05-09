@@ -23,12 +23,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { ContentItem } from '../api/content'
-import { getContentTypeLabel, getStatusLabel, getStyleLabel } from '../constants/content'
+import { getContentTypeLabel, getContentTypeLabel as getTypeLabel, getStatusLabel, getStyleLabel } from '../constants/content'
 
 const props = defineProps<{ item: ContentItem }>()
 
 const title = computed(() => props.item.title || '未命名内容')
-const contentTypeLabel = computed(() => getContentTypeLabel(props.item.content_type))
+const contentTypeLabel = computed(() => getTypeLabel(props.item.content_type))
 const statusLabel = computed(() => getStatusLabel(props.item.status))
 const styleLabel = computed(() => getStyleLabel(props.item.style))
 </script>

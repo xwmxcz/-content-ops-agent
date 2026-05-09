@@ -11,6 +11,7 @@ from langchain_core.tools import StructuredTool
 
 from src.api.schemas.agent import ChatRequest, ChatResponse, ChatToolEvent
 from src.api.schemas.content import GenerateRequest, RefineRequest, SeoRequest, TitleRequest
+from src.api.services.publish_service import create_publish_service
 from src.api.services import content_service
 from src.api.services.content_service import resolve_provider
 from src.llm.litellm_client import LLMConfigurationError, LiteLLMClient
@@ -291,6 +292,11 @@ class ChatAgentService:
             """Return content library statistics."""
             return json.dumps(self.store.get_content_stats(), ensure_ascii=False)
 
+        async def check_xiaohongshu_login() -> str:
+            """Check whether the Xiaohongshu MCP integration is currently logged in."""
+            status_payload = await create_publish_service(self.store).get_login_status()
+            return json.dumps(status_payload, ensure_ascii=False)
+
         return [
             StructuredTool.from_function(coroutine=create_content, name="create_content"),
             StructuredTool.from_function(coroutine=refine_content, name="refine_content"),
@@ -301,6 +307,7 @@ class ChatAgentService:
             StructuredTool.from_function(func=add_to_calendar, name="add_to_calendar"),
             StructuredTool.from_function(func=view_calendar, name="view_calendar"),
             StructuredTool.from_function(func=get_content_stats, name="get_content_stats"),
+            StructuredTool.from_function(coroutine=check_xiaohongshu_login, name="check_xiaohongshu_login"),
         ]
 
     @staticmethod

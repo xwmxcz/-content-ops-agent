@@ -104,7 +104,7 @@
         <section class="tool-panel">
           <div class="panel-head">
             <span>Tools</span>
-            <strong>9</strong>
+            <strong>10</strong>
           </div>
           <div class="tool-grid">
             <span v-for="tool in tools" :key="tool">{{ tool }}</span>
@@ -147,7 +147,8 @@ const tools = [
   'list_recent_contents',
   'add_to_calendar',
   'view_calendar',
-  'get_content_stats'
+  'get_content_stats',
+  'check_xiaohongshu_login'
 ]
 
 const input = ref('')

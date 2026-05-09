@@ -1,9 +1,10 @@
 import { api } from './index'
 import type { AgentRunPayload, AgentRunResponse } from './agent'
 import type { ContentItem, GeneratePayload, RefinePayload } from './content'
+import type { Publication } from './publish'
 
 export type JobStatus = 'queued' | 'running' | 'completed' | 'failed'
-export type JobType = 'content_generation' | 'agent_run' | 'refine' | 'titles' | 'seo'
+export type JobType = 'content_generation' | 'agent_run' | 'refine' | 'titles' | 'seo' | 'publish_xiaohongshu'
 
 export interface JobResponse {
   id: string
@@ -84,4 +85,8 @@ export function extractContent(job: JobResponse) {
 
 export function extractText(job: JobResponse) {
   return job.result?.text as string | undefined
+}
+
+export function extractPublication(job: JobResponse) {
+  return job.result?.publication as Publication | undefined
 }

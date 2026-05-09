@@ -1,3 +1,6 @@
+import shutil
+from pathlib import Path as FilePath
+
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
 from src.api.dependencies import get_litellm_client, get_store
@@ -14,6 +17,7 @@ from src.api.schemas.content import (
 from src.api.services import content_service
 from src.llm.litellm_client import LLMConfigurationError, LLMGenerationError, LiteLLMClient
 from src.storage import ContentStore
+from src.utils import config
 
 
 router = APIRouter()
@@ -36,6 +40,22 @@ def get_content(content_id: int = Path(..., gt=0), store: ContentStore = Depends
     if not content:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Content not found")
     return content
+
+
+@router.post("/{content_id}/archive", response_model=dict)
+def archive_content(content_id: int = Path(..., gt=0), store: ContentStore = Depends(get_store)) -> dict:
+    if not store.archive_content(content_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Content not found")
+    return {"archived": True}
+
+
+@router.delete("/{content_id}", response_model=dict)
+def delete_content(content_id: int = Path(..., gt=0), store: ContentStore = Depends(get_store)) -> dict:
+    deleted = store.delete_content(content_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Content not found")
+    _delete_local_media_files(content_id, deleted.get("media_assets", []))
+    return {"deleted": True}
 
 
 @router.post("/generate", response_model=GenerateResponse, status_code=status.HTTP_201_CREATED)
@@ -133,3 +153,19 @@ async def analyze_seo(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+def _delete_local_media_files(content_id: int, media_assets: list[dict]) -> None:
+    media_root = FilePath(config.MEDIA_STORAGE_ROOT).resolve()
+    content_dir = (media_root / str(content_id)).resolve()
+    if content_dir.exists() and (content_dir == media_root or media_root in content_dir.parents):
+        shutil.rmtree(content_dir, ignore_errors=True)
+
+    for asset in media_assets:
+        file_path = FilePath(asset.get("file_path", ""))
+        try:
+            resolved = file_path.resolve()
+        except OSError:
+            continue
+        if resolved.exists() and media_root in resolved.parents:
+            resolved.unlink(missing_ok=True)

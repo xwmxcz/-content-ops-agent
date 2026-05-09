@@ -8,6 +8,8 @@ from src.api.schemas.agent import AgentRunRequest
 from src.api.schemas.content import GenerateRequest, RefineRequest, SeoRequest, TitleRequest
 from src.api.services import content_service
 from src.api.services.agent_pipeline import PipelineExecutionError, run_agent_pipeline
+from src.api.services.publish_service import PublicationValidationError, create_publish_service
+from src.integrations.mcp_client import McpClientError
 from src.llm.litellm_client import LLMConfigurationError, LLMGenerationError, LiteLLMClient
 from src.storage import ContentStore
 from src.utils import config
@@ -35,10 +37,19 @@ async def run_job_async(job_id: str, store: ContentStore) -> None:
 
     try:
         result = await _execute_job(job, llm, store)
-    except (LLMConfigurationError, LLMGenerationError, ValueError, LookupError, PipelineExecutionError) as exc:
+    except (
+        LLMConfigurationError,
+        LLMGenerationError,
+        ValueError,
+        LookupError,
+        PipelineExecutionError,
+        PublicationValidationError,
+        McpClientError,
+    ) as exc:
         store.update_job(job_id, status="failed", progress=100, error=str(exc))
-    except Exception:
-        store.update_job(job_id, status="failed", progress=100, error="Job failed unexpectedly")
+    except Exception as exc:
+        message = str(exc).strip() or "Job failed unexpectedly"
+        store.update_job(job_id, status="failed", progress=100, error=message)
     else:
         store.update_job(job_id, status="completed", progress=100, result=result, error=None)
 
@@ -100,6 +111,12 @@ async def _execute_job(job: dict[str, Any], llm: LiteLLMClient, store: ContentSt
     if job_type == "seo":
         request = SeoRequest(**payload)
         return {"text": await content_service.analyze_seo(request, llm, store)}
+
+    if job_type == "publish_xiaohongshu":
+        publication_id = int(payload["publication_id"])
+        store.update_job(job_id, progress=20)
+        publication = await create_publish_service(store).execute_publication(publication_id)
+        return {"publication": publication}
 
     raise ValueError(f"Unknown job type: {job_type}")
 

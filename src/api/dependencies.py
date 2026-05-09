@@ -3,6 +3,7 @@ from functools import lru_cache
 
 from fastapi import Depends
 
+from src.api.services.publish_service import PublishService, create_publish_service
 from src.llm.litellm_client import LiteLLMClient
 from src.api.services.chat_agent import ChatAgentService
 from src.storage import ContentStore
@@ -20,3 +21,7 @@ def get_litellm_client() -> LiteLLMClient:
 
 def get_chat_agent_service(store: ContentStore = Depends(get_store)) -> ChatAgentService:
     return ChatAgentService(store=store)
+
+
+def get_publish_service(store: ContentStore = Depends(get_store)) -> PublishService:
+    return create_publish_service(store)

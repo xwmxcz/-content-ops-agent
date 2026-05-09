@@ -26,8 +26,12 @@ def create_and_enqueue_job(
     store: ContentStore,
     background_tasks: BackgroundTasks,
 ) -> dict[str, Any]:
-    provider = resolve_provider(payload.get("provider"))
-    model = payload.get("model") or config.get_model(provider)
+    if job_type == "publish_xiaohongshu":
+        provider = "xiaohongshu-mcp"
+        model = "publish"
+    else:
+        provider = resolve_provider(payload.get("provider"))
+        model = payload.get("model") or config.get_model(provider)
     if store.count_inflight_jobs(provider) >= config.MAX_PROVIDER_INFLIGHT_JOBS:
         raise JobCapacityError(f"Too many in-flight jobs for provider: {provider}")
 

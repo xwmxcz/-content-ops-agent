@@ -23,8 +23,13 @@ export const STATUS_LABELS: Record<string, string> = {
   draft: '草稿',
   refined: '已打磨',
   published: '已发布',
+  scheduled: '已定时',
   archived: '已归档',
-  agent_final: 'Agent 成稿'
+  agent_final: 'Agent 成稿',
+  queued: '排队中',
+  running: '进行中',
+  completed: '已完成',
+  failed: '失败'
 }
 
 export function getContentTypeLabel(value?: string) {

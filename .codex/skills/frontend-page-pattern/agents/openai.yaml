@@ -1,0 +1,4 @@
+interface:
+  display_name: "Frontend Page Pattern"
+  short_description: "Scaffold and wire Vue pages with API/store/router conventions"
+  default_prompt: "Use $frontend-page-pattern to scaffold a new page and wire matching API, store, and route files in this repo."

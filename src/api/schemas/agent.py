@@ -59,6 +59,7 @@ class AgentRunRequest(BaseModel):
     style: ContentStyle = ContentStyle.CASUAL
     keywords: Optional[list[str]] = None
     length: Literal["short", "medium", "long"] = "medium"
+    mode: Literal["agent", "workflow"] = "agent"
     provider: Optional[str] = None
     model: Optional[str] = None
     temperature: float = Field(0.7, ge=0.0, le=1.0)
@@ -74,6 +75,7 @@ class AgentStep(BaseModel):
     status: Literal["pending", "running", "completed", "failed"]
     input_summary: str
     output: str = ""
+    tool_events: list[ChatToolEvent] = Field(default_factory=list)
     duration_ms: int = 0
     error: Optional[str] = None
 

@@ -67,6 +67,16 @@ export async function getContent(id: number) {
   return data
 }
 
+export async function archiveContent(id: number) {
+  const { data } = await api.post<{ archived: boolean }>(`/content/${id}/archive`)
+  return data
+}
+
+export async function deleteContentLocal(id: number) {
+  const { data } = await api.delete<{ deleted: boolean }>(`/content/${id}`)
+  return data
+}
+
 export async function generateTitles(payload: Record<string, unknown>) {
   const { data } = await api.post<{ result: string }>('/content/titles', payload)
   return data.result
