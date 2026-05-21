@@ -109,3 +109,59 @@ class AgentRunResponse(BaseModel):
     saved_content_id: Optional[int] = None
     provider: str
     model: str
+
+
+SubAgentId = Literal["strategy", "writer", "editor", "reviewer", "researcher", "fact_checker"]
+
+
+class PipelinePlanStep(BaseModel):
+    index: int
+    agent_id: SubAgentId
+    description: str
+    instruction: str = ""
+    inputs_from: list[int] = Field(default_factory=list)
+    status: Literal["pending", "running", "completed", "failed", "skipped"] = "pending"
+    output: str = ""
+    duration_ms: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost_estimate: float = 0.0
+    revised_at: Optional[int] = None
+
+
+class PipelineRunRequest(BaseModel):
+    topic: str = Field(..., min_length=1)
+    content_type: ContentType
+    style: ContentStyle = ContentStyle.CASUAL
+    keywords: Optional[list[str]] = None
+    length: Literal["short", "medium", "long"] = "medium"
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    temperature: float = Field(0.7, ge=0.0, le=1.0)
+    max_tokens: int = Field(2048, ge=128, le=8192)
+    save_final: bool = True
+    thread_id: Optional[str] = None
+
+
+class PipelineRunResponse(BaseModel):
+    run_id: str
+    thread_id: str
+    plan: list[PipelinePlanStep]
+    final_content: AgentFinalContent
+    saved_content_id: Optional[int] = None
+    provider: str
+    model: str
+    total_prompt_tokens: int = 0
+    total_completion_tokens: int = 0
+    total_cost: float = 0.0
+    revision_count: int = 0
+    status: Literal["running", "completed", "failed"] = "completed"
+    error: Optional[str] = None
+
+
+class PipelineRunHandle(BaseModel):
+    """Returned immediately from POST /api/agent/runs so the client can subscribe to SSE."""
+    run_id: str
+    thread_id: str
+    provider: str
+    model: str

@@ -128,3 +128,60 @@ export async function deleteAgentThread(threadId: string) {
   const { data } = await api.delete<{ deleted: boolean }>(`/agent/threads/${threadId}`)
   return data
 }
+
+// ---------- Dynamic pipeline (Studio v2) -----------------------------------
+
+export type SubAgentId =
+  | 'strategy'
+  | 'writer'
+  | 'editor'
+  | 'reviewer'
+  | 'researcher'
+  | 'fact_checker'
+
+export interface PipelinePlanStep {
+  index: number
+  agent_id: SubAgentId
+  description: string
+  instruction?: string
+  inputs_from: number[]
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
+  output: string
+  duration_ms: number
+  prompt_tokens: number
+  completion_tokens: number
+  cost_estimate: number
+  revised_at?: number | null
+}
+
+export interface PipelineRunPayload {
+  topic: string
+  content_type: string
+  style: string
+  keywords?: string[]
+  length: string
+  provider?: string
+  model?: string
+  temperature: number
+  max_tokens: number
+  save_final?: boolean
+  thread_id?: string
+}
+
+export interface PipelineRunHandle {
+  run_id: string
+  thread_id: string
+  provider: string
+  model: string
+}
+
+export async function createPipelineRun(payload: PipelineRunPayload) {
+  const { data } = await api.post<PipelineRunHandle>('/agent/runs', payload)
+  return data
+}
+
+export function pipelineStreamUrl(runId: string) {
+  // EventSource ignores axios baseURL, so we read it back from the api instance
+  const base = (api.defaults.baseURL || '').replace(/\/$/, '')
+  return `${base}/agent/runs/${runId}/stream`
+}

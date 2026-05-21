@@ -167,6 +167,8 @@ class Job(Base):
     model = Column(String(200), nullable=True)
     progress = Column(Integer, default=0)
     attempts = Column(Integer, default=0)
+    token_usage = Column(Integer, default=0)
+    cost_estimate = Column(Float, default=0.0)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
     started_at = Column(DateTime, nullable=True)
@@ -175,6 +177,49 @@ class Job(Base):
 
 Index("ix_jobs_status_created", Job.status, Job.created_at)
 Index("ix_jobs_provider_status", Job.provider, Job.status)
+
+
+class AgentRun(Base):
+    """Dynamic-pipeline run record."""
+
+    __tablename__ = "agent_runs"
+
+    id = Column(String(80), primary_key=True)
+    thread_id = Column(String(80), nullable=True)
+    topic = Column(Text, nullable=False)
+    content_type = Column(String(50), nullable=False)
+    style = Column(String(50), nullable=False)
+    provider = Column(String(50), nullable=True)
+    model = Column(String(200), nullable=True)
+    plan_json = Column(Text, nullable=True)
+    revision_count = Column(Integer, default=0)
+    total_prompt_tokens = Column(Integer, default=0)
+    total_completion_tokens = Column(Integer, default=0)
+    total_cost = Column(Float, default=0.0)
+    saved_content_id = Column(Integer, nullable=True)
+    status = Column(String(20), default="running")
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.now)
+    completed_at = Column(DateTime, nullable=True)
+
+
+Index("ix_agent_runs_thread_created", AgentRun.thread_id, AgentRun.created_at)
+
+
+class AgentRunEvent(Base):
+    """Append-only event log for a pipeline run; SSE bridge reads this table."""
+
+    __tablename__ = "agent_run_events"
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(String(80), ForeignKey("agent_runs.id"), nullable=False)
+    seq = Column(Integer, nullable=False)
+    event_type = Column(String(40), nullable=False)
+    payload = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.now)
+
+
+Index("ix_agent_run_events_run_seq", AgentRunEvent.run_id, AgentRunEvent.seq)
 
 
 class ContentStore:
@@ -219,6 +264,13 @@ class ContentStore:
             with self.engine.begin() as connection:
                 connection.execute(text("ALTER TABLE agent_messages ADD COLUMN plan TEXT"))
 
+        job_cols = {col["name"] for col in inspect(self.engine).get_columns("jobs")}
+        with self.engine.begin() as connection:
+            if "token_usage" not in job_cols:
+                connection.execute(text("ALTER TABLE jobs ADD COLUMN token_usage INTEGER DEFAULT 0"))
+            if "cost_estimate" not in job_cols:
+                connection.execute(text("ALTER TABLE jobs ADD COLUMN cost_estimate FLOAT DEFAULT 0"))
+
     def _get_session(self) -> Session:
         return self.SessionLocal()
 
@@ -230,6 +282,8 @@ class ContentStore:
         parent_id=None,
         style: str = "casual",
         keywords: list[str] | None = None,
+        token_usage: int | None = None,
+        cost_estimate: float | None = None,
     ) -> int:
         session = self._get_session()
         try:
@@ -246,6 +300,8 @@ class ContentStore:
                 parent_id=parent_id,
                 llm_provider=llm_provider,
                 model_name=model_name,
+                token_usage=token_usage,
+                cost_estimate=cost_estimate,
             )
             session.add(content)
             session.commit()
@@ -835,6 +891,151 @@ class ContentStore:
             raise
         finally:
             session.close()
+
+    # --- Pipeline run records ---------------------------------------------
+
+    def create_run(
+        self,
+        run_id: str,
+        topic: str,
+        content_type: str,
+        style: str,
+        provider: str | None = None,
+        model: str | None = None,
+        thread_id: str | None = None,
+    ) -> Dict[str, Any]:
+        session = self._get_session()
+        try:
+            run = AgentRun(
+                id=run_id,
+                thread_id=thread_id,
+                topic=topic,
+                content_type=content_type,
+                style=style,
+                provider=provider,
+                model=model,
+                status="running",
+            )
+            session.add(run)
+            session.commit()
+            return self._agent_run_to_dict(run)
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def update_run(self, run_id: str, **fields) -> Optional[Dict[str, Any]]:
+        session = self._get_session()
+        try:
+            run = session.query(AgentRun).filter(AgentRun.id == run_id).first()
+            if not run:
+                return None
+            if "plan" in fields:
+                run.plan_json = json.dumps(fields.pop("plan"), ensure_ascii=False)
+            for key, value in fields.items():
+                if hasattr(run, key):
+                    setattr(run, key, value)
+            if fields.get("status") in {"completed", "failed"} or run.status in {"completed", "failed"}:
+                run.completed_at = run.completed_at or datetime.now()
+            session.commit()
+            return self._agent_run_to_dict(run)
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def get_run(self, run_id: str) -> Optional[Dict[str, Any]]:
+        session = self._get_session()
+        try:
+            run = session.query(AgentRun).filter(AgentRun.id == run_id).first()
+            return self._agent_run_to_dict(run) if run else None
+        finally:
+            session.close()
+
+    def list_runs(self, thread_id: str | None = None, limit: int = 30) -> List[Dict[str, Any]]:
+        session = self._get_session()
+        try:
+            query = session.query(AgentRun)
+            if thread_id:
+                query = query.filter(AgentRun.thread_id == thread_id)
+            runs = query.order_by(AgentRun.created_at.desc()).limit(limit).all()
+            return [self._agent_run_to_dict(run) for run in runs]
+        finally:
+            session.close()
+
+    def append_run_event(self, run_id: str, event_type: str, payload: dict[str, Any]) -> int:
+        session = self._get_session()
+        try:
+            last_seq = (
+                session.query(func.max(AgentRunEvent.seq))
+                .filter(AgentRunEvent.run_id == run_id)
+                .scalar()
+            ) or 0
+            event = AgentRunEvent(
+                run_id=run_id,
+                seq=last_seq + 1,
+                event_type=event_type,
+                payload=json.dumps(payload, ensure_ascii=False),
+            )
+            session.add(event)
+            session.commit()
+            return event.seq
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def list_run_events(
+        self,
+        run_id: str,
+        after_seq: int = 0,
+        limit: int = 200,
+    ) -> List[Dict[str, Any]]:
+        session = self._get_session()
+        try:
+            events = (
+                session.query(AgentRunEvent)
+                .filter(AgentRunEvent.run_id == run_id, AgentRunEvent.seq > after_seq)
+                .order_by(AgentRunEvent.seq)
+                .limit(limit)
+                .all()
+            )
+            return [
+                {
+                    "seq": e.seq,
+                    "event_type": e.event_type,
+                    "payload": e.payload,
+                    "created_at": e.created_at.isoformat() if e.created_at else None,
+                }
+                for e in events
+            ]
+        finally:
+            session.close()
+
+    @staticmethod
+    def _agent_run_to_dict(run: AgentRun) -> Dict[str, Any]:
+        return {
+            "id": run.id,
+            "thread_id": run.thread_id,
+            "topic": run.topic,
+            "content_type": run.content_type,
+            "style": run.style,
+            "provider": run.provider,
+            "model": run.model,
+            "plan": json.loads(run.plan_json) if run.plan_json else [],
+            "revision_count": run.revision_count or 0,
+            "total_prompt_tokens": run.total_prompt_tokens or 0,
+            "total_completion_tokens": run.total_completion_tokens or 0,
+            "total_cost": run.total_cost or 0.0,
+            "saved_content_id": run.saved_content_id,
+            "status": run.status,
+            "error": run.error,
+            "created_at": run.created_at.isoformat() if run.created_at else None,
+            "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        }
 
     @staticmethod
     def _make_thread_title(content: str) -> str:

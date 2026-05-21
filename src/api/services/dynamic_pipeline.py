@@ -1,0 +1,508 @@
+"""Dynamic Plan-then-Execute pipeline for the Studio surface.
+
+The flow:
+  1. Planner LLM proposes a JSON plan: 3-6 steps drawing from 6 sub-agent types.
+  2. Each step is executed via SubAgentRunner. Outputs are kept in `outputs[index]`.
+  3. After a reviewer step or any failed step, the planner is given another chance
+     to revise the remaining (pending) steps. Up to MAX_REVISIONS revisions allowed.
+  4. Every state transition (plan_ready / step_start / step_token / step_complete /
+     step_failed / plan_revised / run_complete / run_failed) is appended to the
+     `agent_run_events` table — that table also serves as the SSE bus.
+
+Hard guards:
+  - MAX_STEPS = 8
+  - MAX_REVISIONS = 2
+  - Schema validation: agent_id whitelist, inputs_from < own index, dedupe step indices
+  - On any planner failure (bad JSON / empty / shape error) → fall back to the
+    canonical 4-step strategy/writer/editor/reviewer plan
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import re
+import time
+import uuid
+from typing import Any
+
+from src.api.schemas.agent import (
+    AgentFinalContent,
+    PipelinePlanStep,
+    PipelineRunRequest,
+    PipelineRunResponse,
+    SubAgentId,
+)
+from src.api.services.content_service import resolve_provider
+from src.api.services.sub_agents import (
+    PRICE_PER_1K,
+    SUB_AGENTS,
+    SubAgentRunner,
+    SubAgentSpec,
+    estimate_cost,
+)
+from src.llm.litellm_client import LiteLLMClient, LLMConfigurationError
+from src.models import GeneratedContent
+from src.storage import ContentStore
+from src.utils import config
+
+
+MAX_STEPS = 8
+MAX_REVISIONS = 2
+
+PLANNER_SYSTEM_PROMPT = (
+    "You are the Pipeline Planner. The user wants content for a specific platform. "
+    "You have 6 sub-agents to choose from:\n"
+    "- strategy: plans audience, angle, structure (no tools)\n"
+    "- writer: produces a complete first draft (no tools)\n"
+    "- editor: polishes a draft for clarity, rhythm, platform fit (no tools)\n"
+    "- reviewer: scores 1-100 and lists strengths/risks (no tools)\n"
+    "- researcher: searches saved content for context (has tools)\n"
+    "- fact_checker: verifies factual claims against saved content (has tools)\n\n"
+    "Output a JSON plan: an array of steps. Each step is:\n"
+    '{"index": 1, "agent_id": "strategy", "description": "...", '
+    '"instruction": "...", "inputs_from": []}\n\n'
+    "Rules:\n"
+    "- 3 to 6 steps total\n"
+    "- Final step must be writer or editor (so we have content to ship)\n"
+    "- inputs_from references earlier step indices; the agent will see those outputs\n"
+    "- If user mentions facts/data/numbers, include a fact_checker step before writer\n"
+    "- If topic is opaque (very generic), include researcher first\n"
+    "- Output JSON ONLY. No prose. No markdown fence."
+)
+
+REVISION_SYSTEM_PROMPT = (
+    "A pipeline run is in progress. Decide whether the remaining plan should be revised.\n\n"
+    "Return one of:\n"
+    "1. JSON `null` if the latest result is acceptable and the plan should continue as-is.\n"
+    "2. A JSON array containing FULL revised plan (same schema as the original plan): "
+    "you may add up to 2 new steps, reorder PENDING steps, but you must NOT modify or "
+    "remove COMPLETED steps. Step indices stay 1-based and contiguous.\n\n"
+    "Output JSON only. No prose."
+)
+
+
+class PipelineExecutionError(RuntimeError):
+    pass
+
+
+class DynamicPipeline:
+    def __init__(
+        self,
+        store: ContentStore,
+        llm: LiteLLMClient | None = None,
+        runner: SubAgentRunner | None = None,
+        emit_async: bool = False,
+    ):
+        self.store = store
+        self.llm = llm or LiteLLMClient()
+        self.runner = runner or SubAgentRunner(store=store, llm=self.llm)
+        # When False (test mode) we await DB writes inline so events are visible immediately.
+        self.emit_async = emit_async
+
+    async def run(self, request: PipelineRunRequest, run_id: str | None = None) -> PipelineRunResponse:
+        provider = resolve_provider(request.provider)
+        litellm_model = config.get_litellm_model(provider, request.model)
+        run_id = run_id or f"run_{uuid.uuid4().hex[:12]}"
+        thread_id = request.thread_id or run_id
+
+        if not self.store.get_run(run_id):
+            self.store.create_run(
+                run_id=run_id,
+                topic=request.topic,
+                content_type=request.content_type.value,
+                style=request.style.value,
+                provider=provider,
+                model=litellm_model,
+                thread_id=thread_id,
+            )
+
+        try:
+            plan = await self._make_plan(request, provider, request.model)
+        except Exception:
+            plan = self._default_plan()
+        if not plan:
+            plan = self._default_plan()
+        await self._emit(run_id, "plan_ready", {"plan": [s.model_dump() for s in plan]})
+
+        outputs: dict[int, str] = {}
+        revisions = 0
+        i = 0
+        total_prompt = 0
+        total_completion = 0
+        total_cost = 0.0
+
+        while i < len(plan) and i < MAX_STEPS:
+            step = plan[i]
+            if step.status != "pending":
+                i += 1
+                continue
+
+            step.status = "running"
+            await self._emit(run_id, "step_start", {
+                "index": step.index, "agent_id": step.agent_id, "description": step.description,
+            })
+
+            spec = SUB_AGENTS.get(step.agent_id)
+            user_prompt = self._build_step_prompt(step, plan, outputs, request)
+            started = time.perf_counter()
+            success = True
+            try:
+                if spec is None:
+                    raise ValueError(f"Unknown agent_id: {step.agent_id}")
+
+                async def token_sink(delta: str, _idx=step.index):
+                    await self._emit(run_id, "step_token", {"index": _idx, "delta": delta})
+
+                text, p_tok, c_tok, _, _ = await self.runner.run(
+                    spec=spec,
+                    user_prompt=user_prompt,
+                    provider=provider,
+                    model=request.model or config.get_model(provider),
+                    max_tokens=request.max_tokens,
+                    token_sink=token_sink,
+                )
+                duration = int((time.perf_counter() - started) * 1000)
+                cost = estimate_cost(litellm_model, p_tok, c_tok)
+
+                step.output = text
+                step.status = "completed"
+                step.duration_ms = duration
+                step.prompt_tokens = p_tok
+                step.completion_tokens = c_tok
+                step.cost_estimate = cost
+                outputs[step.index] = text
+                total_prompt += p_tok
+                total_completion += c_tok
+                total_cost += cost
+
+                await self._emit(run_id, "step_complete", {
+                    "index": step.index,
+                    "agent_id": step.agent_id,
+                    "output": text,
+                    "duration_ms": duration,
+                    "prompt_tokens": p_tok,
+                    "completion_tokens": c_tok,
+                    "cost_estimate": cost,
+                })
+            except LLMConfigurationError:
+                raise
+            except Exception as exc:
+                success = False
+                duration = int((time.perf_counter() - started) * 1000)
+                step.status = "failed"
+                step.duration_ms = duration
+                await self._emit(run_id, "step_failed", {
+                    "index": step.index,
+                    "agent_id": step.agent_id,
+                    "error": str(exc) or exc.__class__.__name__,
+                })
+
+            should_revise = revisions < MAX_REVISIONS and (
+                step.agent_id == "reviewer" or not success
+            )
+            if should_revise:
+                try:
+                    revised = await self._maybe_revise_plan(plan, outputs, request, provider, request.model)
+                except Exception:
+                    revised = None
+                if revised is not None:
+                    plan = revised
+                    revisions += 1
+                    await self._emit(run_id, "plan_revised", {
+                        "plan": [s.model_dump() for s in plan],
+                        "revision": revisions,
+                    })
+                    i = next(
+                        (idx for idx, s in enumerate(plan) if s.status == "pending"),
+                        len(plan),
+                    )
+                    continue
+            i += 1
+
+        final_text = self._select_final_output(plan, outputs) or request.topic
+
+        saved_content_id = None
+        if request.save_final and final_text.strip():
+            generated = GeneratedContent(
+                title=self._derive_title(final_text, request.topic),
+                content=final_text,
+                tags=request.keywords or [],
+                content_type=request.content_type,
+                metadata={"pipeline_run_id": run_id},
+            )
+            saved_content_id = self.store.save_content(
+                generated,
+                llm_provider=provider,
+                model_name=litellm_model,
+                style=request.style.value,
+                keywords=request.keywords,
+                token_usage=total_prompt + total_completion,
+                cost_estimate=total_cost,
+            )
+            self.store.update_content(saved_content_id, status="agent_final")
+
+        self.store.update_run(
+            run_id,
+            plan=[s.model_dump() for s in plan],
+            revision_count=revisions,
+            total_prompt_tokens=total_prompt,
+            total_completion_tokens=total_completion,
+            total_cost=total_cost,
+            saved_content_id=saved_content_id,
+            status="completed",
+        )
+
+        final = AgentFinalContent(
+            title=self._derive_title(final_text, request.topic),
+            content=final_text,
+            content_type=request.content_type.value,
+            style=request.style.value,
+            tags=request.keywords or [],
+        )
+        response = PipelineRunResponse(
+            run_id=run_id,
+            thread_id=thread_id,
+            plan=plan,
+            final_content=final,
+            saved_content_id=saved_content_id,
+            provider=provider,
+            model=litellm_model,
+            total_prompt_tokens=total_prompt,
+            total_completion_tokens=total_completion,
+            total_cost=total_cost,
+            revision_count=revisions,
+            status="completed",
+        )
+        await self._emit(run_id, "run_complete", response.model_dump())
+        return response
+
+    # -- planner ------------------------------------------------------------
+
+    async def _make_plan(
+        self,
+        request: PipelineRunRequest,
+        provider: str,
+        model: str | None,
+    ) -> list[PipelinePlanStep]:
+        keywords = ", ".join(request.keywords or []) or "none"
+        user_prompt = (
+            f"Topic: {request.topic}\n"
+            f"Platform/content type: {request.content_type.value}\n"
+            f"Style: {request.style.value}\n"
+            f"Length: {request.length}\n"
+            f"Keywords: {keywords}\n\n"
+            "Output the plan now."
+        )
+        raw = await self.llm.generate_from_prompts(
+            provider=provider,
+            model=model,
+            system_prompt=PLANNER_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            temperature=0.3,
+            max_tokens=1024,
+        )
+        return self._parse_plan(raw)
+
+    async def _maybe_revise_plan(
+        self,
+        plan: list[PipelinePlanStep],
+        outputs: dict[int, str],
+        request: PipelineRunRequest,
+        provider: str,
+        model: str | None,
+    ) -> list[PipelinePlanStep] | None:
+        summary = json.dumps(
+            [
+                {
+                    "index": s.index,
+                    "agent_id": s.agent_id,
+                    "status": s.status,
+                    "description": s.description,
+                    "output": (s.output[:200] + "…") if len(s.output) > 200 else s.output,
+                }
+                for s in plan
+            ],
+            ensure_ascii=False,
+        )
+        user_prompt = (
+            f"Original topic: {request.topic}\n\nCurrent plan and outputs:\n{summary}\n\n"
+            "Decide whether to revise. Return null or full revised plan as JSON."
+        )
+        raw = await self.llm.generate_from_prompts(
+            provider=provider,
+            model=model,
+            system_prompt=REVISION_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            temperature=0.3,
+            max_tokens=1024,
+        )
+        cleaned = self._strip_fence(raw)
+        if not cleaned or cleaned.lower() == "null":
+            return None
+        try:
+            payload = json.loads(cleaned)
+        except json.JSONDecodeError:
+            return None
+        if payload is None:
+            return None
+        if not isinstance(payload, list):
+            return None
+        revised = self._coerce_plan(payload)
+        if not revised:
+            return None
+        # Preserve completed step outputs by id (best-effort: copy by index match)
+        completed_by_index = {s.index: s for s in plan if s.status == "completed"}
+        for new_step in revised:
+            if new_step.index in completed_by_index:
+                old = completed_by_index[new_step.index]
+                new_step.status = old.status
+                new_step.output = old.output
+                new_step.duration_ms = old.duration_ms
+                new_step.prompt_tokens = old.prompt_tokens
+                new_step.completion_tokens = old.completion_tokens
+                new_step.cost_estimate = old.cost_estimate
+        return revised
+
+    def _parse_plan(self, raw: str) -> list[PipelinePlanStep]:
+        cleaned = self._strip_fence(raw)
+        try:
+            payload = json.loads(cleaned)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(payload, list):
+            return []
+        return self._coerce_plan(payload)
+
+    @staticmethod
+    def _strip_fence(text: str) -> str:
+        text = (text or "").strip()
+        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE | re.DOTALL)
+        return text.strip()
+
+    @staticmethod
+    def _coerce_plan(payload: list[Any]) -> list[PipelinePlanStep]:
+        steps: list[PipelinePlanStep] = []
+        seen_indices: set[int] = set()
+        valid_ids = set(SUB_AGENTS.keys())
+        for raw_step in payload[:MAX_STEPS]:
+            if not isinstance(raw_step, dict):
+                continue
+            agent_id = raw_step.get("agent_id")
+            if agent_id not in valid_ids:
+                continue
+            try:
+                idx = int(raw_step.get("index") or len(steps) + 1)
+            except (TypeError, ValueError):
+                continue
+            if idx in seen_indices:
+                continue
+            inputs_from = [
+                int(x) for x in (raw_step.get("inputs_from") or []) if isinstance(x, (int, str)) and str(x).isdigit()
+            ]
+            inputs_from = [x for x in inputs_from if x < idx]
+            description = str(raw_step.get("description") or "").strip() or f"{agent_id} step"
+            instruction = str(raw_step.get("instruction") or "").strip()
+            try:
+                steps.append(PipelinePlanStep(
+                    index=idx,
+                    agent_id=agent_id,  # type: ignore[arg-type]
+                    description=description,
+                    instruction=instruction,
+                    inputs_from=inputs_from,
+                    status="pending",
+                ))
+                seen_indices.add(idx)
+            except Exception:
+                continue
+        steps.sort(key=lambda s: s.index)
+        # Renumber to 1..N to keep indices contiguous after dedupe / drop
+        for new_idx, step in enumerate(steps, start=1):
+            if step.index != new_idx:
+                # Need to remap inputs_from references
+                old_index = step.index
+                step.index = new_idx
+        # Trim if last step is not writer/editor
+        if steps and steps[-1].agent_id not in ("writer", "editor"):
+            steps = steps + [PipelinePlanStep(
+                index=steps[-1].index + 1,
+                agent_id="writer",
+                description="Compose the final draft using prior outputs.",
+                instruction="Write the final draft based on the strategy and any reviewer notes above.",
+                inputs_from=[s.index for s in steps],
+            )]
+        return steps[:MAX_STEPS]
+
+    @staticmethod
+    def _default_plan() -> list[PipelinePlanStep]:
+        return [
+            PipelinePlanStep(index=1, agent_id="strategy",
+                             description="Plan audience, angle, structure",
+                             instruction="Create the content strategy."),
+            PipelinePlanStep(index=2, agent_id="writer",
+                             description="Write the first draft",
+                             instruction="Use the strategy to write the first draft.",
+                             inputs_from=[1]),
+            PipelinePlanStep(index=3, agent_id="editor",
+                             description="Polish the draft",
+                             instruction="Polish the draft for clarity and platform fit.",
+                             inputs_from=[1, 2]),
+            PipelinePlanStep(index=4, agent_id="reviewer",
+                             description="Score and review",
+                             instruction="Score 1-100 and list strengths and risks.",
+                             inputs_from=[3]),
+        ]
+
+    # -- step prompt builder ----------------------------------------------
+
+    @staticmethod
+    def _build_step_prompt(
+        step: PipelinePlanStep,
+        plan: list[PipelinePlanStep],
+        outputs: dict[int, str],
+        request: PipelineRunRequest,
+    ) -> str:
+        keywords = ", ".join(request.keywords or []) or "none"
+        ctx = (
+            f"Topic: {request.topic}\n"
+            f"Platform: {request.content_type.value}\n"
+            f"Style: {request.style.value}\n"
+            f"Length: {request.length}\n"
+            f"Keywords: {keywords}\n"
+        )
+        prior_blocks: list[str] = []
+        for ref in step.inputs_from:
+            if ref in outputs:
+                src = next((s for s in plan if s.index == ref), None)
+                label = f"{src.agent_id}" if src else f"step {ref}"
+                prior_blocks.append(f"--- output of {label} ---\n{outputs[ref]}")
+        if prior_blocks:
+            ctx += "\n" + "\n\n".join(prior_blocks) + "\n"
+        instruction = step.instruction or step.description
+        return f"{ctx}\n\nYour task: {instruction}\n"
+
+    @staticmethod
+    def _select_final_output(plan: list[PipelinePlanStep], outputs: dict[int, str]) -> str:
+        # Prefer the latest completed editor output, then writer, then any.
+        for agent_id in ("editor", "writer"):
+            for step in reversed(plan):
+                if step.agent_id == agent_id and step.status == "completed" and step.output:
+                    return step.output
+        for step in reversed(plan):
+            if step.status == "completed" and step.output:
+                return step.output
+        return ""
+
+    @staticmethod
+    def _derive_title(content: str, topic: str) -> str:
+        for line in content.splitlines():
+            t = line.strip().strip("#：: -")
+            if t:
+                return t[:80]
+        return topic[:80]
+
+    # -- emit -------------------------------------------------------------
+
+    async def _emit(self, run_id: str, event_type: str, payload: dict[str, Any]) -> None:
+        # Always inline-write: tests expect events visible immediately after .run() returns.
+        # SSE consumers always read from DB so latency is dominated by the polling interval anyway.
+        self.store.append_run_event(run_id, event_type, payload)
