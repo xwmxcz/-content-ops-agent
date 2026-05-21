@@ -14,12 +14,22 @@ class ChatRequest(BaseModel):
     max_tokens: int = Field(2048, ge=128, le=8192)
 
 
+class PlanStep(BaseModel):
+    index: int
+    description: str
+    tool_hint: Optional[str] = None
+    status: Literal["pending", "running", "completed", "failed", "skipped"] = "pending"
+
+
 class ChatToolEvent(BaseModel):
     name: str
     args: dict[str, Any] = Field(default_factory=dict)
     output: str = ""
     status: Literal["completed", "failed"] = "completed"
     error: Optional[str] = None
+    plan_step_index: Optional[int] = None
+    attempt: int = 1
+    duration_ms: int = 0
 
 
 class ChatResponse(BaseModel):
@@ -29,6 +39,7 @@ class ChatResponse(BaseModel):
     provider: str
     model: str
     tool_events: list[ChatToolEvent] = Field(default_factory=list)
+    plan: list[PlanStep] = Field(default_factory=list)
 
 
 class AgentThreadResponse(BaseModel):
@@ -49,6 +60,7 @@ class AgentMessageResponse(BaseModel):
     provider: Optional[str] = None
     model: Optional[str] = None
     tool_events: list[ChatToolEvent] = Field(default_factory=list)
+    plan: list[PlanStep] = Field(default_factory=list)
     status: str
     created_at: Optional[str] = None
 

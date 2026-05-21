@@ -4,7 +4,7 @@ from datetime import datetime, date
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 
-from sqlalchemy import Column, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, create_engine, func, text
+from sqlalchemy import Column, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, create_engine, func, inspect, or_, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
@@ -144,6 +144,7 @@ class AgentMessage(Base):
     provider = Column(String(50), nullable=True)
     model = Column(String(200), nullable=True)
     tool_events = Column(Text, nullable=True)
+    plan = Column(Text, nullable=True)
     status = Column(String(20), default="completed")
     created_at = Column(DateTime, default=datetime.now)
 
@@ -209,7 +210,14 @@ class ContentStore:
                 connection.execute(text("PRAGMA journal_mode=WAL"))
                 connection.execute(text("PRAGMA busy_timeout=30000"))
         Base.metadata.create_all(self.engine)
+        self._ensure_legacy_columns()
         self.SessionLocal = sessionmaker(bind=self.engine)
+
+    def _ensure_legacy_columns(self) -> None:
+        existing = {col["name"] for col in inspect(self.engine).get_columns("agent_messages")}
+        if "plan" not in existing:
+            with self.engine.begin() as connection:
+                connection.execute(text("ALTER TABLE agent_messages ADD COLUMN plan TEXT"))
 
     def _get_session(self) -> Session:
         return self.SessionLocal()
@@ -298,6 +306,29 @@ class ContentStore:
                 }
                 for c in contents
             ]
+        finally:
+            session.close()
+
+    def search_contents(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        if not query or not query.strip():
+            return []
+        pattern = f"%{query.strip()}%"
+        session = self._get_session()
+        try:
+            rows = (
+                session.query(Content)
+                .filter(
+                    or_(
+                        Content.title.ilike(pattern),
+                        Content.content.ilike(pattern),
+                        Content.keywords.ilike(pattern),
+                    )
+                )
+                .order_by(Content.created_at.desc())
+                .limit(limit)
+                .all()
+            )
+            return [self._content_to_dict(c) for c in rows]
         finally:
             session.close()
 
@@ -735,6 +766,7 @@ class ContentStore:
         provider: str | None = None,
         model: str | None = None,
         tool_events: list[dict] | None = None,
+        plan: list[dict] | None = None,
         status: str = "completed",
     ) -> int:
         session = self._get_session()
@@ -762,6 +794,7 @@ class ContentStore:
                 provider=provider,
                 model=model,
                 tool_events=json.dumps(tool_events or [], ensure_ascii=False),
+                plan=json.dumps(plan, ensure_ascii=False) if plan else None,
                 status=status,
             )
             session.add(message)
@@ -818,6 +851,7 @@ class ContentStore:
             "provider": message.provider,
             "model": message.model,
             "tool_events": json.loads(message.tool_events) if message.tool_events else [],
+            "plan": json.loads(message.plan) if message.plan else [],
             "status": message.status,
             "created_at": message.created_at.isoformat() if message.created_at else None,
         }

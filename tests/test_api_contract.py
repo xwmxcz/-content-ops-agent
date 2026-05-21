@@ -47,6 +47,11 @@ class FakeChatFactory:
     def __init__(self):
         self.calls = []
         self.tool_mode = False
+        self.tool_call_spec = None  # {"name": str, "args": dict}
+        self.flaky_mode = False
+        self.flaky_target = "view_content"
+        self.flaky_max_attempts = 3
+        self.plan_response = None  # str returned when temperature == PLANNER_TEMPERATURE (0.3)
 
     def __call__(self, provider, model, temperature, max_tokens):
         return FakeChatModel(self, provider, model, temperature, max_tokens)
@@ -76,13 +81,30 @@ class FakeChatModel:
                 "tools": self.tools,
             }
         )
+        if self.factory.plan_response is not None and self.temperature == 0.3:
+            return AIMessage(content=self.factory.plan_response)
+        if self.factory.flaky_mode:
+            tool_message_count = sum(1 for m in messages if isinstance(m, ToolMessage))
+            if tool_message_count < self.factory.flaky_max_attempts:
+                return AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": self.factory.flaky_target,
+                            "args": {"content_id": 99999},
+                            "id": f"call_{tool_message_count + 1}",
+                        }
+                    ],
+                )
+            return AIMessage(content="Recovered.")
         if self.factory.tool_mode and not any(isinstance(message, ToolMessage) for message in messages):
+            spec = self.factory.tool_call_spec or {"name": "list_recent_contents", "args": {"limit": 5}}
             return AIMessage(
                 content="",
                 tool_calls=[
                     {
-                        "name": "list_recent_contents",
-                        "args": {"limit": 5},
+                        "name": spec["name"],
+                        "args": spec["args"],
                         "id": "call_1",
                     }
                 ],
@@ -181,8 +203,8 @@ def test_agent_chat_persists_thread_messages_and_model(client, store, fake_chat_
     messages = store.list_agent_messages("thread-a")
     assert [message["role"] for message in messages] == ["user", "assistant"]
     assert messages[0]["model"] == "Qwen/Qwen2.5-7B-Instruct"
-    assert fake_chat_factory.calls[0]["provider"] == "siliconflow"
-    assert fake_chat_factory.calls[0]["temperature"] == 0.4
+    assert any(c["provider"] == "siliconflow" for c in fake_chat_factory.calls)
+    assert any(c["temperature"] == 0.4 for c in fake_chat_factory.calls)
 
     second_response = client.post(
         "/api/agent/chat",
@@ -196,7 +218,9 @@ def test_agent_chat_persists_thread_messages_and_model(client, store, fake_chat_
 
     assert second_response.status_code == 200
     assert second_response.json()["provider"] == "deepseek"
-    second_call_messages = fake_chat_factory.calls[-1]["messages"]
+    second_call_messages = next(
+        c["messages"] for c in reversed(fake_chat_factory.calls) if c["provider"] == "deepseek" and c["temperature"] != 0.3
+    )
     assert any(isinstance(message, HumanMessage) and message.content == "Plan a content week" for message in second_call_messages)
     assert any(isinstance(message, AIMessage) and message.content == "Agent reply" for message in second_call_messages)
     assert store.list_agent_messages("thread-a")[-1]["model"] == "deepseek-chat"
@@ -222,6 +246,178 @@ def test_agent_chat_returns_and_saves_tool_events(client, store, fake_chat_facto
 
     messages = store.list_agent_messages("thread-tools")
     assert messages[-1]["tool_events"][0]["name"] == "list_recent_contents"
+
+
+def test_search_history_tool_returns_persisted_content(client, store, fake_chat_factory):
+    store.save_content(
+        GeneratedContent(
+            title="周末徒步路线推荐",
+            content="本期我们盘点 5 条适合周末出行的徒步路线。",
+            tags=["徒步", "户外"],
+            content_type=ContentType.XIAOHONGSHU,
+        ),
+        style="casual",
+        keywords=["徒步", "周末"],
+    )
+    store.save_content(
+        GeneratedContent(
+            title="咖啡馆探店指南",
+            content="一个不爱户外只爱咖啡的人。",
+            tags=["咖啡"],
+            content_type=ContentType.XIAOHONGSHU,
+        ),
+        style="casual",
+        keywords=["咖啡"],
+    )
+
+    fake_chat_factory.tool_mode = True
+    fake_chat_factory.tool_call_spec = {"name": "search_history", "args": {"query": "徒步", "limit": 5}}
+
+    response = client.post(
+        "/api/agent/chat",
+        json={
+            "message": "之前写过哪些徒步主题的内容？",
+            "thread_id": "thread-search",
+            "provider": "siliconflow",
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["tool_events"][0]["name"] == "search_history"
+    assert payload["tool_events"][0]["status"] == "completed"
+
+    import json as _json
+    matches = _json.loads(payload["tool_events"][0]["output"])
+    assert any("徒步" in (item.get("title") or "") for item in matches)
+    assert all("咖啡馆探店指南" not in (item.get("title") or "") for item in matches)
+
+
+def test_chat_agent_retries_failed_tool(client, store, fake_chat_factory, monkeypatch):
+    """Agent should reflect tool failure into a retry: 1 failed + 1 completed event for the same tool."""
+    call_state = {"n": 0}
+
+    def flaky_view_content(content_id):
+        """Read a saved content item by id (flaky variant for retry tests)."""
+        call_state["n"] += 1
+        if call_state["n"] < 3:
+            raise LookupError(f"Content {content_id} was not found (attempt {call_state['n']})")
+        return _json_module.dumps({"id": content_id, "title": "Recovered", "content": "ok"}, ensure_ascii=False)
+
+    import json as _json_module
+    from src.api.services import chat_agent as chat_agent_mod
+
+    real_build_tools = chat_agent_mod.ChatAgentService._build_tools
+
+    def build_tools_with_flaky(self, provider, model, temperature, max_tokens):
+        tools = real_build_tools(self, provider, model, temperature, max_tokens)
+        from langchain_core.tools import StructuredTool
+        replaced = [t for t in tools if t.name != "view_content"]
+        replaced.append(StructuredTool.from_function(func=flaky_view_content, name="view_content"))
+        return replaced
+
+    monkeypatch.setattr(chat_agent_mod.ChatAgentService, "_build_tools", build_tools_with_flaky)
+
+    fake_chat_factory.flaky_mode = True
+    fake_chat_factory.flaky_target = "view_content"
+    fake_chat_factory.flaky_max_attempts = 3
+
+    response = client.post(
+        "/api/agent/chat",
+        json={
+            "message": "Show content 99999",
+            "thread_id": "thread-retry",
+            "provider": "siliconflow",
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    events = payload["tool_events"]
+    assert len(events) >= 3, f"expected at least 3 events, got {len(events)}: {events}"
+    assert events[0]["name"] == "view_content"
+    assert events[0]["status"] == "failed"
+    assert events[0]["attempt"] == 1
+    assert events[1]["status"] == "failed"
+    assert events[1]["attempt"] == 2
+    assert events[2]["status"] == "completed"
+    assert events[2]["attempt"] == 3
+    assert payload["response"] == "Recovered."
+
+
+def test_chat_returns_plan_when_planner_succeeds(client, fake_chat_factory):
+    fake_chat_factory.tool_mode = True
+    fake_chat_factory.tool_call_spec = {"name": "list_recent_contents", "args": {"limit": 3}}
+    fake_chat_factory.plan_response = (
+        '[{"index": 1, "description": "Look up recent posts", "tool_hint": "list_recent_contents"},'
+        ' {"index": 2, "description": "Summarize them", "tool_hint": null}]'
+    )
+
+    response = client.post(
+        "/api/agent/chat",
+        json={
+            "message": "Summarize my recent posts",
+            "thread_id": "thread-plan-ok",
+            "provider": "siliconflow",
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["plan"]) == 2
+    assert payload["plan"][0]["description"] == "Look up recent posts"
+    assert payload["plan"][0]["tool_hint"] == "list_recent_contents"
+    assert payload["plan"][0]["status"] == "completed"
+    assert payload["plan"][1]["status"] == "skipped"
+    assert payload["tool_events"][0]["plan_step_index"] == 1
+
+
+def test_chat_falls_back_when_plan_json_invalid(client, fake_chat_factory):
+    fake_chat_factory.plan_response = "I'll just wing it"
+
+    response = client.post(
+        "/api/agent/chat",
+        json={
+            "message": "Just chat with me",
+            "thread_id": "thread-plan-bad",
+            "provider": "siliconflow",
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["plan"] == []
+    assert payload["response"] == "Agent reply"
+
+
+def test_chat_persists_plan_across_thread_reload(client, fake_chat_factory):
+    fake_chat_factory.tool_mode = True
+    fake_chat_factory.plan_response = (
+        '[{"index": 1, "description": "Find recent items", "tool_hint": "list_recent_contents"}]'
+    )
+
+    chat_response = client.post(
+        "/api/agent/chat",
+        json={
+            "message": "Show recent items",
+            "thread_id": "thread-plan-persist",
+            "provider": "siliconflow",
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+        },
+    )
+    assert chat_response.status_code == 200
+    expected_plan = chat_response.json()["plan"]
+    assert expected_plan, "plan should be populated"
+
+    messages_response = client.get("/api/agent/threads/thread-plan-persist/messages")
+    assert messages_response.status_code == 200
+    messages = messages_response.json()
+    assistant = next(m for m in messages if m["role"] == "assistant")
+    assert assistant["plan"] == expected_plan
 
 
 def test_agent_thread_endpoints(client):

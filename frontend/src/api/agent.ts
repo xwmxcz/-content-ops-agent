@@ -50,6 +50,16 @@ export interface ChatToolEvent {
   output: string
   status: 'completed' | 'failed'
   error?: string
+  plan_step_index?: number | null
+  attempt?: number
+  duration_ms?: number
+}
+
+export interface PlanStep {
+  index: number
+  description: string
+  tool_hint?: string | null
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
 }
 
 export interface ChatPayload {
@@ -68,6 +78,7 @@ export interface ChatResponse {
   provider: string
   model: string
   tool_events: ChatToolEvent[]
+  plan: PlanStep[]
 }
 
 export interface AgentThread {
@@ -88,6 +99,7 @@ export interface AgentMessage {
   provider?: string
   model?: string
   tool_events: ChatToolEvent[]
+  plan: PlanStep[]
   status: string
   created_at?: string
 }

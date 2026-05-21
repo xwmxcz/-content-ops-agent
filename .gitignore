@@ -47,3 +47,5 @@ Thumbs.db
 .claude/
 .omc/
 AGENTS.md
+CLAUDE.md
+pytest_out.txt

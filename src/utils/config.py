@@ -32,6 +32,9 @@ class Config:
     TEMPERATURE = float(os.getenv("TEMPERATURE", "0.7"))
     LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "120"))
 
+    # Chat Agent
+    CHAT_PLAN_ENABLED = os.getenv("CHAT_PLAN_ENABLED", "true").lower() == "true"
+
     # Database
     DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/content_ops.db")
     DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "10"))

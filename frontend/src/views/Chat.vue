@@ -67,13 +67,57 @@
                 <small v-if="message.model">{{ message.provider }} / {{ message.model }}</small>
                 <small v-else-if="message.pending">发送中</small>
               </div>
+
+              <section v-if="message.plan?.length" class="plan-board">
+                <div class="plan-head">📋 Agent 计划</div>
+                <ol>
+                  <li v-for="step in message.plan" :key="step.index" :class="step.status">
+                    <span class="plan-marker">{{ planMarker(step.status) }}</span>
+                    <span class="plan-desc">{{ step.description }}</span>
+                    <small v-if="step.tool_hint">→ {{ step.tool_hint }}</small>
+                  </li>
+                </ol>
+              </section>
+
               <p>{{ message.content }}</p>
 
               <div v-if="message.tool_events?.length" class="tool-events">
-                <div v-for="event in message.tool_events" :key="`${message.id}-${event.name}`" class="tool-event">
-                  <span :class="event.status">{{ event.name }}</span>
-                  <small>{{ event.status === 'completed' ? event.output : event.error }}</small>
+                <div class="tool-events-head">
+                  <span>Tool calls</span>
+                  <strong>{{ message.tool_events.length }}</strong>
                 </div>
+                <details
+                  v-for="(event, index) in message.tool_events"
+                  :key="`${message.id || message.local_id}-${index}`"
+                  class="tool-event"
+                  :class="event.status"
+                >
+                  <summary>
+                    <span class="tool-event-index">#{{ index + 1 }}</span>
+                    <span class="tool-event-name">{{ event.name }}</span>
+                    <span v-if="(event.attempt ?? 1) > 1" class="tool-event-attempt">
+                      attempt {{ event.attempt }}
+                    </span>
+                    <span class="tool-event-badge" :class="event.status">
+                      {{ event.status === 'completed' ? 'ok' : 'failed' }}
+                    </span>
+                    <small class="tool-event-summary">{{ summarizeEvent(event) }}</small>
+                  </summary>
+                  <div class="tool-event-body">
+                    <div v-if="hasArgs(event.args)" class="tool-event-section">
+                      <div class="tool-event-label">args</div>
+                      <pre>{{ prettyArgs(event.args) }}</pre>
+                    </div>
+                    <div v-if="event.status === 'completed'" class="tool-event-section">
+                      <div class="tool-event-label">output</div>
+                      <pre>{{ prettyOutput(event.output) || '(empty)' }}</pre>
+                    </div>
+                    <div v-else class="tool-event-section error">
+                      <div class="tool-event-label">error</div>
+                      <pre>{{ event.error || event.output || 'Unknown error' }}</pre>
+                    </div>
+                  </div>
+                </details>
               </div>
             </div>
           </article>
@@ -104,7 +148,7 @@
         <section class="tool-panel">
           <div class="panel-head">
             <span>Tools</span>
-            <strong>10</strong>
+            <strong>11</strong>
           </div>
           <div class="tool-grid">
             <span v-for="tool in tools" :key="tool">{{ tool }}</span>
@@ -127,7 +171,8 @@ import {
   getAgentThreads,
   type AgentMessage,
   type AgentThread,
-  type ChatToolEvent
+  type ChatToolEvent,
+  type PlanStep
 } from '../api/agent'
 
 type UiMessage = Partial<AgentMessage> & {
@@ -136,6 +181,7 @@ type UiMessage = Partial<AgentMessage> & {
   content: string
   pending?: boolean
   tool_events?: ChatToolEvent[]
+  plan?: PlanStep[]
 }
 
 const tools = [
@@ -148,7 +194,8 @@ const tools = [
   'add_to_calendar',
   'view_calendar',
   'get_content_stats',
-  'check_xiaohongshu_login'
+  'check_xiaohongshu_login',
+  'search_history'
 ]
 
 const input = ref('')
@@ -236,6 +283,7 @@ async function send() {
       provider: result.provider,
       model: result.model,
       tool_events: result.tool_events,
+      plan: result.plan,
       status: 'completed'
     })
     await loadThreads()
@@ -253,6 +301,52 @@ async function scrollToBottom() {
   if (logRef.value) {
     logRef.value.scrollTop = logRef.value.scrollHeight
   }
+}
+
+function hasArgs(args: Record<string, unknown> | undefined) {
+  return !!args && Object.keys(args).length > 0
+}
+
+function prettyArgs(args: Record<string, unknown> | undefined) {
+  if (!args) return ''
+  try {
+    return JSON.stringify(args, null, 2)
+  } catch {
+    return String(args)
+  }
+}
+
+function prettyOutput(output: string | undefined) {
+  if (!output) return ''
+  const trimmed = output.trim()
+  if (!trimmed) return ''
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      return JSON.stringify(JSON.parse(trimmed), null, 2)
+    } catch {
+      return output
+    }
+  }
+  return output
+}
+
+function summarizeEvent(event: ChatToolEvent) {
+  if (event.status === 'failed') {
+    return event.error || event.output || 'failed'
+  }
+  const text = (event.output || '').replace(/\s+/g, ' ').trim()
+  return text.length > 80 ? `${text.slice(0, 80)}…` : text
+}
+
+function planMarker(status: PlanStep['status']) {
+  const map: Record<PlanStep['status'], string> = {
+    pending: '○',
+    running: '◐',
+    completed: '●',
+    failed: '✗',
+    skipped: '–'
+  }
+  return map[status] ?? '○'
 }
 
 onMounted(loadThreads)
@@ -293,6 +387,49 @@ onMounted(loadThreads)
   grid-template-columns: 260px minmax(0, 1fr) 340px;
   gap: 14px;
   min-height: 680px;
+}
+
+@media (max-width: 1180px) {
+  .chat-workbench {
+    grid-template-columns: 220px minmax(0, 1fr);
+    min-height: 0;
+  }
+
+  .control-panel {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 820px) {
+  .chat-topline {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .chat-workbench {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .thread-panel {
+    order: 2;
+  }
+
+  .dialog-panel {
+    order: 1;
+  }
+
+  .control-panel {
+    order: 3;
+  }
+
+  .message-bubble {
+    width: 100%;
+  }
+
+  .composer-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }
 
 .thread-panel,
@@ -474,25 +611,178 @@ onMounted(loadThreads)
   margin-top: 12px;
 }
 
-.tool-event {
-  display: grid;
-  gap: 5px;
-  padding: 9px 10px;
+.plan-board {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(15, 97, 86, 0.16);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.58);
+  background: rgba(122, 210, 192, 0.08);
 }
 
-.tool-event span {
+.plan-head {
+  margin-bottom: 6px;
   color: #0f6156;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
-.tool-event span.failed {
+.plan-board ol {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plan-board li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  color: #29363b;
+}
+
+.plan-board li.completed {
+  color: #0f6156;
+}
+
+.plan-board li.failed {
   color: #9a3f33;
 }
 
-.tool-event small {
+.plan-board li.skipped {
+  color: #738086;
+}
+
+.plan-marker {
+  display: inline-block;
+  width: 14px;
+  flex-shrink: 0;
+  text-align: center;
+}
+
+.plan-desc {
+  flex: 1;
+}
+
+.plan-board small {
+  color: #5f6b71;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.tool-events-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #5f6b71;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.tool-events-head strong {
+  color: #0f6156;
+  font-size: 13px;
+}
+
+.tool-event {
+  border: 1px solid rgba(15, 97, 86, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.66);
+  overflow: hidden;
+}
+
+.tool-event.failed {
+  border-color: rgba(154, 63, 51, 0.28);
+  background: rgba(255, 240, 236, 0.72);
+}
+
+.tool-event > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 9px 10px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.tool-event > summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-event > summary::before {
+  content: '▸';
+  flex-shrink: 0;
+  color: #738086;
+  font-size: 10px;
+  transition: transform 0.15s ease;
+}
+
+.tool-event[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.tool-event-index {
+  flex-shrink: 0;
+  color: #738086;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.tool-event-name {
+  color: #0f6156;
+  font-size: 13px;
+  font-weight: 800;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-all;
+}
+
+.tool-event.failed .tool-event-name {
+  color: #9a3f33;
+}
+
+.tool-event-badge {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tool-event-attempt {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(196, 122, 22, 0.16);
+  color: #c47a16;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.tool-event-badge.completed {
+  color: #0f6156;
+  background: rgba(122, 210, 192, 0.28);
+}
+
+.tool-event-badge.failed {
+  color: #fff;
+  background: #9a3f33;
+}
+
+.tool-event-summary {
+  flex: 1 1 200px;
+  min-width: 0;
   overflow: hidden;
   color: #5f6b71;
   font-size: 12px;
@@ -501,12 +791,54 @@ onMounted(loadThreads)
   white-space: nowrap;
 }
 
+.tool-event-body {
+  display: grid;
+  gap: 10px;
+  padding: 0 10px 10px;
+}
+
+.tool-event-section {
+  display: grid;
+  gap: 4px;
+}
+
+.tool-event-label {
+  color: #6c777d;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.tool-event-section pre {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(24, 33, 38, 0.06);
+  color: #1c2a30;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
+
+.tool-event-section.error pre {
+  background: rgba(154, 63, 51, 0.08);
+  color: #6c241a;
+}
+
 .composer {
   display: grid;
   gap: 12px;
   padding: 14px 16px 16px;
   border-top: 1px solid rgba(24, 33, 38, 0.08);
   background: rgba(255, 255, 255, 0.72);
+  min-width: 0;
 }
 
 .composer-actions {
@@ -514,9 +846,12 @@ onMounted(loadThreads)
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  min-width: 0;
 }
 
 .composer-actions span {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   color: #6a767b;
   font-size: 12px;
@@ -550,6 +885,7 @@ onMounted(loadThreads)
 @media (max-width: 1180px) {
   .chat-workbench {
     grid-template-columns: 220px minmax(0, 1fr);
+    min-height: 0;
   }
 
   .control-panel {
@@ -564,7 +900,19 @@ onMounted(loadThreads)
   }
 
   .chat-workbench {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .thread-panel {
+    order: 2;
+  }
+
+  .dialog-panel {
+    order: 1;
+  }
+
+  .control-panel {
+    order: 3;
   }
 
   .message-bubble {
@@ -572,8 +920,10 @@ onMounted(loadThreads)
   }
 
   .composer-actions {
-    align-items: flex-start;
+    align-items: stretch;
     flex-direction: column;
   }
 }
+
+/* original duplicate breakpoints removed below */
 </style>
