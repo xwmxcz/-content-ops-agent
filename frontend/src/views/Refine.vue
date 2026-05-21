@@ -278,7 +278,9 @@ onMounted(async () => {
 <style scoped>
 .refine-page {
   display: grid;
-  gap: 18px;
+  gap: 20px;
+  padding: 24px 32px;
+  background: var(--c-bg);
 }
 
 .refine-hero {
@@ -291,17 +293,30 @@ onMounted(async () => {
 .hero-kicker,
 .section-kicker {
   display: inline-block;
-  color: #6b7468;
+  color: var(--c-text-tertiary);
   font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  font-weight: 500;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.refine-hero .page-title {
+  margin-top: 6px;
+  font-size: 32px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+}
+
+.refine-hero .page-subtitle {
+  color: var(--c-text-secondary);
+  font-size: 14px;
 }
 
 .hero-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 .refine-grid {
@@ -316,6 +331,7 @@ onMounted(async () => {
   display: grid;
   align-content: start;
   gap: 14px;
+  padding: 20px;
 }
 
 .section-head {
@@ -326,63 +342,112 @@ onMounted(async () => {
 }
 
 .section-head h2 {
-  margin: 5px 0 0;
-  color: #182126;
-  font-size: 20px;
+  margin: 4px 0 0;
+  color: var(--c-text);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
 }
 
 .section-pill {
   display: inline-flex;
   align-items: center;
-  min-height: 30px;
-  padding: 0 10px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--c-border);
   border-radius: 999px;
-  color: #0f5f55;
-  background: rgba(15, 133, 116, 0.1);
-  font-size: 12px;
+  color: var(--c-text-secondary);
+  background: var(--c-bg);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  letter-spacing: -0.01em;
 }
 
 .manual-loader {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 .recent-list {
   display: grid;
-  gap: 10px;
+  gap: 8px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.recent-list::-webkit-scrollbar,
+.source-preview::-webkit-scrollbar {
+  width: 8px;
+}
+
+.recent-list::-webkit-scrollbar-thumb,
+.source-preview::-webkit-scrollbar-thumb {
+  background: var(--c-border);
+  border-radius: 4px;
+}
+
+.recent-list::-webkit-scrollbar-thumb:hover,
+.source-preview::-webkit-scrollbar-thumb:hover {
+  background: var(--c-text-tertiary);
 }
 
 .recent-card {
   display: grid;
-  gap: 6px;
-  padding: 12px;
-  border: 1px solid rgba(24, 33, 38, 0.08);
-  border-radius: 8px;
-  color: #243239;
-  background: rgba(255, 255, 255, 0.78);
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--c-border);
+  border-radius: 4px;
+  color: var(--c-text);
+  background: var(--c-bg);
   text-align: left;
   cursor: pointer;
+  transition: border-color 100ms ease, background-color 100ms ease;
+}
+
+.recent-card:hover {
+  border-color: var(--c-border-strong);
 }
 
 .recent-card.active {
-  border-color: rgba(15, 133, 116, 0.22);
-  background: rgba(15, 133, 116, 0.06);
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
+}
+
+.recent-card strong {
+  color: var(--c-text);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
 .recent-card span,
 .recent-card small,
 .preview-topline span,
 .tab-copy {
-  color: #6d787e;
+  color: var(--c-text-tertiary);
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+}
+
+.recent-card small {
+  font-family: var(--font-ui);
+  color: var(--c-text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .source-preview,
 .result-shell {
   padding: 14px;
-  border: 1px solid rgba(24, 33, 38, 0.08);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid var(--c-border);
+  border-radius: 4px;
+  background: var(--c-bg-soft);
+  max-height: 320px;
+  overflow-y: auto;
 }
 
 .preview-topline {
@@ -393,20 +458,34 @@ onMounted(async () => {
   margin-bottom: 10px;
 }
 
+.preview-topline strong {
+  color: var(--c-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .section-divider {
   height: 1px;
-  background: linear-gradient(90deg, rgba(24, 33, 38, 0.06), rgba(24, 33, 38, 0.16), rgba(24, 33, 38, 0.06));
+  background: var(--c-border);
 }
 
 .action-btn {
-  margin-top: 14px;
+  margin-top: 12px;
 }
 
 .tab-copy {
-  line-height: 1.6;
+  font-family: var(--font-ui);
+  color: var(--c-text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+  margin: 0 0 12px;
 }
 
 @media (max-width: 1120px) {
+  .refine-page {
+    padding: 16px;
+  }
+
   .refine-hero {
     align-items: flex-start;
     flex-direction: column;
