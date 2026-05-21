@@ -745,7 +745,7 @@ function statusLabel(status: AgentStep['status']) {
 
 .canvas-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 14px;
 }
 
@@ -760,17 +760,22 @@ function statusLabel(status: AgentStep['status']) {
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
   margin-bottom: 10px;
 }
 
 .editor-header span,
 .preview-header span {
+  flex-shrink: 0;
   color: #172228;
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .editor-header small,
 .preview-header small {
+  flex: 1 1 auto;
+  min-width: 0;
   color: #768187;
 }
 
@@ -986,7 +991,7 @@ function statusLabel(status: AgentStep['status']) {
   top: 20px;
 }
 
-@media (max-width: 1320px) {
+@media (max-width: 1440px) {
   .signal-row,
   .blueprint-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1003,6 +1008,23 @@ function statusLabel(status: AgentStep['status']) {
 
   .review-surface {
     position: static;
+  }
+}
+
+@media (max-width: 1180px) {
+  .canvas-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .draft-editor,
+  .draft-loading,
+  .draft-empty,
+  .preview-card {
+    min-height: 0;
+  }
+
+  .editor-input :deep(.el-textarea__inner) {
+    min-height: 360px !important;
   }
 }
 
