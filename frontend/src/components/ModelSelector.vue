@@ -131,36 +131,44 @@ onMounted(async () => {
 
 .selector-kicker {
   display: inline-block;
-  color: #6b7468;
+  color: var(--c-text-tertiary);
   font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  font-weight: 500;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
 .selector-head h3 {
-  margin: 5px 0 0;
-  color: #182126;
+  margin: 4px 0 0;
+  color: var(--c-text);
   font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
 }
 
 .selector-pill {
   display: inline-flex;
   align-items: center;
-  min-height: 28px;
-  padding: 0 10px;
+  height: 22px;
+  padding: 0 8px;
   border-radius: 999px;
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: var(--font-mono);
+  letter-spacing: -0.01em;
+  border: 1px solid var(--c-border);
 }
 
 .selector-pill.ready {
-  color: #0e6154;
-  background: rgba(15, 133, 116, 0.12);
+  color: var(--c-ok);
+  border-color: var(--c-ok);
+  background: var(--c-ok-soft);
 }
 
 .selector-pill.warn {
-  color: #8a5d19;
-  background: rgba(196, 147, 63, 0.12);
+  color: var(--c-warn);
+  border-color: var(--c-warn);
+  background: var(--c-warn-soft);
 }
 
 .selector-grid {
@@ -175,40 +183,46 @@ onMounted(async () => {
 
 .selector-field {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .selector-field > span {
-  color: #425158;
-  font-size: 13px;
-  font-weight: 600;
+  color: var(--c-text-secondary);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .selector-meta {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  gap: 8px;
 }
 
 .meta-card {
-  padding: 12px;
-  border: 1px solid rgba(24, 33, 38, 0.08);
-  border-radius: 8px;
-  background: rgba(248, 244, 237, 0.86);
+  padding: 10px 12px;
+  border: 1px solid var(--c-border);
+  border-radius: 4px;
+  background: var(--c-bg-soft);
 }
 
 .meta-card span {
   display: block;
-  color: #738086;
-  font-size: 12px;
+  color: var(--c-text-tertiary);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 
 .meta-card strong {
   display: block;
-  margin-top: 6px;
-  color: #182126;
-  font-size: 14px;
-  line-height: 1.45;
+  margin-top: 4px;
+  color: var(--c-text);
+  font-size: 12.5px;
+  font-weight: 500;
+  font-family: var(--font-mono);
+  line-height: 1.4;
+  letter-spacing: -0.01em;
   word-break: break-word;
 }
 

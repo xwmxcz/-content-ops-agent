@@ -1,19 +1,124 @@
+/* ============================================================================
+   Content Ops Agent — Linear / Vercel-style design system
+   --------------------------------------------------------------------------
+   Tokens live here. Components override Element Plus via CSS variables only.
+   No backdrop-filter, no shadows except focus rings, sharp 1px borders.
+   ============================================================================ */
+
 :root {
-  font-family: Aptos, "Segoe UI Variable Text", "PingFang SC", "Microsoft YaHei", sans-serif;
-  color: #182126;
-  background: #f3f1ec;
-  text-rendering: optimizeLegibility;
+  /* Type stacks ------------------------------------------------------------ */
+  --font-ui:
+    'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei',
+    'Segoe UI', sans-serif;
+  --font-mono:
+    'JetBrains Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas,
+    'Liberation Mono', monospace;
+
+  /* Surfaces -------------------------------------------------------------- */
+  --c-bg: #ffffff;
+  --c-bg-soft: #fafafa;        /* very subtle off-white for nested zones */
+  --c-bg-code: #f6f6f7;        /* code/log blocks */
+  --c-surface: #ffffff;
+
+  /* Borders --------------------------------------------------------------- */
+  --c-border: #e6e6e6;
+  --c-border-soft: #ededed;
+  --c-border-strong: #1a1a1a;
+  --c-border-focus: #6e56cf;
+
+  /* Text ------------------------------------------------------------------ */
+  --c-text: #0a0a0a;
+  --c-text-secondary: #525252;
+  --c-text-tertiary: #8a8a8a;
+  --c-text-inverse: #ffffff;
+
+  /* Accent (Linear purple) ----------------------------------------------- */
+  --c-accent: #6e56cf;
+  --c-accent-hover: #5d46b8;
+  --c-accent-active: #4f3aa1;
+  --c-accent-soft: #f3f0fc;
+  --c-accent-ring: rgba(110, 86, 207, 0.32);
+
+  /* Status ---------------------------------------------------------------- */
+  --c-ok: #1a8754;
+  --c-ok-soft: #e8f4ee;
+  --c-fail: #d04545;
+  --c-fail-soft: #fdecec;
+  --c-warn: #c47a16;
+  --c-warn-soft: #fbf2e3;
+
+  /* Radii ----------------------------------------------------------------- */
+  --r-control: 4px;
+  --r-card: 6px;
+  --r-pill: 999px;
+
+  /* Spacing (8px grid) --------------------------------------------------- */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+
+  /* Font sizes ------------------------------------------------------------ */
+  --fs-h1: 32px;
+  --fs-h2: 18px;
+  --fs-body: 14px;
+  --fs-caption: 12px;
+
+  /* Element Plus token overrides (subset, scoped to this app) ------------- */
+  --el-color-primary: #6e56cf;
+  --el-color-primary-light-3: #8a74dc;
+  --el-color-primary-light-5: #a692e6;
+  --el-color-primary-light-7: #c5b8ee;
+  --el-color-primary-light-8: #d6cdf3;
+  --el-color-primary-light-9: #f3f0fc;
+  --el-color-primary-dark-2: #5d46b8;
+
+  --el-color-success: #1a8754;
+  --el-color-danger: #d04545;
+  --el-color-warning: #c47a16;
+  --el-color-info: #525252;
+
+  --el-text-color-primary: #0a0a0a;
+  --el-text-color-regular: #0a0a0a;
+  --el-text-color-secondary: #525252;
+  --el-text-color-placeholder: #8a8a8a;
+  --el-text-color-disabled: #b8b8b8;
+
+  --el-border-color: #e6e6e6;
+  --el-border-color-light: #ededed;
+  --el-border-color-lighter: #ededed;
+  --el-border-color-extra-light: #f5f5f5;
+  --el-border-color-hover: #1a1a1a;
+
+  --el-fill-color-blank: #ffffff;
+  --el-fill-color: #fafafa;
+  --el-fill-color-light: #f6f6f7;
+  --el-fill-color-lighter: #fafafa;
+
+  --el-bg-color: #ffffff;
+  --el-bg-color-page: #ffffff;
+  --el-bg-color-overlay: #ffffff;
+
+  --el-border-radius-base: 4px;
+  --el-border-radius-small: 4px;
+  --el-border-radius-round: 4px;
+
+  --el-box-shadow: 0 0 0 1px var(--c-border);
+  --el-box-shadow-light: 0 0 0 1px var(--c-border);
+
+  --el-font-family: var(--font-ui);
+
+  font-family: var(--font-ui);
+  color: var(--c-text);
+  background: var(--c-bg);
+  font-size: var(--fs-body);
+  line-height: 1.55;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  --app-ink: #182126;
-  --app-muted: #667178;
-  --app-line: #d9dfdf;
-  --app-panel: rgba(255, 255, 255, 0.74);
-  --app-panel-strong: #ffffff;
-  --app-accent: #0f8574;
-  --app-accent-soft: rgba(15, 133, 116, 0.12);
-  --app-gold: #c4933f;
-  --app-shadow: 0 18px 50px rgba(21, 31, 39, 0.08);
+  text-rendering: optimizeLegibility;
+  font-feature-settings: 'cv11', 'ss01', 'ss03';
 }
 
 * {
@@ -28,6 +133,8 @@ body,
 
 body {
   margin: 0;
+  background: var(--c-bg);
+  color: var(--c-text);
 }
 
 button,
@@ -35,162 +142,426 @@ input,
 textarea,
 select {
   font: inherit;
+  color: inherit;
 }
+
+::selection {
+  background: var(--c-accent-soft);
+  color: var(--c-text);
+}
+
+/* Page scaffolding -------------------------------------------------------- */
 
 .page {
   max-width: 1280px;
   margin: 0 auto;
-  padding: 24px;
+  padding: var(--s-5);
 }
 
 .page-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 20px;
+  gap: var(--s-4);
+  margin-bottom: var(--s-5);
 }
 
 .page-title {
   margin: 0;
-  color: var(--app-ink);
-  font-size: 24px;
-  font-weight: 700;
+  color: var(--c-text);
+  font-size: var(--fs-h1);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
 }
 
 .page-subtitle {
-  margin: 6px 0 0;
-  color: var(--app-muted);
-  font-size: 14px;
+  margin: var(--s-2) 0 0;
+  color: var(--c-text-secondary);
+  font-size: var(--fs-body);
+  line-height: 1.5;
 }
+
+/* Generic surfaces -------------------------------------------------------- */
 
 .section,
 .metric,
 .chat-log {
-  background: var(--app-panel);
-  border: 1px solid rgba(24, 33, 38, 0.08);
-  border-radius: 8px;
-  box-shadow: var(--app-shadow);
-  backdrop-filter: blur(14px);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-card);
+  box-shadow: none;
+  backdrop-filter: none;
 }
 
 .section {
-  padding: 18px;
+  padding: var(--s-5);
 }
 
 .grid-2 {
   display: grid;
   grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
-  gap: 18px;
+  gap: var(--s-4);
 }
 
 .grid-3 {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
+  gap: var(--s-4);
 }
 
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--s-2);
   flex-wrap: wrap;
 }
 
 .content-preview {
   white-space: pre-wrap;
-  line-height: 1.8;
+  line-height: 1.7;
   word-break: break-word;
+  color: var(--c-text);
 }
 
 .muted {
-  color: var(--app-muted);
+  color: var(--c-text-secondary);
 }
 
+/* Metric cards (Stats / Home) -------------------------------------------- */
+
 .metric {
-  padding: 16px;
+  padding: var(--s-4) var(--s-5);
 }
 
 .metric strong {
   display: block;
-  color: var(--app-ink);
+  margin-top: var(--s-2);
+  color: var(--c-text);
   font-size: 28px;
-  line-height: 1.2;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-feature-settings: 'tnum';
+  font-variant-numeric: tabular-nums;
 }
+
+/* Chat log shell --------------------------------------------------------- */
 
 .chat-log {
   min-height: 420px;
   max-height: 58vh;
   overflow: auto;
-  padding: 16px;
+  padding: var(--s-5);
 }
 
 .message {
   max-width: 78%;
-  margin-bottom: 12px;
-  padding: 12px 14px;
-  border-radius: 8px;
+  margin-bottom: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-card);
   white-space: pre-wrap;
   line-height: 1.6;
+  background: var(--c-surface);
+  color: var(--c-text);
 }
 
 .message.user {
   margin-left: auto;
-  color: #17323b;
-  background: rgba(122, 210, 192, 0.18);
+  background: var(--c-bg-soft);
 }
 
 .message.assistant {
   margin-right: auto;
-  color: #3e3423;
-  background: rgba(212, 175, 116, 0.16);
 }
 
+/* ============================================================================
+   Element Plus overrides
+   ============================================================================ */
+
+/* Buttons --------------------------------------------------------------- */
+
 .el-button {
-  --el-border-radius-base: 8px;
+  --el-button-font-weight: 500;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body);
+  border-radius: var(--r-control);
+  transition:
+    background-color 100ms ease,
+    border-color 100ms ease,
+    color 100ms ease;
+}
+
+.el-button + .el-button {
+  margin-left: var(--s-2);
+}
+
+.el-button:not(.is-text):not(.is-link) {
+  --el-button-bg-color: #ffffff;
+  --el-button-border-color: var(--c-border);
+  --el-button-text-color: var(--c-text);
+  --el-button-hover-bg-color: #ffffff;
+  --el-button-hover-border-color: var(--c-border-strong);
+  --el-button-hover-text-color: var(--c-text);
+  --el-button-active-bg-color: var(--c-bg-soft);
+  --el-button-active-border-color: var(--c-border-strong);
+  --el-button-active-text-color: var(--c-text);
 }
 
 .el-button--primary {
-  --el-button-bg-color: #12353b;
-  --el-button-border-color: #12353b;
-  --el-button-hover-bg-color: #17434a;
-  --el-button-hover-border-color: #17434a;
-  --el-button-active-bg-color: #0f2c31;
-  --el-button-active-border-color: #0f2c31;
+  --el-button-bg-color: var(--c-accent) !important;
+  --el-button-border-color: var(--c-accent) !important;
+  --el-button-text-color: #ffffff !important;
+  --el-button-hover-bg-color: var(--c-accent-hover) !important;
+  --el-button-hover-border-color: var(--c-accent-hover) !important;
+  --el-button-hover-text-color: #ffffff !important;
+  --el-button-active-bg-color: var(--c-accent-active) !important;
+  --el-button-active-border-color: var(--c-accent-active) !important;
+  --el-button-active-text-color: #ffffff !important;
 }
+
+.el-button--danger {
+  --el-button-bg-color: var(--c-fail) !important;
+  --el-button-border-color: var(--c-fail) !important;
+  --el-button-text-color: #ffffff !important;
+  --el-button-hover-bg-color: #b83a3a !important;
+  --el-button-hover-border-color: #b83a3a !important;
+  --el-button-active-bg-color: #9c2f2f !important;
+  --el-button-active-border-color: #9c2f2f !important;
+}
+
+.el-button.is-text {
+  --el-button-text-color: var(--c-text-secondary);
+  --el-button-hover-bg-color: var(--c-bg-soft);
+  --el-button-hover-text-color: var(--c-text);
+}
+
+.el-button:focus-visible {
+  outline: 2px solid var(--c-accent-ring);
+  outline-offset: 1px;
+}
+
+/* Inputs / selects / textareas / segmented ------------------------------ */
 
 .el-input__wrapper,
 .el-textarea__inner,
 .el-select__wrapper,
 .el-input-number,
-.el-segmented,
-.el-alert,
-.el-tabs__nav-wrap::after {
+.el-segmented {
   box-shadow: none !important;
+  border-radius: var(--r-control) !important;
+  background: var(--c-surface) !important;
+  transition: border-color 100ms ease;
 }
 
 .el-input__wrapper,
 .el-select__wrapper,
-.el-input-number,
-.el-segmented {
-  border-radius: 8px;
-  border: 1px solid rgba(24, 33, 38, 0.1);
-  background: rgba(255, 255, 255, 0.88);
+.el-input-number {
+  border: 1px solid var(--c-border) !important;
+}
+
+.el-input__wrapper:hover,
+.el-select__wrapper:hover,
+.el-input-number:hover {
+  border-color: var(--c-border-strong) !important;
+}
+
+.el-input__wrapper.is-focus,
+.el-select__wrapper.is-focused,
+.el-input-number.is-focus {
+  border-color: var(--c-accent) !important;
+  box-shadow: 0 0 0 3px var(--c-accent-ring) !important;
 }
 
 .el-textarea__inner {
-  border-radius: 8px;
-  border: 1px solid rgba(24, 33, 38, 0.1);
-  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid var(--c-border) !important;
+  color: var(--c-text);
+  font-family: var(--font-ui);
+  line-height: 1.6;
 }
 
-.el-tag {
-  border-radius: 999px;
+.el-textarea__inner:hover {
+  border-color: var(--c-border-strong) !important;
 }
+
+.el-textarea__inner:focus {
+  border-color: var(--c-accent) !important;
+  box-shadow: 0 0 0 3px var(--c-accent-ring) !important;
+}
+
+.el-segmented {
+  --el-segmented-item-selected-bg-color: #ffffff;
+  --el-segmented-item-selected-color: var(--c-text);
+  background: var(--c-bg-soft) !important;
+  border: 1px solid var(--c-border) !important;
+  padding: 2px;
+}
+
+.el-segmented .el-segmented__item.is-selected {
+  background: var(--c-surface) !important;
+  color: var(--c-text) !important;
+  box-shadow: 0 0 0 1px var(--c-border-strong) !important;
+}
+
+/* Tags / pills ---------------------------------------------------------- */
+
+.el-tag {
+  border-radius: var(--r-pill);
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+  color: var(--c-text-secondary);
+  font-weight: 500;
+  font-size: var(--fs-caption);
+  height: 22px;
+  padding: 0 8px;
+}
+
+/* Tabs ------------------------------------------------------------------ */
+
+.el-tabs__nav-wrap::after {
+  background: var(--c-border) !important;
+  height: 1px !important;
+}
+
+.el-tabs__item {
+  color: var(--c-text-secondary);
+  font-weight: 500;
+  font-size: var(--fs-body);
+  height: 38px;
+  line-height: 38px;
+}
+
+.el-tabs__item.is-active {
+  color: var(--c-text);
+}
+
+.el-tabs__active-bar {
+  background-color: var(--c-text) !important;
+  height: 2px !important;
+}
+
+/* Alerts ---------------------------------------------------------------- */
+
+.el-alert {
+  border-radius: var(--r-card);
+  border: 1px solid var(--c-border);
+  padding: var(--s-3) var(--s-4);
+  box-shadow: none !important;
+}
+
+.el-alert--error {
+  border-color: var(--c-fail);
+  background: var(--c-fail-soft);
+  color: var(--c-fail);
+}
+
+.el-alert--warning {
+  border-color: var(--c-warn);
+  background: var(--c-warn-soft);
+  color: var(--c-warn);
+}
+
+.el-alert--success {
+  border-color: var(--c-ok);
+  background: var(--c-ok-soft);
+  color: var(--c-ok);
+}
+
+/* Dialog / overlay ------------------------------------------------------ */
+
+.el-dialog {
+  border-radius: var(--r-card);
+  border: 1px solid var(--c-border);
+}
+
+.el-dialog__title {
+  font-size: var(--fs-h2);
+  font-weight: 600;
+  color: var(--c-text);
+}
+
+/* Calendar (Element Plus el-calendar) ----------------------------------- */
+
+.el-calendar {
+  --el-calendar-border: 1px solid var(--c-border);
+  --el-calendar-header-border-bottom: 1px solid var(--c-border);
+  --el-calendar-cell-width: auto;
+  --el-calendar-selected-bg-color: var(--c-accent-soft);
+  background: var(--c-surface);
+  border-radius: var(--r-card);
+}
+
+.el-calendar-table td.is-selected {
+  background: var(--c-accent-soft) !important;
+}
+
+.el-calendar-table .current .text {
+  color: var(--c-text);
+}
+
+/* Slider ---------------------------------------------------------------- */
+
+.el-slider__bar {
+  background-color: var(--c-accent) !important;
+}
+
+.el-slider__button {
+  border-color: var(--c-accent) !important;
+}
+
+/* Skeleton / Empty ------------------------------------------------------ */
+
+.el-skeleton__item {
+  background: linear-gradient(
+    90deg,
+    var(--c-bg-soft) 25%,
+    #f0f0f0 50%,
+    var(--c-bg-soft) 75%
+  );
+}
+
+.el-empty__description {
+  color: var(--c-text-tertiary);
+  font-size: var(--fs-body);
+}
+
+/* Code / mono ----------------------------------------------------------- */
+
+code,
+pre,
+kbd,
+samp {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+/* Scrollbars (subtle) --------------------------------------------------- */
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #d4d4d4;
+  border-radius: 999px;
+  border: 2px solid var(--c-bg);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #b8b8b8;
+}
+
+/* Responsive ------------------------------------------------------------ */
 
 @media (max-width: 900px) {
   .page {
-    padding: 16px;
+    padding: var(--s-4);
   }
 
   .grid-2,

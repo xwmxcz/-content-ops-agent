@@ -92,7 +92,9 @@ onMounted(load)
 <style scoped>
 .dashboard-page {
   display: grid;
-  gap: 18px;
+  gap: 24px;
+  padding: 24px 32px;
+  background: var(--c-bg);
 }
 
 .dashboard-hero,
@@ -110,17 +112,31 @@ onMounted(load)
 
 .hero-kicker {
   display: inline-block;
-  color: #6b7468;
+  color: var(--c-text-tertiary);
   font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  font-weight: 500;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.dashboard-hero .page-title {
+  margin-top: 6px;
+  font-size: 32px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+}
+
+.dashboard-hero .page-subtitle {
+  margin-top: 6px;
+  color: var(--c-text-secondary);
+  font-size: 14px;
 }
 
 .hero-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
@@ -128,40 +144,53 @@ onMounted(load)
 .quick-row {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14px;
+  gap: 12px;
 }
 
 .metric-card,
 .quick-card {
-  padding: 16px;
-  border: 1px solid rgba(24, 33, 38, 0.08);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.78);
-  box-shadow: 0 18px 50px rgba(21, 31, 39, 0.08);
-  backdrop-filter: blur(14px);
+  padding: 16px 20px;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  background: var(--c-bg);
+  box-shadow: none;
+  backdrop-filter: none;
+  transition: border-color 100ms ease;
+}
+
+.quick-card:hover {
+  border-color: var(--c-border-strong);
 }
 
 .metric-card span,
 .quick-card span {
   display: block;
-  color: #69757a;
-  font-size: 13px;
-  line-height: 1.5;
+  color: var(--c-text-tertiary);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  line-height: 1.4;
 }
 
 .metric-card strong,
 .quick-card strong {
   display: block;
-  margin: 8px 0 6px;
-  color: #182126;
+  margin: 8px 0 4px;
+  color: var(--c-text);
+  font-weight: 600;
+  letter-spacing: -0.02em;
 }
 
 .metric-card strong {
   font-size: 28px;
+  font-feature-settings: 'tnum';
+  font-variant-numeric: tabular-nums;
 }
 
 .metric-card small {
-  color: #7a8489;
+  color: var(--c-text-tertiary);
+  font-size: 12px;
 }
 
 .quick-card {
@@ -170,16 +199,46 @@ onMounted(load)
 }
 
 .quick-card strong {
-  font-size: 16px;
+  font-size: 14.5px;
+}
+
+.quick-card span {
+  font-size: 12.5px;
+  text-transform: none;
+  letter-spacing: -0.005em;
+  color: var(--c-text-secondary);
+  font-weight: 400;
+}
+
+.recent {
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  background: var(--c-bg);
+  padding: 24px;
+}
+
+.recent .page-title {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.recent .page-subtitle {
+  font-size: 13px;
+  color: var(--c-text-secondary);
 }
 
 .recent-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 14px;
+  gap: 12px;
 }
 
 @media (max-width: 960px) {
+  .dashboard-page {
+    padding: 16px;
+  }
+
   .dashboard-hero {
     align-items: flex-start;
     flex-direction: column;

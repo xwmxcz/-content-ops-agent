@@ -86,4 +86,12 @@ onMounted(load)
   align-items: flex-start;
   gap: 4px;
 }
+
+.calendar-cell span {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--c-text);
+  font-feature-settings: 'tnum';
+  font-variant-numeric: tabular-nums;
+}
 </style>

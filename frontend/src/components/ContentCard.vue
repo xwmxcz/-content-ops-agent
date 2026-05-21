@@ -38,11 +38,16 @@ const styleLabel = computed(() => getStyleLabel(props.item.style))
   display: grid;
   gap: 10px;
   padding: 16px;
-  border: 1px solid rgba(24, 33, 38, 0.08);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.78);
-  box-shadow: 0 18px 50px rgba(21, 31, 39, 0.08);
-  backdrop-filter: blur(14px);
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  background: var(--c-bg);
+  box-shadow: none;
+  backdrop-filter: none;
+  transition: border-color 100ms ease;
+}
+
+.content-card:hover {
+  border-color: var(--c-border-strong);
 }
 
 .card-topline,
@@ -60,42 +65,54 @@ const styleLabel = computed(() => getStyleLabel(props.item.style))
 .card-chip {
   display: inline-flex;
   align-items: center;
-  min-height: 26px;
-  padding: 0 10px;
+  height: 22px;
+  padding: 0 8px;
   border-radius: 999px;
-  font-size: 12px;
+  border: 1px solid var(--c-border);
+  background: var(--c-bg);
+  font-size: 11px;
+  font-weight: 500;
+  font-family: var(--font-mono);
+  letter-spacing: -0.01em;
 }
 
 .card-type {
-  color: #1d6258;
-  background: rgba(15, 133, 116, 0.1);
+  color: var(--c-accent);
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
 }
 
 .card-status {
-  color: #7e5923;
-  background: rgba(196, 147, 63, 0.12);
+  color: var(--c-text-secondary);
 }
 
 .card-chip {
-  color: #4c5860;
-  background: rgba(24, 33, 38, 0.06);
+  color: var(--c-text-tertiary);
 }
 
 .card-title {
-  color: #182126;
-  font-size: 16px;
-  line-height: 1.45;
+  color: var(--c-text);
+  font-size: 14.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
 }
 
 .card-body {
-  min-height: 70px;
+  min-height: 60px;
   margin: 0;
-  color: #4e5b63;
-  line-height: 1.7;
+  color: var(--c-text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .card-footer {
-  color: #748087;
-  font-size: 12px;
+  color: var(--c-text-tertiary);
+  font-size: 11.5px;
+  font-family: var(--font-mono);
 }
 </style>
