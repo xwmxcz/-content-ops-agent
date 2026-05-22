@@ -260,3 +260,76 @@ async def test_sse_stream_replays_persisted_events(store, planner_llm):
     mid = events[len(events) // 2]["seq"]
     tail = store.list_run_events(response.run_id, after_seq=mid)
     assert all(e["seq"] > mid for e in tail)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_observes_cancellation_at_step_boundary(store, planner_llm):
+    """DELETE /api/agent/runs/{id} flips status to 'cancelled'; the running
+    pipeline must notice that at the next step boundary and stop scheduling
+    further steps. Already-completed steps are kept."""
+    plan_json = json.dumps([
+        {"index": 1, "agent_id": "strategy", "description": "Plan", "instruction": "go", "inputs_from": []},
+        {"index": 2, "agent_id": "writer", "description": "Draft", "instruction": "go", "inputs_from": [1]},
+        {"index": 3, "agent_id": "editor", "description": "Polish", "instruction": "go", "inputs_from": [2]},
+    ])
+    planner_llm.queue(plan_json, "null")
+
+    import uuid
+    run_id = f"run_{uuid.uuid4().hex[:12]}"
+
+    runner = FakeRunner(store=store, scripted={"strategy": "S", "writer": "W", "editor": "E"})
+    original_run = runner.run
+
+    async def cancel_after_first(*args, **kwargs):
+        result = await original_run(*args, **kwargs)
+        if len(runner.calls) == 1:
+            store.update_run(run_id, status="cancelled")
+        return result
+
+    runner.run = cancel_after_first  # type: ignore[assignment]
+
+    pipeline = DynamicPipeline(store=store, llm=planner_llm, runner=runner)
+    response = await pipeline.run(_request(), run_id=run_id)
+
+    assert response.status == "cancelled"
+    statuses = [s.status for s in response.plan]
+    assert statuses[0] == "completed"
+    assert statuses[1] == "pending"
+    assert statuses[2] == "pending"
+    assert response.saved_content_id is None
+    assert store.get_run(run_id)["status"] == "cancelled"
+
+
+def test_delete_run_cancels_and_emits_event(store):
+    """DELETE /api/agent/runs/{id} flips the row, emits run_cancelled, and is
+    idempotent against terminal runs."""
+    from src.api.dependencies import get_store as real_get_store
+
+    app.dependency_overrides[real_get_store] = lambda: store
+    client = TestClient(app)
+    try:
+        store.create_run(
+            run_id="run_cancel_me",
+            topic="t",
+            content_type="xiaohongshu",
+            style="professional",
+        )
+
+        resp = client.delete("/api/agent/runs/run_cancel_me")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["cancelled"] is True
+        assert body["status"] == "cancelled"
+
+        assert store.get_run("run_cancel_me")["status"] == "cancelled"
+        events = store.list_run_events("run_cancel_me")
+        assert any(e["event_type"] == "run_cancelled" for e in events)
+
+        resp2 = client.delete("/api/agent/runs/run_cancel_me")
+        assert resp2.status_code == 200
+        assert resp2.json()["cancelled"] is False
+
+        resp3 = client.delete("/api/agent/runs/run_does_not_exist")
+        assert resp3.status_code == 404
+    finally:
+        app.dependency_overrides.pop(real_get_store, None)

@@ -122,7 +122,7 @@ async def stream_pipeline_run(run_id: str, store: ContentStore = Depends(get_sto
     async def event_stream():
         last_seq = 0
         deadline = time.time() + 600
-        terminal = {"run_complete", "run_failed"}
+        terminal = {"run_complete", "run_failed", "run_cancelled"}
         yield "event: hello\ndata: {}\n\n"
         while time.time() < deadline:
             events = store.list_run_events(run_id, after_seq=last_seq, limit=100)
@@ -142,6 +142,27 @@ async def stream_pipeline_run(run_id: str, store: ContentStore = Depends(get_sto
             "Connection": "keep-alive",
         },
     )
+
+
+@router.delete("/runs/{run_id}", response_model=dict)
+def cancel_pipeline_run(run_id: str, store: ContentStore = Depends(get_store)) -> dict:
+    """Request cancellation of an in-flight pipeline run.
+
+    Sets `status="cancelled"` on the run row and appends a `run_cancelled` event,
+    which terminates SSE streams immediately. The background task observes the
+    flipped status at step boundaries (see DynamicPipeline.run) and breaks out of
+    its loop — already-running sub-agents are allowed to finish, but no new step
+    is started. Returns 404 if the run does not exist; calling DELETE on an
+    already-terminal run is a no-op (returns the current status).
+    """
+    run = store.get_run(run_id)
+    if not run:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Run {run_id} was not found")
+    if run["status"] in {"completed", "failed", "cancelled"}:
+        return {"run_id": run_id, "status": run["status"], "cancelled": False}
+    store.update_run(run_id, status="cancelled")
+    store.append_run_event(run_id, "run_cancelled", {"run_id": run_id})
+    return {"run_id": run_id, "status": "cancelled", "cancelled": True}
 
 
 @router.post("/chat", response_model=ChatResponse)

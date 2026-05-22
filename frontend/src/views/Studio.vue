@@ -297,6 +297,7 @@ import {
 } from '@element-plus/icons-vue'
 import ModelSelector from '../components/ModelSelector.vue'
 import {
+  cancelPipelineRun,
   createPipelineRun,
   pipelineStreamUrl,
   type PipelinePlanStep,
@@ -595,13 +596,22 @@ function closeStream() {
 
 function stop() {
   if (mode.value === 'dynamic') {
+    const id = runId.value
+    if (id) {
+      // Fire-and-forget: backend DELETE flips run.status to "cancelled" and
+      // emits run_cancelled, which lets the in-flight pipeline exit at the next
+      // step boundary. We don't await — the UI shouldn't block on the network.
+      cancelPipelineRun(id).catch(() => {
+        /* already terminal or network blip — frontend state is already 'cancelled' */
+      })
+    }
     closeStream()
   } else {
     workflowAbort = true
   }
   running.value = false
   status.value = 'cancelled'
-  errorMessage.value = '已停止运行（前端已断开 SSE / 轮询；后端 sub-agent 仍可能短时执行直到自行结束）'
+  errorMessage.value = '已停止运行'
 }
 
 async function run() {

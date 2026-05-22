@@ -144,11 +144,22 @@ class DynamicPipeline:
         total_completion = 0
         total_cost = 0.0
 
+        cancelled = False
+
         while i < len(plan) and i < MAX_STEPS:
             step = plan[i]
             if step.status != "pending":
                 i += 1
                 continue
+
+            # Cancellation is requested via DELETE /api/agent/runs/{id}, which flips the
+            # row status to "cancelled" and writes a run_cancelled event. We poll the row
+            # at step boundaries — running sub-agents are allowed to finish, but no new
+            # step starts. Avoiding inline cancellation keeps streaming/tool calls safe.
+            current = self.store.get_run(run_id)
+            if current and current.get("status") == "cancelled":
+                cancelled = True
+                break
 
             step.status = "running"
             await self._emit(run_id, "step_start", {
@@ -248,6 +259,39 @@ class DynamicPipeline:
                     )
                     continue
             i += 1
+
+        if cancelled:
+            self.store.update_run(
+                run_id,
+                plan=[s.model_dump() for s in plan],
+                revision_count=revisions,
+                total_prompt_tokens=total_prompt,
+                total_completion_tokens=total_completion,
+                total_cost=total_cost,
+                status="cancelled",
+            )
+            # The DELETE endpoint already emitted run_cancelled, so we do NOT emit
+            # again here — duplicate terminal events would only confuse SSE clients.
+            return PipelineRunResponse(
+                run_id=run_id,
+                thread_id=thread_id,
+                plan=plan,
+                final_content=AgentFinalContent(
+                    title=request.topic[:80],
+                    content="",
+                    content_type=request.content_type.value,
+                    style=request.style.value,
+                    tags=request.keywords or [],
+                ),
+                saved_content_id=None,
+                provider=provider,
+                model=litellm_model,
+                total_prompt_tokens=total_prompt,
+                total_completion_tokens=total_completion,
+                total_cost=total_cost,
+                revision_count=revisions,
+                status="cancelled",
+            )
 
         final_text = self._select_final_output(plan, outputs) or request.topic
 
@@ -545,7 +589,7 @@ class DynamicPipeline:
     @staticmethod
     def _derive_title(content: str, topic: str) -> str:
         for line in content.splitlines():
-            t = line.strip().strip("#：: -")
+            t = line.strip().strip("#*-：:【】 \t")
             if t:
                 return t[:80]
         return topic[:80]

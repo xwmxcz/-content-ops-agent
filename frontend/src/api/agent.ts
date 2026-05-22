@@ -198,3 +198,10 @@ export function pipelineStreamUrl(runId: string) {
   const base = (api.defaults.baseURL || '').replace(/\/$/, '')
   return `${base}/agent/runs/${runId}/stream`
 }
+
+export async function cancelPipelineRun(runId: string) {
+  const { data } = await api.delete<{ run_id: string; status: string; cancelled: boolean }>(
+    `/agent/runs/${runId}`
+  )
+  return data
+}

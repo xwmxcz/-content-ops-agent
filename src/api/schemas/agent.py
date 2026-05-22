@@ -169,7 +169,7 @@ class PipelineRunResponse(BaseModel):
     total_completion_tokens: int = 0
     total_cost: float = 0.0
     revision_count: int = 0
-    status: Literal["running", "completed", "failed"] = "completed"
+    status: Literal["running", "completed", "failed", "cancelled"] = "completed"
     error: Optional[str] = None
 
 
