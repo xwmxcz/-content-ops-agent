@@ -1,4 +1,0 @@
-interface:
-  display_name: "Release Sanity Check"
-  short_description: "Run fixed pre-delivery pytest, compile, and frontend build gates"
-  default_prompt: "Use $release-sanity-check to run sanity gates and summarize pass/fail with first failing stage."
