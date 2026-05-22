@@ -2,7 +2,8 @@
 
 Six pre-defined specialists. Strategy / Writer / Editor / Reviewer are pure LLM steps
 (no tools). Researcher / FactChecker may invoke a whitelist of read-only tools that
-are reused from chat_agent (search_history, view_content, list_recent_contents).
+are reused from chat_agent (search_history, view_content, list_recent_contents)
+plus a public web search.
 
 The runner returns a uniform tuple `(text, prompt_tokens, completion_tokens, duration_ms,
 cost_estimate)` so DynamicPipeline can keep the per-step accounting in one place.
@@ -20,6 +21,7 @@ from langchain_core.tools import StructuredTool
 from src.api.schemas.agent import SubAgentId
 from src.llm.litellm_client import LiteLLMClient
 from src.storage import ContentStore
+from src.tools.web_search import web_search as run_web_search
 from src.utils import config
 
 
@@ -31,6 +33,7 @@ class SubAgentSpec:
     system_prompt: str
     tools: tuple[str, ...] = ()
     temperature: float = 0.7
+    max_tokens: int | None = None  # if set, overrides the request-level cap for this sub-agent
 
 
 SUB_AGENTS: dict[SubAgentId, SubAgentSpec] = {
@@ -76,17 +79,26 @@ SUB_AGENTS: dict[SubAgentId, SubAgentSpec] = {
             "on its own line so the score can be parsed."
         ),
         temperature=0.3,
+        max_tokens=2048,  # reviewer needs more headroom: score + strengths + risks + suggestions
     ),
     "researcher": SubAgentSpec(
         id="researcher",
         name="Researcher Agent",
         role="研究员",
         system_prompt=(
-            "You are a research specialist. Use the available tools to look up prior content and "
-            "facts about the topic. Summarize the key findings the writer should know — keep it "
-            "tight, prefer 5-8 bullet points."
+            "You are a research specialist. You have these tools available:\n"
+            "- search_history(query): search prior content saved in this workspace\n"
+            "- list_recent_contents(): list latest items in the workspace\n"
+            "- view_content(content_id): read a specific saved item\n"
+            "- web_search(query): run a public web search (DuckDuckGo)\n\n"
+            "When the topic could benefit from prior context or external facts, call the "
+            "appropriate tool(s) before answering. If you are confident the topic is generic "
+            "enough that you can answer from your own knowledge, you may skip tools — that "
+            "decision is yours.\n\n"
+            "After any tool calls (or directly if you skipped them), summarize the key findings "
+            "the writer should know — keep it tight, prefer 5-8 bullet points."
         ),
-        tools=("search_history", "view_content", "list_recent_contents"),
+        tools=("search_history", "view_content", "list_recent_contents", "web_search"),
         temperature=0.4,
     ),
     "fact_checker": SubAgentSpec(
@@ -94,11 +106,13 @@ SUB_AGENTS: dict[SubAgentId, SubAgentSpec] = {
         name="Fact Checker Agent",
         role="事实校验",
         system_prompt=(
-            "You are a fact checker. Identify any concrete claims (numbers, dates, names, quotes) "
-            "in the provided draft, then use the tools to verify them against saved content. "
+            "You are a fact checker. Identify any concrete claims (numbers, dates, names, "
+            "quotes) in the provided draft. For each claim that is non-obvious, call "
+            "`search_history` or `web_search` to verify it. Skip claims that are clearly "
+            "common knowledge — that judgment is yours.\n\n"
             "Return a list of `Claim → Verdict (verified | unverified | contradicted) → Source`."
         ),
-        tools=("search_history", "view_content"),
+        tools=("search_history", "view_content", "web_search"),
         temperature=0.3,
     ),
 }
@@ -128,6 +142,7 @@ def estimate_cost(model: str | None, prompt_tokens: int, completion_tokens: int)
 
 # Token emit callback signature: async (delta_text) -> None
 TokenSink = Callable[[str], Awaitable[None]]
+ToolSink = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 
 class SubAgentRunner:
@@ -138,6 +153,7 @@ class SubAgentRunner:
       - Invoke the LLM (stream-aware when token_sink is provided)
       - For tool-using agents (researcher / fact_checker) wrap the call in a bounded
         bind_tools loop, restricted to the agent's tool whitelist
+      - Emit (start, result) pairs via tool_sink so callers can show tool traces
       - Return (text, prompt_tokens, completion_tokens, duration_ms, cost)
     """
 
@@ -156,14 +172,16 @@ class SubAgentRunner:
         model: str,
         max_tokens: int = 2048,
         token_sink: TokenSink | None = None,
+        tool_sink: ToolSink | None = None,
     ) -> tuple[str, int, int, int, float]:
+        effective_max_tokens = spec.max_tokens or max_tokens
         if spec.tools:
             text, p_tok, c_tok = await self._run_with_tools(
-                spec, user_prompt, provider, model, max_tokens
+                spec, user_prompt, provider, model, effective_max_tokens, tool_sink
             )
         else:
             text, p_tok, c_tok = await self._run_plain(
-                spec, user_prompt, provider, model, max_tokens, token_sink
+                spec, user_prompt, provider, model, effective_max_tokens, token_sink
             )
         duration_ms = 0  # set by caller via time.perf_counter; we still return 0 here
         cost = estimate_cost(model, p_tok, c_tok)
@@ -219,6 +237,7 @@ class SubAgentRunner:
         provider: str,
         model: str,
         max_tokens: int,
+        tool_sink: ToolSink | None = None,
     ) -> tuple[str, int, int]:
         tools = self._build_whitelisted_tools(spec.tools)
         tools_by_name = {t.name: t for t in tools}
@@ -231,10 +250,15 @@ class SubAgentRunner:
             HumanMessage(content=user_prompt),
         ]
         last_text = ""
+        prompt_tokens = 0
+        completion_tokens = 0
         for _ in range(self.MAX_TOOL_LOOPS):
             ai_message = await chat_model.ainvoke(messages)
             messages.append(ai_message)
             last_text = self._message_text(ai_message.content)
+            usage = getattr(ai_message, "usage_metadata", None) or {}
+            prompt_tokens += int(usage.get("input_tokens", 0) or 0)
+            completion_tokens += int(usage.get("output_tokens", 0) or 0)
             tool_calls = getattr(ai_message, "tool_calls", None) or []
             if not tool_calls:
                 break
@@ -242,16 +266,49 @@ class SubAgentRunner:
                 name = call.get("name", "")
                 args = call.get("args") or {}
                 tool = tools_by_name.get(name)
+                started = time.perf_counter()
+                if tool_sink is not None:
+                    try:
+                        await tool_sink("tool_call_start", {"name": name, "args": args})
+                    except Exception:
+                        pass
                 if not tool:
                     output = f"Tool `{name}` is not available to {spec.id}."
+                    duration_ms = int((time.perf_counter() - started) * 1000)
+                    if tool_sink is not None:
+                        try:
+                            await tool_sink("tool_call_result", {
+                                "name": name, "args": args, "status": "failed",
+                                "error": output, "preview": "", "duration_ms": duration_ms,
+                            })
+                        except Exception:
+                            pass
                 else:
                     try:
                         raw = await tool.ainvoke(args) if hasattr(tool, "ainvoke") else tool.invoke(args)
                         output = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)
+                        duration_ms = int((time.perf_counter() - started) * 1000)
+                        if tool_sink is not None:
+                            try:
+                                await tool_sink("tool_call_result", {
+                                    "name": name, "args": args, "status": "completed",
+                                    "preview": output[:300], "duration_ms": duration_ms,
+                                })
+                            except Exception:
+                                pass
                     except Exception as exc:
                         output = f"Tool failed: {exc}"
+                        duration_ms = int((time.perf_counter() - started) * 1000)
+                        if tool_sink is not None:
+                            try:
+                                await tool_sink("tool_call_result", {
+                                    "name": name, "args": args, "status": "failed",
+                                    "error": str(exc), "preview": "", "duration_ms": duration_ms,
+                                })
+                            except Exception:
+                                pass
                 messages.append(ToolMessage(content=output, tool_call_id=call.get("id") or name or "x"))
-        return last_text or "(no output)", 0, 0  # tool path: usage not summed (cost ~0 for read-only)
+        return last_text or "(no output)", prompt_tokens, completion_tokens
 
     def _build_whitelisted_tools(self, allowed: tuple[str, ...]) -> list[StructuredTool]:
         from src.api.services import content_service  # noqa: F401  (kept for parity with chat_agent imports)
@@ -269,10 +326,16 @@ class SubAgentRunner:
             """List recent saved content items."""
             return json.dumps(self.store.list_contents(limit=limit), ensure_ascii=False)
 
+        async def web_search(query: str, limit: int = 5) -> str:
+            """Run a public web search via DuckDuckGo and return top results as JSON."""
+            results = await run_web_search(query, limit=limit)
+            return json.dumps(results, ensure_ascii=False)
+
         catalog = {
             "search_history": StructuredTool.from_function(func=search_history, name="search_history"),
             "view_content": StructuredTool.from_function(func=view_content, name="view_content"),
             "list_recent_contents": StructuredTool.from_function(func=list_recent_contents, name="list_recent_contents"),
+            "web_search": StructuredTool.from_function(coroutine=web_search, name="web_search"),
         }
         return [catalog[name] for name in allowed if name in catalog]
 

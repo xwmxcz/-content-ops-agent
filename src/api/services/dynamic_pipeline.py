@@ -31,6 +31,7 @@ from src.api.schemas.agent import (
     PipelineRunRequest,
     PipelineRunResponse,
     SubAgentId,
+    SubAgentToolEvent,
 )
 from src.api.services.content_service import resolve_provider
 from src.api.services.sub_agents import (
@@ -50,23 +51,31 @@ MAX_STEPS = 8
 MAX_REVISIONS = 2
 
 PLANNER_SYSTEM_PROMPT = (
-    "You are the Pipeline Planner. The user wants content for a specific platform. "
+    "You are the Pipeline Planner for a RESEARCH-ORIENTED content pipeline. "
+    "This pipeline is the user's choice when the topic needs evidence — comparisons, "
+    "claims with numbers/dates/named entities, or recent events. The user has already "
+    "decided that researcher / fact_checker steps are wanted; do not skip them unless "
+    "the topic is genuinely a personal essay with zero claims.\n\n"
     "You have 6 sub-agents to choose from:\n"
+    "- researcher: gathers context via tools (search_history, web_search, view_content)\n"
+    "- fact_checker: verifies concrete claims via tools (search_history, web_search)\n"
     "- strategy: plans audience, angle, structure (no tools)\n"
     "- writer: produces a complete first draft (no tools)\n"
     "- editor: polishes a draft for clarity, rhythm, platform fit (no tools)\n"
-    "- reviewer: scores 1-100 and lists strengths/risks (no tools)\n"
-    "- researcher: searches saved content for context (has tools)\n"
-    "- fact_checker: verifies factual claims against saved content (has tools)\n\n"
+    "- reviewer: scores 1-100 and lists strengths/risks (no tools)\n\n"
     "Output a JSON plan: an array of steps. Each step is:\n"
     '{"index": 1, "agent_id": "strategy", "description": "...", '
     '"instruction": "...", "inputs_from": []}\n\n'
     "Rules:\n"
-    "- 3 to 6 steps total\n"
+    "- 4 to 7 steps total\n"
+    "- ALWAYS include at least one researcher step EARLY (index 1 or 2) unless the topic\n"
+    "  is purely personal/emotional with no facts to gather\n"
+    "- If the topic mentions specific numbers, dates, products, or comparisons, ALSO\n"
+    "  include a fact_checker step BEFORE the writer\n"
+    "- The available_tools field on the request indicates which tools are enabled —\n"
+    "  if web_search is disabled, lean on search_history alone\n"
     "- Final step must be writer or editor (so we have content to ship)\n"
     "- inputs_from references earlier step indices; the agent will see those outputs\n"
-    "- If user mentions facts/data/numbers, include a fact_checker step before writer\n"
-    "- If topic is opaque (very generic), include researcher first\n"
     "- Output JSON ONLY. No prose. No markdown fence."
 )
 
@@ -118,9 +127,13 @@ class DynamicPipeline:
 
         try:
             plan = await self._make_plan(request, provider, request.model)
-        except Exception:
+        except Exception as exc:
+            import sys
+            print(f"[planner] fallback to default plan: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
             plan = self._default_plan()
         if not plan:
+            import sys
+            print("[planner] empty plan returned → fallback to default", file=sys.stderr, flush=True)
             plan = self._default_plan()
         await self._emit(run_id, "plan_ready", {"plan": [s.model_dump() for s in plan]})
 
@@ -146,12 +159,26 @@ class DynamicPipeline:
             user_prompt = self._build_step_prompt(step, plan, outputs, request)
             started = time.perf_counter()
             success = True
+            step_tool_events: list[dict[str, Any]] = []
             try:
                 if spec is None:
                     raise ValueError(f"Unknown agent_id: {step.agent_id}")
 
                 async def token_sink(delta: str, _idx=step.index):
                     await self._emit(run_id, "step_token", {"index": _idx, "delta": delta})
+
+                async def tool_sink(event_type: str, payload: dict[str, Any], _idx=step.index, _events=step_tool_events):
+                    enriched = {"index": _idx, **payload}
+                    if event_type == "tool_call_result":
+                        _events.append({
+                            "name": payload.get("name", ""),
+                            "args": payload.get("args") or {},
+                            "status": payload.get("status", "completed"),
+                            "preview": payload.get("preview", ""),
+                            "error": payload.get("error"),
+                            "duration_ms": payload.get("duration_ms", 0),
+                        })
+                    await self._emit(run_id, event_type, enriched)
 
                 text, p_tok, c_tok, _, _ = await self.runner.run(
                     spec=spec,
@@ -160,6 +187,7 @@ class DynamicPipeline:
                     model=request.model or config.get_model(provider),
                     max_tokens=request.max_tokens,
                     token_sink=token_sink,
+                    tool_sink=tool_sink,
                 )
                 duration = int((time.perf_counter() - started) * 1000)
                 cost = estimate_cost(litellm_model, p_tok, c_tok)
@@ -170,6 +198,7 @@ class DynamicPipeline:
                 step.prompt_tokens = p_tok
                 step.completion_tokens = c_tok
                 step.cost_estimate = cost
+                step.tool_events = [SubAgentToolEvent(**e) for e in step_tool_events]
                 outputs[step.index] = text
                 total_prompt += p_tok
                 total_completion += c_tok
@@ -183,6 +212,7 @@ class DynamicPipeline:
                     "prompt_tokens": p_tok,
                     "completion_tokens": c_tok,
                     "cost_estimate": cost,
+                    "tool_events": step_tool_events,
                 })
             except LLMConfigurationError:
                 raise
@@ -285,12 +315,20 @@ class DynamicPipeline:
         model: str | None,
     ) -> list[PipelinePlanStep]:
         keywords = ", ".join(request.keywords or []) or "none"
+        available_tools: list[str] = ["search_history", "view_content", "list_recent_contents"]
+        if request.use_web_search:
+            available_tools.append("web_search")
+        if not request.use_history_search:
+            available_tools = [t for t in available_tools if t != "search_history"]
+        focus = request.research_focus.strip() if request.research_focus else "(not specified)"
         user_prompt = (
             f"Topic: {request.topic}\n"
             f"Platform/content type: {request.content_type.value}\n"
             f"Style: {request.style.value}\n"
             f"Length: {request.length}\n"
-            f"Keywords: {keywords}\n\n"
+            f"Keywords: {keywords}\n"
+            f"Research focus hint: {focus}\n"
+            f"Available tools to researcher/fact_checker: {', '.join(available_tools) or '(none)'}\n\n"
             "Output the plan now."
         )
         raw = await self.llm.generate_from_prompts(
@@ -367,9 +405,13 @@ class DynamicPipeline:
         cleaned = self._strip_fence(raw)
         try:
             payload = json.loads(cleaned)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
+            import sys
+            print(f"[planner] JSON parse failed: {exc}; raw[:200]={cleaned[:200]!r}", file=sys.stderr, flush=True)
             return []
         if not isinstance(payload, list):
+            import sys
+            print(f"[planner] payload not a list, got {type(payload).__name__}: {str(payload)[:200]!r}", file=sys.stderr, flush=True)
             return []
         return self._coerce_plan(payload)
 
@@ -434,22 +476,30 @@ class DynamicPipeline:
 
     @staticmethod
     def _default_plan() -> list[PipelinePlanStep]:
+        # Dynamic pipeline is positioned as the RESEARCH-oriented track. The default
+        # fallback plan should reflect that: the user picked dynamic precisely because
+        # they expect researcher / fact_checker to be involved.
         return [
-            PipelinePlanStep(index=1, agent_id="strategy",
-                             description="Plan audience, angle, structure",
-                             instruction="Create the content strategy."),
-            PipelinePlanStep(index=2, agent_id="writer",
-                             description="Write the first draft",
-                             instruction="Use the strategy to write the first draft.",
+            PipelinePlanStep(index=1, agent_id="researcher",
+                             description="Gather context from saved content and the public web",
+                             instruction="Research the topic. Use search_history first, then web_search if it adds external context. Summarize findings as 5-8 bullet points.",
+                             inputs_from=[]),
+            PipelinePlanStep(index=2, agent_id="strategy",
+                             description="Plan audience, angle, and structure grounded in research",
+                             instruction="Use the researcher's findings to design the strategy.",
                              inputs_from=[1]),
-            PipelinePlanStep(index=3, agent_id="editor",
-                             description="Polish the draft",
-                             instruction="Polish the draft for clarity and platform fit.",
+            PipelinePlanStep(index=3, agent_id="writer",
+                             description="Write the first draft",
+                             instruction="Use the strategy and research findings. Cite sources where the researcher provided URLs.",
                              inputs_from=[1, 2]),
-            PipelinePlanStep(index=4, agent_id="reviewer",
-                             description="Score and review",
-                             instruction="Score 1-100 and list strengths and risks.",
+            PipelinePlanStep(index=4, agent_id="fact_checker",
+                             description="Verify factual claims in the draft",
+                             instruction="Identify concrete claims (numbers, dates, names). Verify each via search_history or web_search. Flag anything unverified.",
                              inputs_from=[3]),
+            PipelinePlanStep(index=5, agent_id="editor",
+                             description="Polish the draft and incorporate fact-check findings",
+                             instruction="Polish for clarity and platform fit. If the fact_checker flagged unverified claims, soften or remove them.",
+                             inputs_from=[3, 4]),
         ]
 
     # -- step prompt builder ----------------------------------------------

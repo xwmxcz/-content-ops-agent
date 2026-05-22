@@ -1,6 +1,6 @@
 """内容存储 - SQLAlchemy ORM + CRUD"""
 import json
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 
@@ -456,6 +456,245 @@ class ContentStore:
                 if status
             }
             return {"total_contents": total, "by_type": by_type, "by_status": by_status}
+        finally:
+            session.close()
+
+    def aggregate_performance(self, days: int = 30) -> Dict[str, Any]:
+        """Group contents from the last `days` days by content_type + style and aggregate
+        engagement metrics. Used by the chat Agent's analyze_content_performance tool.
+
+        Returns a compact structure suitable for feeding into an LLM context (typically
+        well under 2KB):
+
+            {
+              "window_days": 30,
+              "total_contents": 47,
+              "total_with_metrics": 23,
+              "by_type": [{"content_type": "xiaohongshu", "count": 18, "avg_views": 4200,
+                           "avg_likes": 210, "avg_engagement_rate": 0.052}, ...],
+              "by_style": [...],
+              "top_performers": [{"id": 12, "title": "...", "content_type": "xiaohongshu",
+                                  "views": 18400, "likes": 1240, "engagement_rate": 0.067}, ...]
+            }
+        """
+        cutoff = datetime.now() - timedelta(days=max(1, days))
+        session = self._get_session()
+        try:
+            contents = session.query(Content).filter(Content.created_at >= cutoff).all()
+            if not contents:
+                return {
+                    "window_days": days, "total_contents": 0, "total_with_metrics": 0,
+                    "by_type": [], "by_style": [], "top_performers": [],
+                }
+            content_ids = [c.id for c in contents]
+            metrics_rows = (
+                session.query(ContentMetrics)
+                .filter(ContentMetrics.content_id.in_(content_ids))
+                .all()
+            )
+            metrics_by_content: dict[int, ContentMetrics] = {}
+            for m in metrics_rows:
+                # If multiple metric rows exist per content, keep the one with highest views.
+                existing = metrics_by_content.get(m.content_id)
+                if existing is None or (m.views or 0) > (existing.views or 0):
+                    metrics_by_content[m.content_id] = m
+
+            def _engagement_rate(m: ContentMetrics | None) -> float:
+                if m is None or not m.views:
+                    return 0.0
+                return round(((m.likes or 0) + (m.comments or 0) + (m.shares or 0)) / m.views, 4)
+
+            type_buckets: dict[str, dict[str, Any]] = {}
+            style_buckets: dict[str, dict[str, Any]] = {}
+            for content in contents:
+                m = metrics_by_content.get(content.id)
+                for bucket_key, store_dict in (
+                    (content.content_type or "unknown", type_buckets),
+                    (content.style or "unknown", style_buckets),
+                ):
+                    bucket = store_dict.setdefault(
+                        bucket_key,
+                        {"count": 0, "with_metrics": 0, "views": 0, "likes": 0,
+                         "comments": 0, "shares": 0, "engagement_rates": []},
+                    )
+                    bucket["count"] += 1
+                    if m is not None:
+                        bucket["with_metrics"] += 1
+                        bucket["views"] += m.views or 0
+                        bucket["likes"] += m.likes or 0
+                        bucket["comments"] += m.comments or 0
+                        bucket["shares"] += m.shares or 0
+                        bucket["engagement_rates"].append(_engagement_rate(m))
+
+            def _summarize(buckets: dict[str, dict[str, Any]], key_name: str) -> list[dict[str, Any]]:
+                out = []
+                for k, b in buckets.items():
+                    n = max(1, b["with_metrics"])
+                    out.append({
+                        key_name: k,
+                        "count": b["count"],
+                        "with_metrics": b["with_metrics"],
+                        "avg_views": round(b["views"] / n) if b["with_metrics"] else 0,
+                        "avg_likes": round(b["likes"] / n) if b["with_metrics"] else 0,
+                        "avg_comments": round(b["comments"] / n) if b["with_metrics"] else 0,
+                        "avg_engagement_rate": (
+                            round(sum(b["engagement_rates"]) / len(b["engagement_rates"]), 4)
+                            if b["engagement_rates"] else 0.0
+                        ),
+                    })
+                out.sort(key=lambda r: (r["with_metrics"] > 0, r["avg_engagement_rate"]), reverse=True)
+                return out
+
+            scored: list[tuple[float, Content, ContentMetrics]] = []
+            for c in contents:
+                m = metrics_by_content.get(c.id)
+                if m is None:
+                    continue
+                scored.append((_engagement_rate(m), c, m))
+            scored.sort(key=lambda x: (x[0], x[2].views or 0), reverse=True)
+            top_performers = [
+                {
+                    "id": c.id,
+                    "title": c.title,
+                    "content_type": c.content_type,
+                    "style": c.style,
+                    "views": m.views or 0,
+                    "likes": m.likes or 0,
+                    "comments": m.comments or 0,
+                    "engagement_rate": rate,
+                }
+                for rate, c, m in scored[:5]
+            ]
+
+            return {
+                "window_days": days,
+                "total_contents": len(contents),
+                "total_with_metrics": len(metrics_by_content),
+                "by_type": _summarize(type_buckets, "content_type"),
+                "by_style": _summarize(style_buckets, "style"),
+                "top_performers": top_performers,
+            }
+        finally:
+            session.close()
+
+    def get_calendar_conflicts(self, start_date: date, end_date: date) -> List[Dict[str, Any]]:
+        """Return calendar events between [start_date, end_date], minimal shape used
+        by the schedule planner to avoid double-booking a date+platform pair."""
+        session = self._get_session()
+        try:
+            rows = (
+                session.query(CalendarEvent)
+                .filter(
+                    CalendarEvent.scheduled_date >= start_date,
+                    CalendarEvent.scheduled_date <= end_date,
+                )
+                .all()
+            )
+            return [
+                {
+                    "scheduled_date": r.scheduled_date.isoformat(),
+                    "platform": r.platform,
+                    "content_id": r.content_id,
+                    "status": r.status,
+                }
+                for r in rows
+            ]
+        finally:
+            session.close()
+
+    def list_optimization_candidates(self, criteria: str = "underperforming", limit: int = 5) -> List[Dict[str, Any]]:
+        """Find contents that may benefit from refinement. Used by the chat Agent's
+        find_optimization_candidates tool.
+
+        criteria options:
+          - 'underperforming': has metrics, engagement_rate below the global avg
+          - 'recent_drafts':   draft / refined status, created in last 7 days
+          - 'old_drafts':      draft status, created > 14 days ago, never finalized
+        """
+        session = self._get_session()
+        try:
+            criteria = (criteria or "underperforming").lower()
+            now = datetime.now()
+            results: List[Dict[str, Any]] = []
+
+            if criteria == "underperforming":
+                contents = session.query(Content).all()
+                metric_rows = session.query(ContentMetrics).all()
+                metrics_by_content: dict[int, ContentMetrics] = {}
+                for m in metric_rows:
+                    existing = metrics_by_content.get(m.content_id)
+                    if existing is None or (m.views or 0) > (existing.views or 0):
+                        metrics_by_content[m.content_id] = m
+                if not metrics_by_content:
+                    return []
+                rates: list[tuple[Content, ContentMetrics, float]] = []
+                for c in contents:
+                    m = metrics_by_content.get(c.id)
+                    if m is None or not m.views:
+                        continue
+                    rate = ((m.likes or 0) + (m.comments or 0) + (m.shares or 0)) / m.views
+                    rates.append((c, m, rate))
+                if not rates:
+                    return []
+                avg_rate = sum(r for _, _, r in rates) / len(rates)
+                weak = [(c, m, r) for c, m, r in rates if r < avg_rate]
+                weak.sort(key=lambda x: x[2])
+                for c, m, r in weak[:limit]:
+                    results.append({
+                        "id": c.id,
+                        "title": c.title,
+                        "content_type": c.content_type,
+                        "style": c.style,
+                        "status": c.status,
+                        "views": m.views or 0,
+                        "engagement_rate": round(r, 4),
+                        "global_avg_rate": round(avg_rate, 4),
+                        "reason": f"engagement {round(r,4)} < cohort avg {round(avg_rate,4)}",
+                    })
+            elif criteria == "recent_drafts":
+                cutoff = now - timedelta(days=7)
+                rows = (
+                    session.query(Content)
+                    .filter(
+                        Content.status.in_(["draft", "refined"]),
+                        Content.created_at >= cutoff,
+                    )
+                    .order_by(Content.created_at.desc())
+                    .limit(limit)
+                    .all()
+                )
+                for c in rows:
+                    age_days = max(0, (now - c.created_at).days) if c.created_at else 0
+                    results.append({
+                        "id": c.id,
+                        "title": c.title,
+                        "content_type": c.content_type,
+                        "style": c.style,
+                        "status": c.status,
+                        "age_days": age_days,
+                        "reason": f"recent {c.status}, {age_days}d old, not yet finalized",
+                    })
+            elif criteria == "old_drafts":
+                cutoff = now - timedelta(days=14)
+                rows = (
+                    session.query(Content)
+                    .filter(Content.status == "draft", Content.created_at <= cutoff)
+                    .order_by(Content.created_at)
+                    .limit(limit)
+                    .all()
+                )
+                for c in rows:
+                    age_days = max(0, (now - c.created_at).days) if c.created_at else 0
+                    results.append({
+                        "id": c.id,
+                        "title": c.title,
+                        "content_type": c.content_type,
+                        "style": c.style,
+                        "status": c.status,
+                        "age_days": age_days,
+                        "reason": f"draft sitting {age_days}d, may need a decision",
+                    })
+            return results
         finally:
             session.close()
 

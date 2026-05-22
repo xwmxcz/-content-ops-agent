@@ -114,6 +114,16 @@ class AgentRunResponse(BaseModel):
 SubAgentId = Literal["strategy", "writer", "editor", "reviewer", "researcher", "fact_checker"]
 
 
+class SubAgentToolEvent(BaseModel):
+    """One tool invocation made by a sub-agent during its step."""
+    name: str
+    args: dict[str, Any] = Field(default_factory=dict)
+    status: Literal["started", "completed", "failed"] = "completed"
+    preview: str = ""
+    error: Optional[str] = None
+    duration_ms: int = 0
+
+
 class PipelinePlanStep(BaseModel):
     index: int
     agent_id: SubAgentId
@@ -127,6 +137,7 @@ class PipelinePlanStep(BaseModel):
     completion_tokens: int = 0
     cost_estimate: float = 0.0
     revised_at: Optional[int] = None
+    tool_events: list[SubAgentToolEvent] = Field(default_factory=list)
 
 
 class PipelineRunRequest(BaseModel):
@@ -141,6 +152,9 @@ class PipelineRunRequest(BaseModel):
     max_tokens: int = Field(2048, ge=128, le=8192)
     save_final: bool = True
     thread_id: Optional[str] = None
+    use_web_search: bool = True
+    use_history_search: bool = True
+    research_focus: Optional[str] = None  # optional hint, e.g. "compare alternatives", "verify claims"
 
 
 class PipelineRunResponse(BaseModel):

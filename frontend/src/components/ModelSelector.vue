@@ -1,15 +1,5 @@
 <template>
   <section class="model-selector">
-    <div class="selector-head">
-      <div>
-        <span class="selector-kicker">Model Control</span>
-        <h3>模型选择</h3>
-      </div>
-      <span class="selector-pill" :class="activeProvider?.configured ? 'ready' : 'warn'">
-        {{ activeProvider?.configured ? '已配置' : '未配置' }}
-      </span>
-    </div>
-
     <div class="selector-grid">
       <div class="selector-field">
         <span>提供商</span>
@@ -31,19 +21,14 @@
       </div>
     </div>
 
-    <div class="selector-meta">
-      <article class="meta-card">
-        <span>默认模型</span>
-        <strong>{{ activeProvider?.default_model || '未设置' }}</strong>
-      </article>
-      <article class="meta-card">
-        <span>可用模型</span>
-        <strong>{{ activeModels.length }}</strong>
-      </article>
-      <article class="meta-card">
-        <span>当前选择</span>
-        <strong>{{ local.model || '自动' }}</strong>
-      </article>
+    <div class="selector-status">
+      <span :class="['selector-status-dot', activeProvider?.configured ? 'ready' : 'warn']" aria-hidden="true"></span>
+      <span class="selector-status-text">
+        {{ activeProvider?.configured ? '已配置' : '未配置' }}
+      </span>
+      <span class="selector-status-meta">
+        {{ activeModels.length }} 个可用 · 默认 {{ activeProvider?.default_model || '未设置' }}
+      </span>
     </div>
 
     <div class="selector-grid compact">
@@ -119,56 +104,7 @@ onMounted(async () => {
 <style scoped>
 .model-selector {
   display: grid;
-  gap: 14px;
-}
-
-.selector-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
   gap: 12px;
-}
-
-.selector-kicker {
-  display: inline-block;
-  color: var(--c-text-tertiary);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.selector-head h3 {
-  margin: 4px 0 0;
-  color: var(--c-text);
-  font-size: 18px;
-  font-weight: 600;
-  letter-spacing: -0.015em;
-}
-
-.selector-pill {
-  display: inline-flex;
-  align-items: center;
-  height: 22px;
-  padding: 0 8px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 500;
-  font-family: var(--font-mono);
-  letter-spacing: -0.01em;
-  border: 1px solid var(--c-border);
-}
-
-.selector-pill.ready {
-  color: var(--c-ok);
-  border-color: var(--c-ok);
-  background: var(--c-ok-soft);
-}
-
-.selector-pill.warn {
-  color: var(--c-warn);
-  border-color: var(--c-warn);
-  background: var(--c-warn-soft);
 }
 
 .selector-grid {
@@ -192,44 +128,63 @@ onMounted(async () => {
   font-weight: 500;
 }
 
-.selector-meta {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+.selector-status {
+  display: flex;
+  align-items: center;
   gap: 8px;
-}
-
-.meta-card {
-  padding: 10px 12px;
+  padding: 8px 12px;
   border: 1px solid var(--c-border);
-  border-radius: 4px;
+  border-radius: 6px;
   background: var(--c-bg-soft);
+  font-size: 12px;
 }
 
-.meta-card span {
-  display: block;
-  color: var(--c-text-tertiary);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
+.selector-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
-.meta-card strong {
-  display: block;
-  margin-top: 4px;
+.selector-status-dot.ready {
+  background: var(--c-ok);
+}
+
+.selector-status-dot.warn {
+  background: var(--c-warn);
+}
+
+.selector-status-text {
+  font-weight: 600;
   color: var(--c-text);
-  font-size: 12.5px;
-  font-weight: 500;
-  font-family: var(--font-mono);
-  line-height: 1.4;
   letter-spacing: -0.01em;
-  word-break: break-word;
+}
+
+.selector-status-meta {
+  flex: 1;
+  min-width: 0;
+  color: var(--c-text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 @media (max-width: 900px) {
-  .selector-grid,
-  .selector-meta {
+  .selector-grid {
     grid-template-columns: 1fr;
+  }
+
+  .selector-status {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .selector-status-meta {
+    text-align: left;
   }
 }
 </style>

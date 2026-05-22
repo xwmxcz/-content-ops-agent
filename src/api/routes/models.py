@@ -19,6 +19,7 @@ PROVIDER_MODELS = {
         ("claude-3-5-haiku-20241022", "Claude Haiku 3.5"),
     ],
     "siliconflow": [
+        ("zai-org/GLM-4.5-Air", "GLM-4.5 Air"),
         ("Qwen/Qwen2.5-7B-Instruct", "Qwen2.5 7B Instruct"),
         ("Qwen/Qwen2.5-14B-Instruct", "Qwen2.5 14B Instruct"),
         ("Qwen/Qwen2.5-32B-Instruct", "Qwen2.5 32B Instruct"),

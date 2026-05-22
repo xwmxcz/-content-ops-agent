@@ -7,6 +7,7 @@ const router = createRouter({
     { path: '/dashboard', name: 'dashboard', component: () => import('../views/Home.vue') },
     { path: '/generate', redirect: '/' },
     { path: '/refine', name: 'refine', component: () => import('../views/Refine.vue') },
+    { path: '/pipeline', redirect: { path: '/', query: { mode: 'dynamic' } } },
     { path: '/calendar', name: 'calendar', component: () => import('../views/Calendar.vue') },
     { path: '/history', name: 'history', component: () => import('../views/History.vue') },
     { path: '/stats', name: 'stats', component: () => import('../views/Stats.vue') },

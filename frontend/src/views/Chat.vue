@@ -161,6 +161,7 @@
 
 <script setup lang="ts">
 import { nextTick, onMounted, reactive, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import { Delete, Plus, Position, Refresh } from '@element-plus/icons-vue'
 import ModelSelector from '../components/ModelSelector.vue'
@@ -199,6 +200,8 @@ const tools = [
 ]
 
 const input = ref('')
+const route = useRoute()
+const router = useRouter()
 const loading = ref(false)
 const threadsLoading = ref(false)
 const activeThreadId = ref<string>()
@@ -349,7 +352,17 @@ function planMarker(status: PlanStep['status']) {
   return map[status] ?? '○'
 }
 
-onMounted(loadThreads)
+onMounted(async () => {
+  await loadThreads()
+  const seed = route.query.seed
+  if (typeof seed === 'string' && seed.trim()) {
+    input.value = seed.trim()
+    // Strip the query param so a refresh doesn't re-seed.
+    router.replace({ query: {} })
+    await nextTick()
+    ElMessage.info('已带入待优化提示，确认后点击发送')
+  }
+})
 </script>
 
 <style scoped>

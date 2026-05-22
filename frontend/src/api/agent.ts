@@ -139,6 +139,15 @@ export type SubAgentId =
   | 'researcher'
   | 'fact_checker'
 
+export interface SubAgentToolEvent {
+  name: string
+  args: Record<string, unknown>
+  status: 'started' | 'completed' | 'failed'
+  preview: string
+  error?: string | null
+  duration_ms: number
+}
+
 export interface PipelinePlanStep {
   index: number
   agent_id: SubAgentId
@@ -152,6 +161,7 @@ export interface PipelinePlanStep {
   completion_tokens: number
   cost_estimate: number
   revised_at?: number | null
+  tool_events?: SubAgentToolEvent[]
 }
 
 export interface PipelineRunPayload {
@@ -166,6 +176,9 @@ export interface PipelineRunPayload {
   max_tokens: number
   save_final?: boolean
   thread_id?: string
+  use_web_search?: boolean
+  use_history_search?: boolean
+  research_focus?: string
 }
 
 export interface PipelineRunHandle {

@@ -67,7 +67,7 @@ class FakeRunner:
         self.token_emissions: list[tuple[int, str]] = []  # (step_index?, delta) — index unknown here, but sink knows it
 
     async def run(self, spec: SubAgentSpec, user_prompt: str, provider: str, model: str,
-                  max_tokens: int = 2048, token_sink=None):
+                  max_tokens: int = 2048, token_sink=None, tool_sink=None):
         self.calls.append((spec.id, user_prompt))
         text = self.scripted.get(spec.id, f"[{spec.id} default output]")
         if token_sink is not None:
@@ -142,12 +142,16 @@ async def test_planner_fallback_on_invalid_json(store, planner_llm):
     planner_llm.queue("I'll just wing it", "null")
 
     pipeline, runner = _make_pipeline(store, planner_llm,
-                                      scripted={"strategy": "S", "writer": "W", "editor": "E", "reviewer": "R"})
+                                      scripted={"researcher": "R", "strategy": "S", "writer": "W",
+                                                "fact_checker": "F", "editor": "E"})
 
     response = await pipeline.run(_request())
 
-    # Default plan: strategy → writer → editor → reviewer
-    assert [s.agent_id for s in response.plan] == ["strategy", "writer", "editor", "reviewer"]
+    # Dynamic is the research-oriented track; the fallback default plan now leads
+    # with researcher and inserts fact_checker before the editor.
+    assert [s.agent_id for s in response.plan] == [
+        "researcher", "strategy", "writer", "fact_checker", "editor",
+    ]
     assert all(s.status == "completed" for s in response.plan)
 
 

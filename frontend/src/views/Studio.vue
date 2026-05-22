@@ -2,26 +2,40 @@
   <div class="studio-page">
     <section class="studio-banner">
       <div class="banner-copy">
-        <span class="banner-kicker">Content Studio</span>
-        <h1>把策略、写作、润色和审核放进一个内容工作台</h1>
-        <p>
-          面向内容运营的单主画布界面。左侧配置输入，中间编辑成稿，右侧查看 Agent 流程和审核结果。
-        </p>
+        <span class="banner-kicker">{{ modeKicker }}</span>
+        <h1>{{ modeTitle }}</h1>
+        <p>{{ modeDescription }}</p>
       </div>
+      <el-segmented v-model="mode" :options="modeOptions" :disabled="running" class="mode-toggle" />
+    </section>
 
-      <div class="banner-actions">
-        <button class="ghost-action" type="button" :disabled="loading" @click="resetWorkspace">
+    <section class="run-strip">
+      <template v-if="!running">
+        <button class="ghost-action" type="button" :disabled="!hasOutput" @click="resetWorkspace">
           <el-icon><Refresh /></el-icon>
-          <span>重置工作台</span>
+          <span>重置</span>
         </button>
-        <el-button type="primary" size="large" :icon="VideoPlay" :loading="loading" @click="runPipeline">
-          运行 Agent 流程
-        </el-button>
-      </div>
+        <el-button type="primary" size="large" :icon="VideoPlay" @click="run">运行</el-button>
+      </template>
+      <template v-else>
+        <div class="run-progress">
+          <div class="progress-bar">
+            <div class="progress-bar-fill" :style="{ width: `${progressPercent}%` }"></div>
+          </div>
+          <div class="progress-meta">
+            <span class="progress-state">{{ statusText }}</span>
+            <span class="progress-count">{{ progressLabel }}</span>
+          </div>
+        </div>
+        <button class="stop-action" type="button" @click="stop">
+          <el-icon><CircleClose /></el-icon>
+          <span>停止</span>
+        </button>
+      </template>
     </section>
 
     <section class="signal-row">
-      <article v-for="card in signalCards" :key="card.label" class="signal-card">
+      <article class="signal-card" v-for="card in signalCards" :key="card.label">
         <span>{{ card.label }}</span>
         <strong>{{ card.value }}</strong>
         <small>{{ card.note }}</small>
@@ -29,7 +43,7 @@
     </section>
 
     <div class="studio-grid">
-      <aside class="studio-rail left">
+      <aside class="studio-rail">
         <section class="studio-surface">
           <div class="surface-head">
             <div>
@@ -38,30 +52,11 @@
             </div>
             <span class="surface-pill">{{ platformLabel }}</span>
           </div>
-
           <div class="field-stack">
             <div class="field-block">
               <span>内容主题</span>
-              <el-input
-                v-model="form.topic"
-                type="textarea"
-                :rows="6"
-                placeholder="例如：如何用 AI 提升内容运营效率"
-              />
+              <el-input v-model="form.topic" type="textarea" :rows="5" placeholder="例如：周末徒步路线推荐" />
             </div>
-
-            <div class="quick-prompts">
-              <button
-                v-for="prompt in quickPrompts"
-                :key="prompt"
-                type="button"
-                class="prompt-chip"
-                @click="form.topic = prompt"
-              >
-                {{ prompt }}
-              </button>
-            </div>
-
             <div class="field-grid">
               <div class="field-block">
                 <span>目标平台</span>
@@ -69,7 +64,6 @@
                   <el-option v-for="item in contentTypeOptions" :key="item.value" :label="item.label" :value="item.value" />
                 </el-select>
               </div>
-
               <div class="field-block">
                 <span>长度</span>
                 <el-radio-group v-model="form.length" class="length-group">
@@ -79,16 +73,65 @@
                 </el-radio-group>
               </div>
             </div>
-
             <div class="field-block">
               <span>内容风格</span>
               <el-segmented v-model="form.style" :options="styleOptions" class="style-segmented" />
             </div>
-
             <div class="field-block">
               <span>关键词</span>
-              <el-input v-model="keywordsText" placeholder="AI, 效率, 工作流" />
+              <el-input v-model="keywordsText" placeholder="徒步, 周末, 避坑" />
             </div>
+          </div>
+        </section>
+
+        <section v-if="mode === 'dynamic'" class="studio-surface research-surface">
+          <div class="surface-head compact">
+            <div>
+              <span class="surface-kicker">Research Sources</span>
+              <h2>研究来源</h2>
+            </div>
+            <span class="surface-pill mono">{{ activeSourceCount }}/2</span>
+          </div>
+          <div class="research-toggles">
+            <div
+              class="research-toggle"
+              :class="{ active: research.use_web_search }"
+              role="switch"
+              :aria-checked="research.use_web_search"
+              tabindex="0"
+              @click="research.use_web_search = !research.use_web_search"
+              @keydown.enter.prevent="research.use_web_search = !research.use_web_search"
+              @keydown.space.prevent="research.use_web_search = !research.use_web_search"
+            >
+              <el-switch v-model="research.use_web_search" @click.stop />
+              <div class="toggle-copy">
+                <strong>Web Search</strong>
+                <span>DuckDuckGo · 时事 / 横评</span>
+              </div>
+            </div>
+            <div
+              class="research-toggle"
+              :class="{ active: research.use_history_search }"
+              role="switch"
+              :aria-checked="research.use_history_search"
+              tabindex="0"
+              @click="research.use_history_search = !research.use_history_search"
+              @keydown.enter.prevent="research.use_history_search = !research.use_history_search"
+              @keydown.space.prevent="research.use_history_search = !research.use_history_search"
+            >
+              <el-switch v-model="research.use_history_search" @click.stop />
+              <div class="toggle-copy">
+                <strong>History Search</strong>
+                <span>本地内容库 · 复用沉淀</span>
+              </div>
+            </div>
+          </div>
+          <div class="field-block">
+            <span>研究侧重 (可选)</span>
+            <el-input
+              v-model="research.research_focus"
+              placeholder="例：重点对比续航与降噪 / 核实价格与发布时间"
+            />
           </div>
         </section>
 
@@ -99,187 +142,188 @@
               <h2>模型与执行参数</h2>
             </div>
           </div>
-          <ModelSelector
-            :model-value="modelConfig"
-            @update:model-value="Object.assign(modelConfig, $event)"
-          />
+          <ModelSelector :model-value="modelConfig" @update:model-value="Object.assign(modelConfig, $event)" />
         </section>
       </aside>
 
       <main class="studio-center">
-        <section class="studio-surface canvas-surface">
+        <section class="studio-surface">
           <div class="surface-head">
             <div>
-              <span class="surface-kicker">Final Draft</span>
-              <h2>{{ finalTitle }}</h2>
+              <span class="surface-kicker">{{ mode === 'dynamic' ? 'Plan Timeline' : 'Pipeline Stages' }}</span>
+              <h2>{{ pipelineTitle }}</h2>
             </div>
             <div class="surface-actions">
-              <span v-if="runResult?.saved_content_id" class="surface-pill success">已保存 #{{ runResult.saved_content_id }}</span>
-              <button class="ghost-action" type="button" :disabled="!editableContent" @click="copyFinal">
-                <el-icon><DocumentCopy /></el-icon>
-                <span>复制</span>
-              </button>
-              <button class="ghost-action" type="button" :disabled="!runResult?.saved_content_id" @click="router.push('/history')">
-                <el-icon><Tickets /></el-icon>
-                <span>历史</span>
-              </button>
-            </div>
-          </div>
-
-          <div class="blueprint-row">
-            <div class="blueprint-chip">
-              <span>平台</span>
-              <strong>{{ platformLabel }}</strong>
-            </div>
-            <div class="blueprint-chip">
-              <span>风格</span>
-              <strong>{{ styleLabel }}</strong>
-            </div>
-            <div class="blueprint-chip">
-              <span>模型</span>
-              <strong>{{ modelLabel }}</strong>
-            </div>
-            <div class="blueprint-chip">
-              <span>关键词</span>
-              <strong>{{ keywordList.length ? `${keywordList.length} 个` : '未设置' }}</strong>
+              <span v-if="runId" class="surface-pill mono">{{ runId }}</span>
+              <span class="surface-pill" :class="statusPillClass">{{ statusText }}</span>
             </div>
           </div>
 
           <el-alert v-if="errorMessage" type="error" :title="errorMessage" show-icon :closable="false" class="surface-alert" />
 
-          <div class="canvas-grid">
-            <section class="draft-shell">
-              <div class="editor-header">
-                <span>成稿编辑区</span>
-                <small>{{ runResult ? '流程已完成，可继续手动编辑' : '输入主题并运行流程后生成成稿' }}</small>
-              </div>
-
-              <div v-if="loading" class="draft-loading">
-                <el-skeleton :rows="11" animated />
-              </div>
-              <div v-else-if="editableContent" class="draft-editor">
-                <el-input
-                  v-model="editableContent"
-                  type="textarea"
-                  :autosize="{ minRows: 22, maxRows: 30 }"
-                  class="editor-input"
-                />
-              </div>
-              <div v-else class="draft-empty">
-                <strong>这里会出现可直接发布的最终稿</strong>
-                <p>流程会先给出内容策略，再生成初稿、完成润色，并附带审核意见。</p>
-              </div>
-            </section>
-
-            <aside class="preview-shell">
-              <div class="preview-header">
-                <span>平台预览</span>
-                <small>{{ platformLabel }}</small>
-              </div>
-
-              <div class="preview-card">
-                <div class="preview-meta">
-                  <div class="preview-avatar">CO</div>
-                  <div>
-                    <strong>{{ platformLabel }} 发布视图</strong>
-                    <span>{{ qualityTone }}</span>
-                  </div>
-                </div>
-
-                <h3>{{ finalTitle }}</h3>
-                <div class="preview-body">{{ editableContent || '暂无内容' }}</div>
-
-                <div class="preview-tags">
-                  <span v-for="tag in previewTags" :key="tag" class="preview-tag">#{{ tag }}</span>
-                </div>
-              </div>
-            </aside>
+          <div v-if="!plan.length && !running" class="timeline-empty">
+            点击"运行"开始。{{ mode === 'dynamic' ? 'Planner 会先输出 JSON 计划，每步 token 实时回流。' : '4 个固定 Agent 依次执行：策略 → 初稿 → 润色 → 审核。' }}
           </div>
+
+          <ol v-else class="timeline">
+            <li
+              v-for="step in plan"
+              :key="`${step.index}-${step.agent_id}`"
+              class="timeline-step"
+              :class="[step.status, { 'is-revised': step.revised_at, 'is-research': isResearchStep(step.agent_id) }]"
+            >
+              <div class="timeline-head">
+                <span class="timeline-index">{{ step.index }}</span>
+                <div class="timeline-copy">
+                  <strong>
+                    <span v-if="isResearchStep(step.agent_id)" class="research-glyph" aria-hidden="true">
+                      {{ step.agent_id === 'researcher' ? '🔍' : '🛡' }}
+                    </span>
+                    {{ agentLabel(step.agent_id) }}
+                  </strong>
+                  <span>{{ step.description }}</span>
+                </div>
+                <div class="timeline-meta">
+                  <small v-if="toolEventsFor(step.index).length" class="tool-pill">
+                    {{ toolEventsFor(step.index).length }} tool call{{ toolEventsFor(step.index).length === 1 ? '' : 's' }}
+                  </small>
+                  <small v-if="step.duration_ms">{{ step.duration_ms }} ms</small>
+                </div>
+              </div>
+              <div v-if="step.revised_at" class="timeline-revised-badge">Planner 修改</div>
+            </li>
+          </ol>
+        </section>
+
+        <section
+          v-for="step in plan"
+          :key="`box-${step.index}`"
+          class="studio-surface step-surface"
+          :class="[step.status, { 'is-research': isResearchStep(step.agent_id) }]"
+        >
+          <div class="surface-head compact">
+            <div>
+              <span class="surface-kicker">
+                Step {{ step.index }} · {{ step.agent_id }}
+                <span v-if="isResearchStep(step.agent_id)" class="research-tag">research</span>
+              </span>
+              <h2>
+                <span v-if="isResearchStep(step.agent_id)" class="research-glyph" aria-hidden="true">
+                  {{ step.agent_id === 'researcher' ? '🔍' : '🛡' }}
+                </span>
+                {{ agentLabel(step.agent_id) }}
+              </h2>
+            </div>
+            <span class="surface-pill" :class="statusToPill(step.status)">{{ statusLabel(step.status) }}</span>
+          </div>
+          <p class="step-description">{{ step.description }}</p>
+          <ul v-if="toolEventsFor(step.index).length" class="tool-trace">
+            <li
+              v-for="(event, idx) in toolEventsFor(step.index)"
+              :key="`${step.index}-${idx}-${event.name}`"
+              class="tool-row"
+              :class="event.status"
+            >
+              <span class="tool-arrow">▸</span>
+              <span class="tool-name">{{ event.name }}</span>
+              <span v-if="formatToolArgs(event.args)" class="tool-args">({{ formatToolArgs(event.args) }})</span>
+              <span v-if="event.status === 'started'" class="tool-status">运行中…</span>
+              <template v-else>
+                <span class="tool-arrow">→</span>
+                <span v-if="event.status === 'failed'" class="tool-error">{{ event.error || '失败' }}</span>
+                <span v-else class="tool-preview">{{ event.preview || '完成' }}</span>
+                <span v-if="event.duration_ms" class="tool-duration">{{ event.duration_ms }} ms</span>
+              </template>
+            </li>
+          </ul>
+          <pre v-if="step.output || streamingOutputs[step.index]" class="step-output">{{ step.output || streamingOutputs[step.index] }}</pre>
+          <div v-else-if="step.status === 'running'" class="step-running">
+            <el-icon class="is-loading"><Loading /></el-icon>
+            <span>正在生成…</span>
+          </div>
+          <div v-else-if="step.status === 'completed'" class="step-empty">
+            该步骤未产出文本输出，仅记录上方工具调用。
+          </div>
+          <div v-else-if="step.status === 'failed'" class="step-empty failed">
+            步骤失败，未产出输出
+          </div>
+          <div v-else-if="step.status === 'skipped'" class="step-empty">已跳过</div>
+          <div v-else class="step-pending">等待执行</div>
+        </section>
+
+        <section v-if="finalContent" class="studio-surface final-surface">
+          <div class="surface-head">
+            <div>
+              <span class="surface-kicker">Final Content</span>
+              <h2>{{ finalContent.title || form.topic || '未命名' }}</h2>
+            </div>
+            <div class="surface-actions">
+              <span v-if="savedContentId" class="surface-pill success">已保存 #{{ savedContentId }}</span>
+              <button
+                v-if="savedContentId"
+                class="ghost-action accent"
+                type="button"
+                @click="optimizeInChat"
+              >
+                <el-icon><ChatDotRound /></el-icon>
+                <span>在 Chat 中优化</span>
+              </button>
+              <button class="ghost-action" type="button" @click="copyFinal">
+                <el-icon><DocumentCopy /></el-icon>
+                <span>复制</span>
+              </button>
+            </div>
+          </div>
+          <pre class="final-body">{{ finalContent.content }}</pre>
         </section>
       </main>
-
-      <aside class="studio-rail right">
-        <section class="studio-surface">
-          <div class="surface-head compact">
-            <div>
-              <span class="surface-kicker">Pipeline Console</span>
-              <h2>Agent 流程</h2>
-            </div>
-            <span class="surface-pill" :class="loading ? 'running' : runResult ? 'success' : ''">{{ pipelineState }}</span>
-          </div>
-
-          <div class="quality-panel">
-            <div class="quality-score">
-              <span>Quality</span>
-              <strong>{{ qualityScore }}</strong>
-            </div>
-            <div class="quality-meta">
-              <div>
-                <span>提供商</span>
-                <strong>{{ providerLabel }}</strong>
-              </div>
-              <div>
-                <span>流程</span>
-                <strong>4 个 Agent</strong>
-              </div>
-            </div>
-          </div>
-
-          <div class="agent-stack">
-            <article v-for="step in visibleSteps" :key="step.id" class="agent-card" :class="step.status">
-              <div class="agent-topline">
-                <div class="agent-badge">
-                  <el-icon v-if="step.status === 'completed'"><CircleCheck /></el-icon>
-                  <el-icon v-else-if="step.status === 'failed'"><CircleClose /></el-icon>
-                  <el-icon v-else-if="step.status === 'running'" class="is-loading"><Loading /></el-icon>
-                  <span v-else>{{ step.id.slice(0, 1).toUpperCase() }}</span>
-                </div>
-                <div class="agent-copy">
-                  <strong>{{ step.name }}</strong>
-                  <span>{{ statusLabel(step.status) }}</span>
-                </div>
-                <small v-if="step.duration_ms">{{ step.duration_ms }} ms</small>
-              </div>
-
-              <p class="agent-role">{{ step.role }}</p>
-              <p class="agent-input">{{ step.input_summary }}</p>
-              <pre v-if="step.output" class="agent-output">{{ step.output }}</pre>
-              <el-alert v-if="step.error" :title="step.error" type="error" :closable="false" />
-            </article>
-          </div>
-        </section>
-
-        <section class="studio-surface review-surface">
-          <div class="surface-head compact">
-            <div>
-              <span class="surface-kicker">Review Notes</span>
-              <h2>审核结果</h2>
-            </div>
-          </div>
-          <pre class="review-copy">{{ reviewOutput || 'Review Agent 会在流程结束后给出评分、风险和改进建议。' }}</pre>
-        </section>
-      </aside>
     </div>
   </div>
 </template>
 
+<!-- SCRIPT_PLACEHOLDER -->
+
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import {
-  CircleCheck,
   CircleClose,
+  ChatDotRound,
   DocumentCopy,
   Loading,
   Refresh,
-  Tickets,
   VideoPlay
 } from '@element-plus/icons-vue'
-import { useRouter } from 'vue-router'
 import ModelSelector from '../components/ModelSelector.vue'
+import {
+  createPipelineRun,
+  pipelineStreamUrl,
+  type PipelinePlanStep,
+  type PipelineRunPayload,
+  type SubAgentId,
+  type SubAgentToolEvent
+} from '../api/agent'
+import {
+  createAgentRunJob,
+  extractAgentRun,
+  getJob,
+  type JobResponse
+} from '../api/jobs'
 import type { AgentRunPayload, AgentRunResponse, AgentStep } from '../api/agent'
-import { createAgentRunJob, extractAgentRun, waitForJobResult, type JobResponse } from '../api/jobs'
 
+interface FinalContent {
+  title?: string
+  content: string
+  content_type: string
+  style: string
+  tags: string[]
+}
+
+type Mode = 'dynamic' | 'workflow'
+type RunStatus = 'idle' | 'planning' | 'running' | 'completed' | 'failed' | 'cancelled'
+
+const route = useRoute()
 const router = useRouter()
 
 const contentTypeOptions = [
@@ -297,57 +341,50 @@ const styleOptions = [
   { label: '故事', value: 'storytelling' }
 ]
 
-const quickPrompts = [
-  '如何用 AI 提升内容运营效率',
-  '一周内容选题如何做得更稳',
-  '品牌如何建立统一的内容语气',
-  '内容团队如何做复盘和迭代'
+const QUICK_PROMPTS_BY_MODE: Record<Mode, string[]> = {
+  workflow: [],
+  dynamic: []
+}
+
+const quickPrompts = computed(() => QUICK_PROMPTS_BY_MODE[mode.value])
+void quickPrompts // kept for future re-introduction; not currently rendered
+
+const modeOptions = [
+  { label: '内容生产线 · Workflow', value: 'workflow' },
+  { label: '研究型 Pipeline · Dynamic', value: 'dynamic' }
 ]
 
-const placeholderSteps: AgentStep[] = [
-  {
-    id: 'strategy',
-    name: 'Strategy Agent',
-    role: '内容策略',
-    status: 'pending',
-    input_summary: '分析主题、受众与内容角度。',
-    output: '',
-    duration_ms: 0
-  },
-  {
-    id: 'writer',
-    name: 'Writer Agent',
-    role: '初稿写作',
-    status: 'pending',
-    input_summary: '把策略转成可编辑的第一版内容。',
-    output: '',
-    duration_ms: 0
-  },
-  {
-    id: 'editor',
-    name: 'Editor Agent',
-    role: '润色编辑',
-    status: 'pending',
-    input_summary: '优化表达、结构和平台适配。',
-    output: '',
-    duration_ms: 0
-  },
-  {
-    id: 'review',
-    name: 'Review Agent',
-    role: '质量审核',
-    status: 'pending',
-    input_summary: '给出评分、风险与改进建议。',
-    output: '',
-    duration_ms: 0
-  }
-]
+const AGENT_LABELS: Record<string, string> = {
+  strategy: '策略',
+  writer: '初稿',
+  editor: '润色',
+  reviewer: '审核',
+  review: '审核',
+  researcher: '调研',
+  fact_checker: '事实校验'
+}
+
+const WORKFLOW_DESCRIPTIONS: Record<string, string> = {
+  strategy: '分析受众、角度、结构与转化意图',
+  writer: '把策略转成可编辑的第一版内容',
+  editor: '优化表达、节奏与平台适配',
+  review: '给出 1-100 分以及风险与改进建议'
+}
+
+const initialMode: Mode = route.query.mode === 'dynamic' ? 'dynamic' : 'workflow'
+const mode = ref<Mode>(initialMode)
 
 const form = reactive({
   topic: '',
   content_type: 'xiaohongshu',
   style: 'professional',
   length: 'medium'
+})
+
+const research = reactive({
+  use_web_search: true,
+  use_history_search: true,
+  research_focus: ''
 })
 
 const modelConfig = reactive({
@@ -358,73 +395,422 @@ const modelConfig = reactive({
 })
 
 const keywordsText = ref('')
-const loading = ref(false)
+const running = ref(false)
 const errorMessage = ref('')
-const runResult = ref<AgentRunResponse>()
-const editableContent = ref('')
-const currentJob = ref<JobResponse>()
+const runId = ref('')
+const plan = ref<PipelinePlanStep[]>([])
+const streamingOutputs = reactive<Record<number, string>>({})
+const stepToolEvents = reactive<Record<number, SubAgentToolEvent[]>>({})
+const finalContent = ref<FinalContent | null>(null)
+const savedContentId = ref<number | null>(null)
+const totalPromptTokens = ref(0)
+const totalCompletionTokens = ref(0)
+const totalCost = ref(0)
+const revisionCount = ref(0)
+const status = ref<RunStatus>('idle')
 
-const keywordList = computed(() => parseKeywords())
-const platformLabel = computed(() => {
-  return contentTypeOptions.find(item => item.value === form.content_type)?.label ?? form.content_type
+let eventSource: EventSource | null = null
+let workflowJobId: string | null = null
+let workflowAbort = false
+
+const totalTokens = computed(() => totalPromptTokens.value + totalCompletionTokens.value)
+void totalTokens // kept for future re-introduction; not currently displayed
+const completedSteps = computed(() => plan.value.filter(s => s.status === 'completed').length)
+const totalPlanSteps = computed(() => plan.value.length || (mode.value === 'workflow' ? 4 : 0))
+
+const progressPercent = computed(() => {
+  if (status.value === 'planning') return 6
+  if (!totalPlanSteps.value) return 4
+  return Math.min(100, Math.round((completedSteps.value / totalPlanSteps.value) * 100))
 })
-const styleLabel = computed(() => {
-  return styleOptions.find(item => item.value === form.style)?.label ?? form.style
+
+const progressLabel = computed(() => {
+  if (status.value === 'planning') return 'Planner 规划中'
+  if (!totalPlanSteps.value) return '提交中'
+  return `${completedSteps.value} / ${totalPlanSteps.value} 步`
 })
-const modelLabel = computed(() => modelConfig.model || '自动选择')
-const providerLabel = computed(() => runResult.value?.provider || modelConfig.provider || '未指定')
-const finalTitle = computed(() => runResult.value?.final_content.title || form.topic || '未命名内容')
-const previewTags = computed(() => runResult.value?.final_content.tags.length ? runResult.value.final_content.tags : keywordList.value)
-const reviewOutput = computed(() => runResult.value?.steps.find(step => step.id === 'review')?.output ?? '')
-const qualityScore = computed(() => {
-  const match = reviewOutput.value.match(/(\d{2,3})/)
-  return match ? match[1] : '--'
+
+const platformLabel = computed(
+  () => contentTypeOptions.find(item => item.value === form.content_type)?.label ?? form.content_type
+)
+
+const modeKicker = computed(() =>
+  mode.value === 'dynamic' ? '研究型 Pipeline · 边查边写' : '内容生产线 · 标准 4 步'
+)
+
+const modeTitle = computed(() =>
+  mode.value === 'dynamic'
+    ? '多步骤研究型内容生产线'
+    : '主题清晰、不需要外部资料时走这条线'
+)
+
+const modeDescription = computed(() =>
+  mode.value === 'dynamic'
+    ? 'Planner 自动规划步骤，researcher / fact_checker 按需介入。适合横评、对比、盘点类内容。'
+    : '4 步固定流程依次执行：策略 → 写作 → 润色 → 评分。节奏可预期、产出稳定，适合标准化批量产出。生成保存后，可一键跳到 Chat Agent 继续优化和安排发布日历。'
+)
+
+const activeSourceCount = computed(() =>
+  Number(research.use_web_search) + Number(research.use_history_search)
+)
+
+const RESEARCH_AGENTS = new Set(['researcher', 'fact_checker'])
+
+function isResearchStep(agentId: string): boolean {
+  return RESEARCH_AGENTS.has(agentId)
+}
+
+const pipelineTitle = computed(() => {
+  if (status.value === 'planning') return '生成 Plan 中…'
+  if (status.value === 'running') return '执行中…'
+  if (status.value === 'completed') return '执行完成'
+  if (status.value === 'failed') return '执行失败'
+  if (status.value === 'cancelled') return '已停止'
+  return mode.value === 'dynamic' ? '动态 Pipeline' : '4 阶段 Workflow'
 })
-const qualityTone = computed(() => {
-  if (!runResult.value) return '等待生成'
-  return reviewOutput.value ? '已附带审核意见' : '已完成生成'
-})
-const pipelineState = computed(() => {
-  if (loading.value && currentJob.value) {
-    const labels: Record<string, string> = {
-      queued: '排队中',
-      running: '运行中',
-      completed: '已完成',
-      failed: '失败'
-    }
-    return `${labels[currentJob.value.status] ?? currentJob.value.status} ${currentJob.value.progress}%`
+
+const statusText = computed(() => {
+  switch (status.value) {
+    case 'planning':
+      return 'planning'
+    case 'running':
+      return 'running'
+    case 'completed':
+      return 'done'
+    case 'failed':
+      return 'failed'
+    case 'cancelled':
+      return 'stopped'
+    default:
+      return 'idle'
   }
-  if (loading.value) return '提交中'
-  if (runResult.value) return '已完成'
-  return '待运行'
-})
-const signalCards = computed(() => [
-  { label: '工作流', value: '4 Stage', note: 'Strategy / Writer / Editor / Review' },
-  { label: '当前平台', value: platformLabel.value, note: '内容结构和表达会随平台调整' },
-  { label: '模型', value: modelLabel.value, note: providerLabel.value },
-  { label: '输出状态', value: runResult.value?.saved_content_id ? '已入库' : '草稿中', note: '最终稿可继续进入历史与复用流程' }
-])
-
-const visibleSteps = computed<AgentStep[]>(() => {
-  if (runResult.value) return runResult.value.steps
-  if (!loading.value) return placeholderSteps
-  return placeholderSteps.map((step, index) => ({
-    ...step,
-    status: index === 0 ? 'running' : 'pending'
-  }))
 })
 
-async function runPipeline() {
+const statusPillClass = computed(() => {
+  if (status.value === 'running' || status.value === 'planning') return 'running'
+  if (status.value === 'completed') return 'success'
+  if (status.value === 'failed') return 'failed'
+  if (status.value === 'cancelled') return 'warn'
+  return ''
+})
+
+const keywordList = computed(() =>
+  keywordsText.value
+    .split(/[,\n，]/)
+    .map(item => item.trim())
+    .filter(Boolean)
+)
+
+const hasOutput = computed(() => !!finalContent.value || plan.value.length > 0 || !!errorMessage.value)
+
+const totalToolCalls = computed(() =>
+  plan.value.reduce((sum, step) => sum + toolEventsFor(step.index).length, 0)
+)
+
+const signalCards = computed(() => {
+  if (mode.value === 'dynamic') {
+    return [
+      { label: 'Mode', value: 'Research', note: 'Plan-then-Execute · 工具就位' },
+      { label: 'Plan', value: totalPlanSteps.value || '--', note: totalPlanSteps.value ? `${completedSteps.value} 已完成` : '等待计划' },
+      { label: 'Tool calls', value: totalToolCalls.value, note: totalToolCalls.value ? '研究 / 校验 工具已被调用' : '尚未调用工具' },
+      { label: 'Revisions', value: revisionCount.value, note: revisionCount.value ? 'Planner 已介入修改' : '初始 plan 直跑' }
+    ]
+  }
+  return [
+    { label: 'Mode', value: 'Workflow', note: 'Fixed 4-stage' },
+    { label: 'Plan', value: totalPlanSteps.value || '--', note: totalPlanSteps.value ? `${completedSteps.value} 已完成` : '等待计划' },
+    { label: 'Status', value: statusText.value, note: progressLabel.value },
+    { label: 'Saved', value: savedContentId.value ? `#${savedContentId.value}` : '--', note: savedContentId.value ? '可在 Chat 中优化' : '尚未保存' }
+  ]
+})
+
+watch(mode, value => {
+  if (route.query.mode !== value) {
+    router.replace({ query: { ...route.query, mode: value } })
+  }
+})
+
+function agentLabel(id: string): string {
+  return AGENT_LABELS[id] ?? id
+}
+
+function statusLabel(s: PipelinePlanStep['status']) {
+  const map: Record<PipelinePlanStep['status'], string> = {
+    pending: '待运行',
+    running: '运行中',
+    completed: '已完成',
+    failed: '失败',
+    skipped: '已跳过'
+  }
+  return map[s]
+}
+
+function statusToPill(s: PipelinePlanStep['status']) {
+  if (s === 'running') return 'running'
+  if (s === 'completed') return 'success'
+  if (s === 'failed') return 'failed'
+  return ''
+}
+
+function toolEventsFor(stepIndex: number): SubAgentToolEvent[] {
+  const live = stepToolEvents[stepIndex]
+  if (live && live.length) return live
+  const step = plan.value.find(s => s.index === stepIndex)
+  return step?.tool_events ?? []
+}
+
+function formatToolArgs(args: Record<string, unknown>): string {
+  const entries = Object.entries(args || {})
+  if (!entries.length) return ''
+  return entries
+    .map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`)
+    .join(', ')
+}
+
+function resetWorkspace() {
+  if (running.value) return
+  closeStream()
+  workflowJobId = null
+  workflowAbort = false
+  runId.value = ''
+  plan.value = []
+  Object.keys(streamingOutputs).forEach(k => delete streamingOutputs[Number(k)])
+  Object.keys(stepToolEvents).forEach(k => delete stepToolEvents[Number(k)])
+  finalContent.value = null
+  savedContentId.value = null
+  totalPromptTokens.value = 0
+  totalCompletionTokens.value = 0
+  totalCost.value = 0
+  revisionCount.value = 0
+  errorMessage.value = ''
+  status.value = 'idle'
+}
+
+function closeStream() {
+  if (eventSource) {
+    eventSource.close()
+    eventSource = null
+  }
+}
+
+function stop() {
+  if (mode.value === 'dynamic') {
+    closeStream()
+  } else {
+    workflowAbort = true
+  }
+  running.value = false
+  status.value = 'cancelled'
+  errorMessage.value = '已停止运行（前端已断开 SSE / 轮询；后端 sub-agent 仍可能短时执行直到自行结束）'
+}
+
+async function run() {
   if (!form.topic.trim()) {
     ElMessage.warning('请输入内容主题')
     return
   }
+  resetWorkspace()
+  running.value = true
+  if (mode.value === 'dynamic') {
+    await runDynamic()
+  } else {
+    await runWorkflow()
+  }
+}
 
-  loading.value = true
-  errorMessage.value = ''
-  runResult.value = undefined
-  editableContent.value = ''
-  currentJob.value = undefined
+async function runDynamic() {
+  status.value = 'planning'
+  const payload: PipelineRunPayload = {
+    topic: form.topic.trim(),
+    content_type: form.content_type,
+    style: form.style,
+    length: form.length,
+    keywords: keywordList.value,
+    provider: modelConfig.provider || undefined,
+    model: modelConfig.model || undefined,
+    temperature: modelConfig.temperature,
+    max_tokens: modelConfig.max_tokens,
+    save_final: true,
+    use_web_search: research.use_web_search,
+    use_history_search: research.use_history_search,
+    research_focus: research.research_focus.trim() || undefined
+  }
+
+  try {
+    const handle = await createPipelineRun(payload)
+    runId.value = handle.run_id
+    subscribe(handle.run_id)
+  } catch (error) {
+    running.value = false
+    status.value = 'failed'
+    errorMessage.value = (error as Error).message
+    ElMessage.error(errorMessage.value)
+  }
+}
+
+function subscribe(id: string) {
+  closeStream()
+  const evt = new EventSource(pipelineStreamUrl(id))
+  eventSource = evt
+
+  evt.addEventListener('plan_ready', e => {
+    const data = JSON.parse((e as MessageEvent).data) as { plan: PipelinePlanStep[] }
+    plan.value = data.plan.map(step => ({ ...step }))
+    status.value = 'running'
+  })
+
+  evt.addEventListener('step_start', e => {
+    const data = JSON.parse((e as MessageEvent).data) as { index: number }
+    streamingOutputs[data.index] = ''
+    stepToolEvents[data.index] = []
+    const step = plan.value.find(s => s.index === data.index)
+    if (step) step.status = 'running'
+  })
+
+  evt.addEventListener('step_token', e => {
+    const data = JSON.parse((e as MessageEvent).data) as { index: number; delta: string }
+    streamingOutputs[data.index] = (streamingOutputs[data.index] || '') + data.delta
+  })
+
+  evt.addEventListener('tool_call_start', e => {
+    const data = JSON.parse((e as MessageEvent).data) as {
+      index: number
+      name: string
+      args: Record<string, unknown>
+    }
+    if (!stepToolEvents[data.index]) stepToolEvents[data.index] = []
+    stepToolEvents[data.index].push({
+      name: data.name,
+      args: data.args || {},
+      status: 'started',
+      preview: '',
+      duration_ms: 0
+    })
+  })
+
+  evt.addEventListener('tool_call_result', e => {
+    const data = JSON.parse((e as MessageEvent).data) as {
+      index: number
+      name: string
+      args: Record<string, unknown>
+      status: 'completed' | 'failed'
+      preview?: string
+      error?: string | null
+      duration_ms?: number
+    }
+    const list = stepToolEvents[data.index] || (stepToolEvents[data.index] = [])
+    const pending = [...list].reverse().find(t => t.name === data.name && t.status === 'started')
+    const event: SubAgentToolEvent = {
+      name: data.name,
+      args: data.args || {},
+      status: data.status,
+      preview: data.preview || '',
+      error: data.error || null,
+      duration_ms: data.duration_ms || 0
+    }
+    if (pending) Object.assign(pending, event)
+    else list.push(event)
+  })
+
+  evt.addEventListener('step_complete', e => {
+    const data = JSON.parse((e as MessageEvent).data) as {
+      index: number
+      output: string
+      duration_ms: number
+      prompt_tokens: number
+      completion_tokens: number
+      cost_estimate: number
+      tool_events?: SubAgentToolEvent[]
+    }
+    const step = plan.value.find(s => s.index === data.index)
+    if (step) {
+      step.status = 'completed'
+      step.output = data.output
+      step.duration_ms = data.duration_ms
+      step.prompt_tokens = data.prompt_tokens
+      step.completion_tokens = data.completion_tokens
+      step.cost_estimate = data.cost_estimate
+      step.tool_events = data.tool_events || []
+    }
+    streamingOutputs[data.index] = data.output
+    if (data.tool_events) stepToolEvents[data.index] = data.tool_events
+    totalPromptTokens.value += data.prompt_tokens
+    totalCompletionTokens.value += data.completion_tokens
+    totalCost.value += data.cost_estimate
+  })
+
+  evt.addEventListener('step_failed', e => {
+    const data = JSON.parse((e as MessageEvent).data) as { index: number; error: string }
+    const step = plan.value.find(s => s.index === data.index)
+    if (step) step.status = 'failed'
+    errorMessage.value = `Step ${data.index} 失败：${data.error}`
+  })
+
+  evt.addEventListener('plan_revised', e => {
+    const data = JSON.parse((e as MessageEvent).data) as { plan: PipelinePlanStep[]; revision: number }
+    const knownIndices = new Set(plan.value.map(s => s.index))
+    plan.value = data.plan.map(step => {
+      const isNew = !knownIndices.has(step.index)
+      return { ...step, revised_at: isNew ? data.revision : step.revised_at }
+    })
+    revisionCount.value = data.revision
+  })
+
+  evt.addEventListener('run_complete', e => {
+    const data = JSON.parse((e as MessageEvent).data) as {
+      final_content: FinalContent
+      saved_content_id?: number | null
+      total_prompt_tokens: number
+      total_completion_tokens: number
+      total_cost: number
+      revision_count: number
+    }
+    finalContent.value = data.final_content
+    savedContentId.value = data.saved_content_id ?? null
+    totalPromptTokens.value = data.total_prompt_tokens
+    totalCompletionTokens.value = data.total_completion_tokens
+    totalCost.value = data.total_cost
+    revisionCount.value = data.revision_count
+    status.value = 'completed'
+    running.value = false
+    closeStream()
+    ElMessage.success(savedContentId.value ? `已完成，已保存 #${savedContentId.value}` : '已完成')
+  })
+
+  evt.addEventListener('run_failed', e => {
+    const data = JSON.parse((e as MessageEvent).data) as { error?: string }
+    status.value = 'failed'
+    running.value = false
+    errorMessage.value = data.error || '运行失败'
+    closeStream()
+  })
+
+  evt.onerror = () => {
+    if (status.value !== 'completed' && status.value !== 'failed' && status.value !== 'cancelled') {
+      status.value = 'failed'
+      running.value = false
+      errorMessage.value = errorMessage.value || 'SSE 连接中断'
+      closeStream()
+    }
+  }
+}
+
+async function runWorkflow() {
+  workflowAbort = false
+  plan.value = ['strategy', 'writer', 'editor', 'review'].map((id, idx) => ({
+    index: idx + 1,
+    agent_id: id as SubAgentId,
+    description: WORKFLOW_DESCRIPTIONS[id] || '',
+    instruction: '',
+    inputs_from: [],
+    status: idx === 0 ? 'running' : 'pending',
+    output: '',
+    duration_ms: 0,
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    cost_estimate: 0
+  }))
+  status.value = 'running'
 
   const payload: AgentRunPayload = {
     topic: form.topic.trim(),
@@ -440,58 +826,100 @@ async function runPipeline() {
   }
 
   try {
-    currentJob.value = await createAgentRunJob(payload)
-    runResult.value = await waitForJobResult(currentJob.value.id, extractAgentRun, job => {
-      currentJob.value = job
-    })
-    editableContent.value = runResult.value.final_content.content
-    ElMessage.success(
-      runResult.value.saved_content_id ? `流程已完成，内容已保存 #${runResult.value.saved_content_id}` : '流程已完成'
-    )
+    const job = await createAgentRunJob(payload)
+    workflowJobId = job.id
+    runId.value = job.id
+    const result = await pollWorkflowJob(job.id)
+    if (workflowAbort) return
+    applyWorkflowResult(result)
   } catch (error) {
+    if (workflowAbort) return
+    running.value = false
+    status.value = 'failed'
     errorMessage.value = (error as Error).message
     ElMessage.error(errorMessage.value)
-  } finally {
-    loading.value = false
   }
 }
 
-function resetWorkspace() {
-  form.topic = ''
-  keywordsText.value = ''
-  runResult.value = undefined
-  editableContent.value = ''
-  errorMessage.value = ''
-  currentJob.value = undefined
+async function pollWorkflowJob(jobId: string): Promise<AgentRunResponse> {
+  const started = Date.now()
+  const timeoutMs = 360000
+  while (Date.now() - started < timeoutMs) {
+    if (workflowAbort) throw new Error('已停止')
+    const job: JobResponse = await getJob(jobId)
+    advanceWorkflowSteps(job)
+    if (job.status === 'completed') {
+      const result = extractAgentRun(job)
+      if (!result) throw new Error('任务已完成，但结果为空')
+      return result
+    }
+    if (job.status === 'failed') throw new Error(job.error || '任务执行失败')
+    await new Promise(resolve => window.setTimeout(resolve, 1500))
+  }
+  throw new Error('任务等待超时')
+}
+
+function advanceWorkflowSteps(job: JobResponse) {
+  if (!plan.value.length) return
+  const expected = Math.min(plan.value.length, Math.max(1, Math.floor(((job.progress || 0) / 100) * plan.value.length)))
+  for (let i = 0; i < plan.value.length; i++) {
+    const step = plan.value[i]
+    if (i < expected - 1) {
+      if (step.status !== 'completed') step.status = 'completed'
+    } else if (i === expected - 1) {
+      if (step.status !== 'completed') step.status = 'running'
+    }
+  }
+}
+
+function applyWorkflowResult(result: AgentRunResponse) {
+  result.steps.forEach((step: AgentStep, idx: number) => {
+    const target = plan.value[idx]
+    if (!target) return
+    target.agent_id = step.id as SubAgentId
+    target.description = step.role || target.description
+    target.status = step.status === 'failed' ? 'failed' : 'completed'
+    target.output = step.output || ''
+    target.duration_ms = step.duration_ms || 0
+  })
+  finalContent.value = {
+    title: result.final_content.title,
+    content: result.final_content.content,
+    content_type: result.final_content.content_type,
+    style: result.final_content.style,
+    tags: result.final_content.tags || []
+  }
+  savedContentId.value = result.saved_content_id ?? null
+  status.value = 'completed'
+  running.value = false
+  ElMessage.success(savedContentId.value ? `已完成，已保存 #${savedContentId.value}` : '已完成')
 }
 
 async function copyFinal() {
-  if (!editableContent.value) return
+  if (!finalContent.value?.content) return
   try {
-    await navigator.clipboard.writeText(editableContent.value)
+    await navigator.clipboard.writeText(finalContent.value.content)
     ElMessage.success('已复制最终稿')
   } catch {
     ElMessage.error('复制失败，请手动选择文本复制')
   }
 }
 
-function parseKeywords() {
-  return keywordsText.value
-    .split(/[,\n，]/)
-    .map(item => item.trim())
-    .filter(Boolean)
+function optimizeInChat() {
+  if (!savedContentId.value) return
+  const title = finalContent.value?.title?.trim() || ''
+  const seed = title
+    ? `帮我优化 #${savedContentId.value}（《${title}》）这篇内容：先调用 view_content 看一下当前版本，然后给出 2-3 条具体的改进方向，等我确认后再调 refine_content。`
+    : `帮我优化 #${savedContentId.value} 这篇内容：先调用 view_content 看一下当前版本，然后给出 2-3 条具体的改进方向，等我确认后再调 refine_content。`
+  router.push({ path: '/chat', query: { seed } })
 }
 
-function statusLabel(status: AgentStep['status']) {
-  const labels: Record<AgentStep['status'], string> = {
-    pending: '待运行',
-    running: '运行中',
-    completed: '已完成',
-    failed: '失败'
-  }
-  return labels[status]
-}
+onBeforeUnmount(() => {
+  closeStream()
+})
 </script>
+
+<!-- STYLE_PLACEHOLDER -->
 
 <style scoped>
 .studio-page {
@@ -505,12 +933,12 @@ function statusLabel(status: AgentStep['status']) {
   align-items: flex-end;
   justify-content: space-between;
   gap: 24px;
-  margin: 0 auto 24px;
+  margin: 0 auto 16px;
   max-width: 1520px;
 }
 
 .banner-copy {
-  max-width: 720px;
+  max-width: 760px;
 }
 
 .banner-kicker,
@@ -526,9 +954,9 @@ function statusLabel(status: AgentStep['status']) {
 .banner-copy h1 {
   margin: 8px 0 6px;
   color: var(--c-text);
-  font-size: 32px;
+  font-size: 30px;
   font-weight: 600;
-  line-height: 1.15;
+  line-height: 1.18;
   letter-spacing: -0.025em;
 }
 
@@ -539,11 +967,20 @@ function statusLabel(status: AgentStep['status']) {
   line-height: 1.55;
 }
 
-.banner-actions {
+.mode-toggle {
+  flex-shrink: 0;
+}
+
+.run-strip {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 12px;
+  max-width: 1520px;
+  margin: 0 auto 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  background: var(--c-bg);
 }
 
 .ghost-action {
@@ -560,7 +997,7 @@ function statusLabel(status: AgentStep['status']) {
   font-size: 13px;
   font-weight: 500;
   font-family: var(--font-ui);
-  transition: border-color 100ms ease, background-color 100ms ease;
+  transition: border-color 100ms ease;
 }
 
 .ghost-action:hover {
@@ -572,11 +1009,79 @@ function statusLabel(status: AgentStep['status']) {
   cursor: default;
 }
 
+.ghost-action.accent {
+  border-color: var(--c-accent);
+  color: var(--c-accent);
+}
+
+.ghost-action.accent:hover {
+  background: var(--c-accent-soft);
+}
+
 .ghost-action :deep(.el-icon) {
   font-size: 14px;
 }
 
-/* Signal row (top metric strip) ----------------------------------------- */
+.run-progress {
+  flex: 1;
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.progress-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--c-bg-soft);
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: var(--c-accent);
+  transition: width 240ms ease;
+}
+
+.progress-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: var(--c-text-secondary);
+}
+
+.progress-state {
+  font-family: var(--font-mono);
+  color: var(--c-accent);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.progress-count {
+  font-family: var(--font-mono);
+  font-feature-settings: 'tnum';
+  font-variant-numeric: tabular-nums;
+}
+
+.stop-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--c-fail);
+  border-radius: 4px;
+  color: var(--c-fail);
+  background: var(--c-fail-soft);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: var(--font-ui);
+}
+
+.stop-action :deep(.el-icon) {
+  font-size: 14px;
+}
 
 .signal-row {
   display: grid;
@@ -599,13 +1104,14 @@ function statusLabel(status: AgentStep['status']) {
   font-size: 12px;
   font-weight: 500;
   letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 
 .signal-card strong {
   display: block;
   margin: 6px 0 4px;
   color: var(--c-text);
-  font-size: 18px;
+  font-size: 22px;
   font-weight: 600;
   line-height: 1.2;
   letter-spacing: -0.015em;
@@ -621,16 +1127,27 @@ function statusLabel(status: AgentStep['status']) {
 
 .studio-grid {
   display: grid;
-  grid-template-columns: minmax(290px, 340px) minmax(0, 1fr) minmax(320px, 380px);
+  grid-template-columns: minmax(290px, 360px) minmax(0, 1fr);
+  grid-template-rows: 1fr;
   gap: 16px;
   max-width: 1520px;
   margin: 0 auto;
 }
 
-.studio-center,
 .studio-rail {
   min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 16px;
 }
+
+.studio-center {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: 1fr auto;
+  gap: 16px;
+}
+
 
 .studio-surface {
   min-width: 0;
@@ -638,13 +1155,6 @@ function statusLabel(status: AgentStep['status']) {
   border: 1px solid var(--c-border);
   border-radius: 6px;
   background: var(--c-bg);
-}
-
-.left,
-.right {
-  display: grid;
-  align-content: start;
-  gap: 16px;
 }
 
 .surface-head {
@@ -666,6 +1176,13 @@ function statusLabel(status: AgentStep['status']) {
   font-weight: 600;
   line-height: 1.25;
   letter-spacing: -0.015em;
+}
+
+.surface-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .surface-pill {
@@ -694,6 +1211,22 @@ function statusLabel(status: AgentStep['status']) {
   color: var(--c-warn);
   border-color: var(--c-warn);
   background: var(--c-warn-soft);
+}
+
+.surface-pill.failed {
+  color: var(--c-fail);
+  border-color: var(--c-fail);
+  background: var(--c-fail-soft);
+}
+
+.surface-pill.warn {
+  color: var(--c-warn);
+  border-color: var(--c-warn);
+  background: var(--c-warn-soft);
+}
+
+.surface-alert {
+  margin-bottom: 14px;
 }
 
 .field-stack {
@@ -726,14 +1259,18 @@ function statusLabel(status: AgentStep['status']) {
 }
 
 .prompt-chip {
-  height: 24px;
-  padding: 0 8px;
+  min-height: 26px;
+  padding: 4px 10px;
   border: 1px solid var(--c-border);
   border-radius: 999px;
   color: var(--c-text-secondary);
   background: var(--c-bg);
   cursor: pointer;
   font-size: 12px;
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+  word-break: break-word;
   font-family: var(--font-ui);
   transition: border-color 100ms ease, color 100ms ease;
 }
@@ -748,297 +1285,26 @@ function statusLabel(status: AgentStep['status']) {
   width: 100%;
 }
 
-.surface-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.blueprint-row {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-  margin-bottom: 16px;
-}
-
-.blueprint-chip {
-  padding: 10px 12px;
-  border: 1px solid var(--c-border);
-  border-radius: 4px;
-  background: var(--c-bg-soft);
-}
-
-.blueprint-chip span {
-  display: block;
-  color: var(--c-text-tertiary);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-}
-
-.blueprint-chip strong {
-  display: block;
-  margin-top: 4px;
-  color: var(--c-text);
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.3;
-  letter-spacing: -0.01em;
-}
-
-.surface-alert {
-  margin-bottom: 14px;
-}
-
-.canvas-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 16px;
-}
-
-.draft-shell,
-.preview-shell {
-  min-width: 0;
-}
-
-.editor-header,
-.preview-header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
-}
-
-.editor-header span,
-.preview-header span {
-  flex-shrink: 0;
-  color: var(--c-text);
-  font-weight: 600;
-  font-size: 13px;
-  white-space: nowrap;
-  letter-spacing: -0.01em;
-}
-
-.editor-header small,
-.preview-header small {
-  flex: 1 1 auto;
-  min-width: 0;
-  color: var(--c-text-tertiary);
-  font-size: 12px;
-}
-
-.draft-editor,
-.draft-loading,
-.draft-empty {
-  min-height: 620px;
-  padding: 16px;
-  border: 1px solid var(--c-border);
+.timeline-empty {
+  padding: 28px 16px;
+  border: 1px dashed var(--c-border);
   border-radius: 6px;
-  background: var(--c-bg);
-  transition: border-color 120ms ease;
-}
-
-.draft-editor:focus-within {
-  border-color: var(--c-accent);
-  box-shadow: 0 0 0 3px var(--c-accent-ring);
-}
-
-.draft-empty {
-  display: grid;
-  align-content: center;
-  gap: 8px;
   color: var(--c-text-tertiary);
   text-align: center;
-}
-
-.draft-empty strong {
-  color: var(--c-text);
-  font-size: 16px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-
-.draft-empty p {
-  margin: 0;
-  color: var(--c-text-secondary);
   font-size: 13px;
-  line-height: 1.55;
 }
 
-.editor-input :deep(.el-textarea__inner) {
-  min-height: 584px !important;
+.timeline {
+  list-style: none;
+  margin: 0;
   padding: 0;
-  border: 0 !important;
-  background: transparent !important;
-  box-shadow: none !important;
-  color: var(--c-text);
-  font-family: var(--font-ui);
-  font-size: 14.5px;
-  line-height: 1.7;
-  letter-spacing: -0.005em;
-}
-
-.editor-input :deep(.el-textarea__inner:focus) {
-  box-shadow: none !important;
-}
-
-/* Platform preview card -------------------------------------------------- */
-
-.preview-card {
-  display: grid;
-  align-content: start;
-  gap: 14px;
-  min-height: 620px;
-  padding: 20px;
-  border: 1px solid var(--c-border);
-  border-radius: 6px;
-  color: var(--c-text);
-  background: var(--c-bg-soft);
-}
-
-.preview-meta {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.preview-avatar {
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 6px;
-  color: #ffffff;
-  background: var(--c-accent);
-  font-weight: 600;
-  font-size: 12px;
-}
-
-.preview-meta strong {
-  display: block;
-  color: var(--c-text);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.preview-meta span {
-  display: block;
-  color: var(--c-text-tertiary);
-  font-size: 12px;
-}
-
-.preview-card h3 {
-  margin: 0;
-  color: var(--c-text);
-  font-size: 18px;
-  font-weight: 600;
-  line-height: 1.3;
-  letter-spacing: -0.015em;
-}
-
-.preview-body {
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--c-text);
-  font-size: 14px;
-  line-height: 1.7;
-}
-
-.preview-tags {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-top: auto;
-}
-
-.preview-tag {
-  height: 22px;
-  padding: 0 8px;
-  border: 1px solid var(--c-border);
-  border-radius: 999px;
-  color: var(--c-text-secondary);
-  background: var(--c-bg);
-  font-size: 11px;
-  font-family: var(--font-mono);
-  line-height: 20px;
-}
-
-/* Pipeline / agent stack ------------------------------------------------- */
-
-.quality-panel {
-  display: grid;
-  grid-template-columns: 110px minmax(0, 1fr);
-  gap: 12px;
-  margin-bottom: 16px;
-  padding: 14px;
-  border: 1px solid var(--c-border);
-  border-radius: 6px;
-  background: var(--c-bg-soft);
-}
-
-.quality-score {
-  display: grid;
-  align-content: start;
-}
-
-.quality-score span {
-  color: var(--c-text-tertiary);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-}
-
-.quality-score strong {
-  margin-top: 4px;
-  color: var(--c-text);
-  font-size: 36px;
-  font-weight: 600;
-  line-height: 1;
-  letter-spacing: -0.03em;
-  font-feature-settings: 'tnum';
-  font-variant-numeric: tabular-nums;
-}
-
-.quality-meta {
   display: grid;
   gap: 8px;
 }
 
-.quality-meta div {
+.timeline-step {
   display: grid;
-  gap: 2px;
-}
-
-.quality-meta span {
-  display: block;
-  color: var(--c-text-tertiary);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-}
-
-.quality-meta strong {
-  display: block;
-  color: var(--c-text);
-  font-size: 13px;
-  font-weight: 500;
-  font-family: var(--font-mono);
-  letter-spacing: -0.01em;
-  word-break: break-all;
-}
-
-.agent-stack {
-  display: grid;
-  gap: 8px;
-}
-
-.agent-card {
+  gap: 4px;
   padding: 12px 14px;
   border: 1px solid var(--c-border);
   border-radius: 6px;
@@ -1046,78 +1312,363 @@ function statusLabel(status: AgentStep['status']) {
   transition: border-color 120ms ease;
 }
 
-.agent-card.completed {
-  border-color: var(--c-border);
-  background: var(--c-bg);
-}
-
-.agent-card.failed {
-  border-color: var(--c-fail);
-  background: var(--c-fail-soft);
-}
-
-.agent-card.running {
+.timeline-step.running {
   border-color: var(--c-accent);
   background: var(--c-accent-soft);
 }
 
-.agent-topline {
-  display: grid;
-  grid-template-columns: 24px minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: center;
+.timeline-step.completed {
+  border-color: var(--c-ok);
 }
 
-.agent-badge {
+.timeline-step.failed {
+  border-color: var(--c-fail);
+  background: var(--c-fail-soft);
+}
+
+.timeline-step.is-revised {
+  border-style: dashed;
+  border-color: #6e56cf;
+  background: rgba(110, 86, 207, 0.06);
+}
+
+.timeline-step.is-research {
+  border-color: rgba(110, 86, 207, 0.45);
+  background: linear-gradient(180deg, rgba(110, 86, 207, 0.08), rgba(110, 86, 207, 0.02));
+}
+
+.timeline-step.is-research.completed {
+  border-color: #6e56cf;
+}
+
+.research-glyph {
+  display: inline-block;
+  margin-right: 4px;
+  font-size: 13px;
+  vertical-align: -1px;
+}
+
+.research-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(110, 86, 207, 0.16);
+  color: #6e56cf;
+  font-size: 9.5px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tool-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.timeline-head {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.timeline-index {
   display: grid;
   place-items: center;
   width: 24px;
   height: 24px;
   border-radius: 999px;
-  color: var(--c-text-tertiary);
-  background: var(--c-bg-soft);
   border: 1px solid var(--c-border);
-  font-weight: 600;
-  font-size: 11px;
+  background: var(--c-bg-soft);
+  color: var(--c-text-secondary);
   font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
 }
 
-.agent-badge :deep(.el-icon) {
-  font-size: 14px;
+.timeline-step.running .timeline-index {
+  border-color: var(--c-accent);
+  color: var(--c-accent);
+  background: #ffffff;
 }
 
-.agent-card.completed .agent-badge {
+.timeline-step.completed .timeline-index {
+  border-color: var(--c-ok);
   color: var(--c-ok);
   background: var(--c-ok-soft);
-  border-color: var(--c-ok);
 }
 
-.agent-card.failed .agent-badge {
+.timeline-step.failed .timeline-index {
+  border-color: var(--c-fail);
   color: var(--c-fail);
   background: var(--c-fail-soft);
+}
+
+.timeline-copy strong {
+  display: block;
+  color: var(--c-text);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.timeline-copy span {
+  display: block;
+  color: var(--c-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.timeline-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.timeline-meta small {
+  color: var(--c-text-tertiary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-feature-settings: 'tnum';
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline-revised-badge {
+  justify-self: flex-start;
+  margin-top: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(110, 86, 207, 0.16);
+  color: #6e56cf;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.step-surface.completed {
+  border-color: var(--c-border);
+}
+
+.step-surface.running {
+  border-color: var(--c-accent);
+}
+
+.step-surface.failed {
   border-color: var(--c-fail);
 }
 
-.agent-card.running .agent-badge {
+.step-surface.is-research {
+  border-color: rgba(110, 86, 207, 0.4);
+  background: linear-gradient(180deg, rgba(110, 86, 207, 0.05), transparent 36%);
+}
+
+.step-surface.is-research.completed {
+  border-color: #6e56cf;
+}
+
+.research-surface {
+  border-color: rgba(110, 86, 207, 0.5);
+  background: linear-gradient(180deg, rgba(110, 86, 207, 0.07), transparent 60%);
+}
+
+.research-hint {
+  margin: 0 0 14px;
+  color: var(--c-text-secondary);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.research-toggles {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.research-toggle {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  background: var(--c-bg);
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.research-toggle:hover {
+  border-color: var(--c-border-strong);
+}
+
+.research-toggle:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 2px;
+}
+
+.research-toggle.active {
+  border-color: rgba(110, 86, 207, 0.55);
+  background: rgba(110, 86, 207, 0.06);
+}
+
+.toggle-copy strong {
+  display: block;
+  color: var(--c-text);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.toggle-copy span {
+  display: block;
+  margin-top: 2px;
+  color: var(--c-text-tertiary);
+  font-size: 11.5px;
+}
+
+.step-description {
+  margin: 0 0 12px;
+  color: var(--c-text-secondary);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.tool-trace {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  background: var(--c-bg-soft);
+  display: grid;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.tool-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--c-text-secondary);
+}
+
+.tool-row.failed {
+  color: var(--c-fail);
+}
+
+.tool-row.completed .tool-name {
+  color: var(--c-text);
+}
+
+.tool-arrow {
+  color: var(--c-text-tertiary);
+}
+
+.tool-name {
   color: var(--c-accent);
-  background: #ffffff;
-  border-color: var(--c-accent);
-  position: relative;
+  font-weight: 600;
 }
 
-.agent-card.running .agent-badge::after {
-  content: '';
-  position: absolute;
-  inset: -3px;
-  border-radius: 999px;
-  border: 2px solid var(--c-accent);
-  opacity: 0.4;
-  animation: agent-pulse 1.6s ease-out infinite;
+.tool-args {
+  color: var(--c-text-tertiary);
+  word-break: break-word;
 }
 
-@keyframes agent-pulse {
-  0% { transform: scale(0.85); opacity: 0.5; }
-  100% { transform: scale(1.4); opacity: 0; }
+.tool-status {
+  color: var(--c-warn);
+  font-style: italic;
+}
+
+.tool-preview {
+  flex: 1;
+  min-width: 0;
+  color: var(--c-text-secondary);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.tool-error {
+  flex: 1;
+  min-width: 0;
+  color: var(--c-fail);
+  word-break: break-word;
+}
+
+.tool-duration {
+  color: var(--c-text-tertiary);
+  font-feature-settings: 'tnum';
+  font-variant-numeric: tabular-nums;
+}
+
+.step-output {
+  margin: 0;
+  padding: 14px;
+  max-height: 420px;
+  overflow-y: auto;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  background: var(--c-bg-code);
+  color: var(--c-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.step-running {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--c-accent);
+  border-radius: 6px;
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+  font-size: 13px;
+}
+
+.step-pending {
+  padding: 12px 14px;
+  border: 1px dashed var(--c-border);
+  border-radius: 6px;
+  color: var(--c-text-tertiary);
+  font-size: 13px;
+}
+
+.step-empty {
+  padding: 12px 14px;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  background: var(--c-bg-soft);
+  color: var(--c-text-tertiary);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.step-empty.failed {
+  border-color: var(--c-fail);
+  color: var(--c-fail);
+  background: var(--c-fail-soft);
 }
 
 .is-loading {
@@ -1128,104 +1679,36 @@ function statusLabel(status: AgentStep['status']) {
   to { transform: rotate(360deg); }
 }
 
-.agent-copy strong {
-  display: block;
-  color: var(--c-text);
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
+.final-surface {
+  border-color: var(--c-ok);
 }
 
-.agent-copy span {
-  color: var(--c-text-tertiary);
-  font-size: 11px;
-  font-family: var(--font-mono);
-}
-
-.agent-topline small {
-  color: var(--c-text-tertiary);
-  font-size: 11px;
-  font-family: var(--font-mono);
-  font-feature-settings: 'tnum';
-  font-variant-numeric: tabular-nums;
-}
-
-.agent-role,
-.agent-input {
-  margin: 8px 0 0;
-  color: var(--c-text-secondary);
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.agent-output {
-  margin: 10px 0 0;
-  padding: 10px 12px;
-  border: 1px solid var(--c-border);
-  border-radius: 4px;
-  background: var(--c-bg-code);
-  color: var(--c-text);
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.review-copy {
+.final-body {
   margin: 0;
-  padding: 14px;
+  padding: 16px;
+  max-height: 540px;
+  overflow-y: auto;
   border: 1px solid var(--c-border);
-  border-radius: 4px;
-  background: var(--c-bg-code);
+  border-radius: 6px;
+  background: var(--c-bg-soft);
   color: var(--c-text);
   white-space: pre-wrap;
   word-break: break-word;
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  line-height: 1.6;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.7;
 }
 
-.review-surface {
-  position: sticky;
-  top: 20px;
-}
-
-@media (max-width: 1440px) {
-  .signal-row,
-  .blueprint-row {
+@media (max-width: 1180px) {
+  .signal-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .studio-grid {
-    grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+    grid-template-columns: 1fr;
   }
 
-  .right {
-    grid-column: 1 / -1;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  }
 
-  .review-surface {
-    position: static;
-  }
-}
-
-@media (max-width: 1180px) {
-  .canvas-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .draft-editor,
-  .draft-loading,
-  .draft-empty,
-  .preview-card {
-    min-height: 0;
-  }
-
-  .editor-input :deep(.el-textarea__inner) {
-    min-height: 360px !important;
-  }
 }
 
 @media (max-width: 980px) {
@@ -1238,24 +1721,8 @@ function statusLabel(status: AgentStep['status']) {
     flex-direction: column;
   }
 
-  .signal-row,
-  .studio-grid,
-  .field-grid,
-  .canvas-grid,
-  .right,
-  .blueprint-row {
+  .signal-row {
     grid-template-columns: 1fr;
-  }
-
-  .draft-editor,
-  .draft-loading,
-  .draft-empty,
-  .preview-card {
-    min-height: auto;
-  }
-
-  .editor-input :deep(.el-textarea__inner) {
-    min-height: 420px !important;
   }
 }
 </style>

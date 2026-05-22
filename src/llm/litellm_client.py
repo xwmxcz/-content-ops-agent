@@ -134,6 +134,7 @@ class LiteLLMClient:
             "max_tokens": max_tokens,
             "api_key": api_key,
             "stream": True,
+            "stream_options": {"include_usage": True},
         }
         api_base = config.get_provider_api_base(provider)
         if api_base:
@@ -156,6 +157,7 @@ class LiteLLMClient:
 
         prompt_tokens = 0
         completion_tokens = 0
+        accumulated = ""
         try:
             async for raw in response:
                 delta_text = ""
@@ -172,9 +174,38 @@ class LiteLLMClient:
                     prompt_tokens = getattr(usage, "prompt_tokens", 0) or prompt_tokens
                     completion_tokens = getattr(usage, "completion_tokens", 0) or completion_tokens
                 if delta_text:
+                    accumulated += delta_text
                     yield StreamChunk(delta=delta_text)
         except Exception as exc:
-            raise LLMGenerationError("LLM streaming failed") from exc
+            import sys
+            print(
+                f"[litellm.stream] iteration failed: {type(exc).__name__}: {exc} "
+                f"(accumulated={len(accumulated)} chars)",
+                file=sys.stderr,
+                flush=True,
+            )
+            # Mid-stream failure with usable partial output → swallow and finish gracefully.
+            # Common cause: provider closes the stream when max_tokens is reached without
+            # emitting a clean finish_reason=length frame.
+            if accumulated.strip():
+                yield StreamChunk(delta="", usage=(prompt_tokens, completion_tokens))
+                return
+            # Nothing usable yet → fall back to one-shot non-streaming request.
+            try:
+                text = await self.generate_from_prompts(
+                    provider=provider,
+                    model=model,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+            except Exception as fallback_exc:
+                raise LLMGenerationError(
+                    f"LLM streaming failed: {type(exc).__name__}: {exc}"
+                ) from fallback_exc
+            yield StreamChunk(delta=text, usage=None)
+            return
         yield StreamChunk(delta="", usage=(prompt_tokens, completion_tokens))
 
     @staticmethod

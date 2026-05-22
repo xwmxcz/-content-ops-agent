@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -31,6 +31,8 @@ AVAILABLE_TOOL_NAMES = [
     "create_content", "refine_content", "generate_title_options", "optimize_seo",
     "view_content", "list_recent_contents", "add_to_calendar", "view_calendar",
     "get_content_stats", "check_xiaohongshu_login", "search_history",
+    "web_search", "analyze_content_performance", "find_optimization_candidates",
+    "propose_topics", "propose_publishing_schedule", "commit_publishing_schedule",
 ]
 PLANNER_SYSTEM_PROMPT = (
     "You are a planner. Given the user's request and the available tools, "
@@ -46,7 +48,34 @@ Today is {today} ({weekday}). When the user uses relative dates like "tomorrow",
 resolve them to an absolute YYYY-MM-DD value before calling any tool.
 Answer in the user's language. Use tools when the user asks to create content, refine stored content,
 inspect recent content, manage the publishing calendar, or check content statistics.
-Do not claim that content was saved or scheduled unless a tool result confirms it."""
+Do not claim that content was saved or scheduled unless a tool result confirms it.
+
+When the user asks for topic ideas, "what should we write next", weekly planning, or content strategy:
+1. Call analyze_content_performance to see what kinds of past content actually performed.
+2. Optionally call web_search for recent external trends related to the user's domain.
+3. Call propose_topics to synthesize a topic list grounded in step 1+2.
+Present the proposal as a markdown table — do not commit anything yet.
+
+When the user asks "哪些内容值得改 / 帮我看看哪些要优化 / 复盘":
+1. Call find_optimization_candidates with the appropriate criteria
+   ('underperforming' / 'recent_drafts' / 'old_drafts'). When unsure, default to
+   'underperforming'.
+2. For each candidate, briefly explain WHY it qualifies (the `reason` field is a
+   starting point; add your own judgment about how to fix it).
+3. Suggest specific refinement directions for 2-3 of them.
+4. Wait for the user to pick which ones to actually refine before calling refine_content.
+
+When the user asks to "schedule" or "plan publishing" for content items:
+1. Use propose_publishing_schedule first — it returns a plan but does NOT write to the calendar.
+2. Show the plan to the user as a markdown table.
+3. Wait for the user to confirm naturally (e.g. "好的", "开始排吧", "OK"). If they ask for changes
+   first, call propose_publishing_schedule again with adjusted parameters.
+4. Only after explicit confirmation, call commit_publishing_schedule with the same plan.
+
+Write tools (create_content, refine_content, add_to_calendar, commit_publishing_schedule)
+have side effects — never call them without first showing the user what you intend to do
+and getting confirmation, unless the user's original request was already an explicit
+"please do X now" instruction."""
 
 
 _WEEKDAY_CN = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
@@ -483,6 +512,196 @@ class ChatAgentService:
             """
             return json.dumps(self.store.search_contents(query, limit), ensure_ascii=False)
 
+        async def web_search(query: str, limit: int = 5) -> str:
+            """Run a public web search via DuckDuckGo and return top results as JSON.
+
+            Use this for current trends, recent news, or external context the saved content
+            library does not cover.
+            """
+            from src.tools.web_search import web_search as run_web_search
+            results = await run_web_search(query, limit=limit)
+            return json.dumps(results, ensure_ascii=False)
+
+        def analyze_content_performance(days: int = 30) -> str:
+            """Aggregate the engagement performance of saved content over the last N days.
+
+            Returns averages by content_type, by style, and the top 5 performers ranked by
+            engagement rate. Use this before recommending what to write next.
+            """
+            return json.dumps(self.store.aggregate_performance(days), ensure_ascii=False)
+
+        def find_optimization_candidates(criteria: str = "underperforming", limit: int = 5) -> str:
+            """Surface saved content items that likely need refinement.
+
+            criteria:
+              - 'underperforming': items whose engagement rate is below the cohort average
+              - 'recent_drafts':   drafts/refined created in the last 7 days, not finalized
+              - 'old_drafts':      drafts older than 14 days, never finalized
+
+            Use this when the user asks "哪些内容值得改 / 帮我看看哪些要优化 / 复盘一下".
+            After calling this, suggest 2-3 candidates to the user with WHY each one
+            qualifies — do not call refine_content directly until the user confirms.
+            """
+            return json.dumps(self.store.list_optimization_candidates(criteria, limit), ensure_ascii=False)
+
+        def propose_topics(count: int = 5, hint: str | None = None) -> str:
+            """Build a structured "topic brief" for the agent to use when proposing new
+            content topics. This tool does NOT generate topics itself — it gathers the
+            evidence the agent needs to formulate them: which content types are winning,
+            which are underrepresented, and what recent items already cover so the agent
+            does not repeat them.
+
+            Use this when the user asks for topic ideas / weekly planning / "what to write
+            next". After calling this, formulate `count` topic ideas as a markdown table
+            and present them to the user — do not call create_content yet.
+            """
+            perf = self.store.aggregate_performance(days=30)
+            recent = self.store.list_contents(limit=15)
+            by_type = perf.get("by_type") or []
+            winners = [t for t in by_type if t.get("with_metrics") and t.get("avg_engagement_rate", 0) >= 0.04]
+            underrepresented = sorted(by_type, key=lambda t: t.get("count", 0))[:2]
+            brief = {
+                "requested_count": count,
+                "user_hint": hint,
+                "winning_content_types": [
+                    {"content_type": t["content_type"], "avg_engagement_rate": t["avg_engagement_rate"],
+                     "avg_views": t["avg_views"], "sample_size": t["with_metrics"]}
+                    for t in winners[:3]
+                ],
+                "underrepresented_content_types": [
+                    {"content_type": t["content_type"], "count": t["count"]}
+                    for t in underrepresented
+                ],
+                "top_performers": perf.get("top_performers") or [],
+                "recently_published_titles": [r.get("title") for r in recent if r.get("title")][:10],
+                "guidance": (
+                    "Use winners as a positive signal — propose 1-2 topics in those content_types. "
+                    "Use underrepresented buckets as exploration — propose 1 topic that fills the gap. "
+                    "Avoid repeating any title in recently_published_titles. "
+                    "When user_hint is provided, weigh proposals toward that direction."
+                ),
+            }
+            return json.dumps(brief, ensure_ascii=False)
+
+        def propose_publishing_schedule(
+            content_ids: list[int],
+            start_date: str,
+            end_date: str,
+            cadence: str = "mwf",
+        ) -> str:
+            """Plan publishing dates for the given content_ids over [start_date, end_date].
+
+            cadence: 'daily' | 'weekdays' | 'mwf' (Mon/Wed/Fri).
+            Returns a proposed plan as a list of {content_id, title, platform, scheduled_date}.
+            DOES NOT write to the calendar — the agent must show the plan to the user and
+            wait for confirmation, then call commit_publishing_schedule with the same plan.
+            """
+            from datetime import date as _date
+            try:
+                start = datetime.strptime(start_date, "%Y-%m-%d").date()
+                end = datetime.strptime(end_date, "%Y-%m-%d").date()
+            except ValueError as exc:
+                return json.dumps({"error": f"Invalid date format: {exc}. Use YYYY-MM-DD."}, ensure_ascii=False)
+            if end < start:
+                return json.dumps({"error": "end_date must be on or after start_date."}, ensure_ascii=False)
+
+            valid_contents: list[dict[str, Any]] = []
+            missing: list[int] = []
+            for cid in content_ids:
+                row = self.store.get_content(int(cid))
+                if row is None:
+                    missing.append(int(cid))
+                else:
+                    valid_contents.append(row)
+            if missing:
+                return json.dumps(
+                    {"error": f"Content ids not found: {missing}. Use list_recent_contents or search_history first."},
+                    ensure_ascii=False,
+                )
+
+            cadence = (cadence or "mwf").lower()
+            cursor = start
+            candidate_dates: list[_date] = []
+            while cursor <= end:
+                weekday = cursor.weekday()  # Mon=0
+                ok = (
+                    cadence == "daily"
+                    or (cadence == "weekdays" and weekday < 5)
+                    or (cadence == "mwf" and weekday in (0, 2, 4))
+                )
+                if ok:
+                    candidate_dates.append(cursor)
+                cursor = cursor + timedelta(days=1)
+
+            existing = self.store.get_calendar_conflicts(start, end)
+            occupied: set[tuple[str, str]] = {(e["scheduled_date"], e["platform"]) for e in existing}
+
+            plan: list[dict[str, Any]] = []
+            date_iter = iter(candidate_dates)
+            for content in valid_contents:
+                platform = content.get("content_type") or "unknown"
+                slot = None
+                for d in date_iter:
+                    if (d.isoformat(), platform) in occupied:
+                        continue
+                    slot = d
+                    occupied.add((d.isoformat(), platform))
+                    break
+                if slot is None:
+                    plan.append({
+                        "content_id": content["id"],
+                        "title": content.get("title"),
+                        "platform": platform,
+                        "scheduled_date": None,
+                        "warning": "no available date in range under given cadence",
+                    })
+                else:
+                    plan.append({
+                        "content_id": content["id"],
+                        "title": content.get("title"),
+                        "platform": platform,
+                        "scheduled_date": slot.isoformat(),
+                    })
+
+            return json.dumps({
+                "plan": plan,
+                "cadence": cadence,
+                "start_date": start.isoformat(),
+                "end_date": end.isoformat(),
+                "committed": False,
+                "reminder": "This is a PROPOSAL. Show it to the user as a markdown table and wait for confirmation before calling commit_publishing_schedule.",
+            }, ensure_ascii=False)
+
+        def commit_publishing_schedule(plan: list[dict[str, Any]]) -> str:
+            """Persist a previously-proposed publishing schedule to the calendar.
+
+            Each plan item must have content_id, platform, scheduled_date (YYYY-MM-DD).
+            Items with null scheduled_date are skipped. Returns a summary of what was saved.
+            """
+            saved: list[dict[str, Any]] = []
+            skipped: list[dict[str, Any]] = []
+            for item in plan or []:
+                if not item.get("scheduled_date"):
+                    skipped.append({"content_id": item.get("content_id"), "reason": "no scheduled_date"})
+                    continue
+                try:
+                    when = datetime.strptime(item["scheduled_date"], "%Y-%m-%d").date()
+                except (ValueError, TypeError):
+                    skipped.append({"content_id": item.get("content_id"), "reason": "bad date"})
+                    continue
+                content_id = int(item["content_id"])
+                if self.store.get_content(content_id) is None:
+                    skipped.append({"content_id": content_id, "reason": "content not found"})
+                    continue
+                event_id = self.store.save_calendar_event(content_id, item.get("platform") or "unknown", when)
+                saved.append({
+                    "event_id": event_id,
+                    "content_id": content_id,
+                    "platform": item.get("platform"),
+                    "scheduled_date": item["scheduled_date"],
+                })
+            return json.dumps({"saved": saved, "skipped": skipped, "committed": True}, ensure_ascii=False)
+
         return [
             StructuredTool.from_function(coroutine=create_content, name="create_content"),
             StructuredTool.from_function(coroutine=refine_content, name="refine_content"),
@@ -495,6 +714,12 @@ class ChatAgentService:
             StructuredTool.from_function(func=get_content_stats, name="get_content_stats"),
             StructuredTool.from_function(coroutine=check_xiaohongshu_login, name="check_xiaohongshu_login"),
             StructuredTool.from_function(func=search_history, name="search_history"),
+            StructuredTool.from_function(coroutine=web_search, name="web_search"),
+            StructuredTool.from_function(func=analyze_content_performance, name="analyze_content_performance"),
+            StructuredTool.from_function(func=find_optimization_candidates, name="find_optimization_candidates"),
+            StructuredTool.from_function(func=propose_topics, name="propose_topics"),
+            StructuredTool.from_function(func=propose_publishing_schedule, name="propose_publishing_schedule"),
+            StructuredTool.from_function(func=commit_publishing_schedule, name="commit_publishing_schedule"),
         ]
 
     @staticmethod
