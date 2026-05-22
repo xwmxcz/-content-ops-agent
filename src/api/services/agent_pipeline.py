@@ -210,7 +210,7 @@ def _temperature_for_step(step_id: str, base_temperature: float) -> float:
 
 def _derive_title(content: str, topic: str) -> str:
     for line in content.splitlines():
-        title = line.strip().strip("#：: -")
+        title = line.strip().strip("#*-：:【】 \t")
         if title:
             return title[:80]
     return topic[:80]
