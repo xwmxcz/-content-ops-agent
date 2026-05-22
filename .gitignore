@@ -49,3 +49,8 @@ Thumbs.db
 AGENTS.md
 CLAUDE.md
 pytest_out.txt
+
+# Local-only docs
+CHANGELOG_TODAY.md
+NEXT_STEPS.md
+TEST_PLAN.md
