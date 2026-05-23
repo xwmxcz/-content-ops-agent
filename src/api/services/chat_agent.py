@@ -44,8 +44,18 @@ PLANNER_SYSTEM_PROMPT = (
 
 
 SYSTEM_PROMPT_TEMPLATE = """You are Content Ops Agent, a production assistant for content operations.
-Today is {today} ({weekday}). When the user uses relative dates like "tomorrow", "next Monday", or "下周一",
-resolve them to an absolute YYYY-MM-DD value before calling any tool.
+
+Current date anchors (always trust these over your own memory or training cutoff):
+- Today: {today} ({weekday})
+- Tomorrow: {tomorrow}
+- This week (Mon..Sun): {this_week}
+- Next Monday: {next_monday}
+- Next week (Mon..Sun): {next_week}
+
+When the user uses relative dates like "tomorrow", "next Monday", or "下周一",
+resolve them to an absolute YYYY-MM-DD value using the anchors above before calling any tool.
+Never invent a date from training data; the resolved date MUST be ≥ {today}.
+When you mention a date back to the user, quote the exact YYYY-MM-DD you used in the tool call.
 Answer in the user's language. Use tools when the user asks to create content, refine stored content,
 inspect recent content, manage the publishing calendar, or check content statistics.
 Do not claim that content was saved or scheduled unless a tool result confirms it.
@@ -82,10 +92,19 @@ _WEEKDAY_CN = ["周一", "周二", "周三", "周四", "周五", "周六", "周�
 
 
 def _build_system_prompt() -> str:
-    today = datetime.now()
+    today = datetime.now().date()
+    tomorrow = today + timedelta(days=1)
+    monday_this_week = today - timedelta(days=today.weekday())
+    sunday_this_week = monday_this_week + timedelta(days=6)
+    next_monday = monday_this_week + timedelta(days=7)
+    next_sunday = next_monday + timedelta(days=6)
     return SYSTEM_PROMPT_TEMPLATE.format(
         today=today.strftime("%Y-%m-%d"),
         weekday=_WEEKDAY_CN[today.weekday()],
+        tomorrow=tomorrow.strftime("%Y-%m-%d"),
+        this_week=f"{monday_this_week.strftime('%Y-%m-%d')}..{sunday_this_week.strftime('%Y-%m-%d')}",
+        next_monday=next_monday.strftime("%Y-%m-%d"),
+        next_week=f"{next_monday.strftime('%Y-%m-%d')}..{next_sunday.strftime('%Y-%m-%d')}",
     )
 
 
@@ -468,13 +487,24 @@ class ChatAgentService:
         def add_to_calendar(content_id: int, publish_date: str, platform: str) -> str:
             """Schedule a saved content item on the publishing calendar.
 
-            publish_date MUST be an absolute YYYY-MM-DD string. Convert relative phrases
-            like "tomorrow", "next Monday", or "下周一" to YYYY-MM-DD before calling.
+            publish_date MUST be an absolute YYYY-MM-DD string ≥ today's date.
+            Convert relative phrases like "tomorrow", "next Monday", or "下周一" to YYYY-MM-DD
+            using the date anchors in the system prompt before calling.
+            Never use dates from your training data or memory — always compute from today.
             """
             content = self.store.get_content(content_id)
             if not content:
                 return f"Content {content_id} was not found."
-            scheduled_date = datetime.strptime(publish_date, "%Y-%m-%d").date()
+            try:
+                scheduled_date = datetime.strptime(publish_date, "%Y-%m-%d").date()
+            except ValueError:
+                return f"Invalid date format: {publish_date}. Must be YYYY-MM-DD."
+            today = datetime.now().date()
+            if scheduled_date < today:
+                return (
+                    f"Cannot schedule in the past. You provided {publish_date}, but today is {today}. "
+                    f"Use the date anchors in the system prompt to compute the correct future date."
+                )
             event_id = self.store.save_calendar_event(content_id, platform, scheduled_date)
             return json.dumps(
                 {
@@ -740,13 +770,18 @@ class ChatAgentService:
 
         from langchain_openai import ChatOpenAI
 
-        return ChatOpenAI(
-            api_key=api_key,
-            base_url=config.get_provider_api_base(provider),
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
+        kwargs: dict[str, Any] = {
+            "api_key": api_key,
+            "base_url": config.get_provider_api_base(provider),
+            "model": model,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        # DeepSeek V4 defaults to thinking mode and demands reasoning_content be passed
+        # back across turns. LangChain doesn't preserve it, so disable explicitly.
+        if provider == "deepseek":
+            kwargs["model_kwargs"] = {"extra_body": {"thinking": {"type": "disabled"}}}
+        return ChatOpenAI(**kwargs)
 
     @staticmethod
     def _history_to_messages(history: list[dict[str, Any]]) -> list[BaseMessage]:
