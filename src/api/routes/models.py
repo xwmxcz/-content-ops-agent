@@ -26,8 +26,8 @@ PROVIDER_MODELS = {
         ("Qwen/Qwen2.5-72B-Instruct", "Qwen2.5 72B Instruct"),
     ],
     "deepseek": [
-        ("deepseek-chat", "DeepSeek Chat"),
-        ("deepseek-reasoner", "DeepSeek Reasoner"),
+        ("deepseek-v4-flash", "DeepSeek V4 Flash"),
+        ("deepseek-v4-pro", "DeepSeek V4 Pro"),
     ],
     "moonshot": [
         ("kimi-k2.6", "Kimi K2.6"),
@@ -38,6 +38,7 @@ PROVIDER_MODELS = {
         ("moonshot-v1-32k", "Moonshot V1 32K"),
         ("moonshot-v1-128k", "Moonshot V1 128K"),
     ],
+    "newapi": [],
 }
 
 MODEL_CACHE_TTL_SECONDS = 300
@@ -49,6 +50,8 @@ def provider_display_name(provider: str) -> str:
         return "SiliconFlow"
     if provider == "deepseek":
         return "DeepSeek"
+    if provider == "newapi":
+        return "NewAPI"
     return provider.title()
 
 
@@ -146,19 +149,24 @@ async def fetch_openai_compatible_models(provider: str, base_url: str, api_key: 
     if cached and time.time() - cached[0] < MODEL_CACHE_TTL_SECONDS:
         return cached[1]
 
-    models_url = f"{base_url.rstrip('/')}/models"
-    urls = [models_url]
-    if models_url.endswith("/v1/models"):
-        urls.append(models_url.replace("/v1/models", "/models"))
+    trimmed = base_url.rstrip("/")
+    if trimmed.endswith("/v1"):
+        urls = [f"{trimmed}/models", f"{trimmed[:-3].rstrip('/')}/models"]
+    else:
+        # Some gateways (e.g. NewAPI) accept chat completions at the root but
+        # only expose the model catalogue under /v1. Probe /v1/models first.
+        urls = [f"{trimmed}/v1/models", f"{trimmed}/models"]
 
     for url in urls:
         try:
             async with httpx.AsyncClient(timeout=8.0) as client:
                 response = await client.get(url, headers={"Authorization": f"Bearer {api_key}"})
                 response.raise_for_status()
-            return cache_provider_models(provider, parse_model_items(response.json().get("data", [])))
-        except httpx.HTTPError:
+            payload = response.json()
+        except (httpx.HTTPError, ValueError):
+            # ValueError covers JSONDecodeError when the gateway returns HTML/empty.
             continue
+        return cache_provider_models(provider, parse_model_items(payload.get("data", [])))
     return None
 
 
@@ -171,6 +179,10 @@ async def fetch_provider_models(provider: str) -> list[ModelInfo] | None:
         return await fetch_openai_compatible_models(provider, config.DEEPSEEK_BASE_URL, config.DEEPSEEK_API_KEY)
     if provider == "moonshot":
         return await fetch_openai_compatible_models(provider, config.MOONSHOT_BASE_URL, config.MOONSHOT_API_KEY)
+    if provider == "newapi":
+        if not config.NEWAPI_BASE_URL:
+            return None
+        return await fetch_openai_compatible_models(provider, config.NEWAPI_BASE_URL, config.NEWAPI_API_KEY)
     return None
 
 

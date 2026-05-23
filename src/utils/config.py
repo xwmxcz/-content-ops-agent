@@ -15,17 +15,20 @@ class Config:
     SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY")
     DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
     MOONSHOT_API_KEY = os.getenv("MOONSHOT_API_KEY")
+    NEWAPI_API_KEY = os.getenv("NEWAPI_API_KEY")
 
     # Model Settings
     CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20241022")
     SILICONFLOW_MODEL = os.getenv("SILICONFLOW_MODEL", "zai-org/GLM-4.5-Air")
-    DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+    DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
     MOONSHOT_MODEL = os.getenv("MOONSHOT_MODEL", "moonshot-v1-8k")
+    NEWAPI_MODEL = os.getenv("NEWAPI_MODEL", "gpt-4o-mini")
 
     # LiteLLM / OpenAI-compatible endpoint settings
     SILICONFLOW_BASE_URL = os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1")
     DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
     MOONSHOT_BASE_URL = os.getenv("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1")
+    NEWAPI_BASE_URL = os.getenv("NEWAPI_BASE_URL", "")
 
     # Generation Settings
     MAX_TOKENS = int(os.getenv("MAX_TOKENS", "4096"))
@@ -83,6 +86,11 @@ class Config:
             raise ValueError("DEEPSEEK_API_KEY is required for DeepSeek provider")
         elif provider == "moonshot" and not cls.MOONSHOT_API_KEY:
             raise ValueError("MOONSHOT_API_KEY is required for Moonshot provider")
+        elif provider == "newapi":
+            if not cls.NEWAPI_API_KEY:
+                raise ValueError("NEWAPI_API_KEY is required for NewAPI provider")
+            if not cls.NEWAPI_BASE_URL:
+                raise ValueError("NEWAPI_BASE_URL is required for NewAPI provider")
 
         return True
 
@@ -99,6 +107,8 @@ class Config:
             return cls.DEEPSEEK_API_KEY
         elif provider == "moonshot":
             return cls.MOONSHOT_API_KEY
+        elif provider == "newapi":
+            return cls.NEWAPI_API_KEY
         else:
             raise ValueError(f"Unknown provider: {provider}")
 
@@ -115,12 +125,14 @@ class Config:
             return cls.DEEPSEEK_MODEL
         elif provider == "moonshot":
             return cls.MOONSHOT_MODEL
+        elif provider == "newapi":
+            return cls.NEWAPI_MODEL
         else:
             raise ValueError(f"Unknown provider: {provider}")
 
     @classmethod
     def get_supported_providers(cls) -> list[str]:
-        return ["claude", "siliconflow", "deepseek", "moonshot"]
+        return ["claude", "siliconflow", "deepseek", "moonshot", "newapi"]
 
     @classmethod
     def has_provider_key(cls, provider: str) -> bool:
@@ -133,6 +145,8 @@ class Config:
             return bool(cls.DEEPSEEK_API_KEY)
         elif provider == "moonshot":
             return bool(cls.MOONSHOT_API_KEY)
+        elif provider == "newapi":
+            return bool(cls.NEWAPI_API_KEY) and bool(cls.NEWAPI_BASE_URL)
         return False
 
     @classmethod
@@ -145,6 +159,11 @@ class Config:
                 return f"deepseek/{model}"
             if provider == "moonshot" and not model.startswith("moonshot/"):
                 return f"moonshot/{model}"
+            # NewAPI is just an OpenAI-compatible gateway — route through litellm's
+            # `openai/` provider so it forwards the call as plain /v1/chat/completions
+            # against api_base, without any provider-specific schema rewrites.
+            if provider == "newapi" and not model.startswith("openai/"):
+                return f"openai/{model}"
             return model
 
         if provider == "claude":
@@ -155,6 +174,8 @@ class Config:
             return f"deepseek/{cls.DEEPSEEK_MODEL}"
         elif provider == "moonshot":
             return f"moonshot/{cls.MOONSHOT_MODEL}"
+        elif provider == "newapi":
+            return f"openai/{cls.NEWAPI_MODEL}"
         else:
             raise ValueError(f"Unknown provider: {provider}")
 
@@ -167,6 +188,15 @@ class Config:
             return cls.DEEPSEEK_BASE_URL
         elif provider == "moonshot":
             return cls.MOONSHOT_BASE_URL
+        elif provider == "newapi":
+            # NewAPI gateways accept both `https://host` and `https://host/v1` in admin UI,
+            # but litellm's openai provider always appends `/chat/completions` to api_base.
+            # Without `/v1` the request lands on the gateway's SPA root (returns HTML).
+            # Normalize here so users can paste either form into NEWAPI_BASE_URL.
+            base = (cls.NEWAPI_BASE_URL or "").rstrip("/")
+            if not base:
+                return None
+            return base if base.endswith("/v1") else f"{base}/v1"
         return None
 
 
