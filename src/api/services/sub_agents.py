@@ -124,6 +124,8 @@ SUB_AGENTS: dict[SubAgentId, SubAgentSpec] = {
 PRICE_PER_1K = {
     "claude-3-5-sonnet": (3.0, 15.0),
     "claude-3-5-haiku": (0.8, 4.0),
+    "deepseek-v4-flash": (0.27, 1.10),
+    "deepseek-v4-pro": (0.55, 2.19),
     "deepseek-chat": (0.27, 1.10),
     "deepseek-reasoner": (0.55, 2.19),
     "Qwen/Qwen2.5-7B-Instruct": (0.07, 0.07),
@@ -350,13 +352,19 @@ class SubAgentRunner:
             return ChatAnthropic(api_key=api_key, model=model, temperature=temperature, max_tokens=max_tokens)
         from langchain_openai import ChatOpenAI
 
-        return ChatOpenAI(
-            api_key=api_key,
-            base_url=config.get_provider_api_base(provider),
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
+        kwargs: dict[str, Any] = {
+            "api_key": api_key,
+            "base_url": config.get_provider_api_base(provider),
+            "model": model,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        # DeepSeek V4 defaults to thinking mode; in multi-turn tool loops it expects
+        # `reasoning_content` to be echoed back, which LangChain ChatOpenAI does not
+        # carry through. Disable thinking so each round is a clean chat completion.
+        if provider == "deepseek":
+            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+        return ChatOpenAI(**kwargs)
 
     @staticmethod
     def _message_text(content: Any) -> str:
