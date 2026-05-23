@@ -171,23 +171,27 @@
               :key="`${step.index}-${step.agent_id}`"
               class="timeline-step"
               :class="[step.status, { 'is-revised': step.revised_at, 'is-research': isResearchStep(step.agent_id) }]"
+              tabindex="0"
+              role="button"
+              :aria-label="`跳转到第 ${step.index} 步 ${agentLabel(step.agent_id)}`"
+              @click="scrollToStep(step.index)"
+              @keydown.enter.prevent="scrollToStep(step.index)"
+              @keydown.space.prevent="scrollToStep(step.index)"
             >
               <div class="timeline-head">
                 <span class="timeline-index">{{ step.index }}</span>
-                <div class="timeline-copy">
-                  <strong>
-                    <span v-if="isResearchStep(step.agent_id)" class="research-glyph" aria-hidden="true">
-                      {{ step.agent_id === 'researcher' ? '🔍' : '🛡' }}
-                    </span>
-                    {{ agentLabel(step.agent_id) }}
-                  </strong>
-                  <span>{{ step.description }}</span>
-                </div>
+                <strong class="timeline-name">
+                  <span v-if="isResearchStep(step.agent_id)" class="research-glyph" aria-hidden="true">
+                    {{ step.agent_id === 'researcher' ? '🔍' : '🛡' }}
+                  </span>
+                  {{ agentLabel(step.agent_id) }}
+                </strong>
                 <div class="timeline-meta">
-                  <small v-if="toolEventsFor(step.index).length" class="tool-pill">
-                    {{ toolEventsFor(step.index).length }} tool call{{ toolEventsFor(step.index).length === 1 ? '' : 's' }}
+                  <small v-if="toolEventsFor(step.index).length" class="tool-pill" :title="`${toolEventsFor(step.index).length} 个工具调用`">
+                    🛠 {{ toolEventsFor(step.index).length }}
                   </small>
-                  <small v-if="step.duration_ms">{{ step.duration_ms }} ms</small>
+                  <small v-if="step.duration_ms" class="timeline-duration">{{ step.duration_ms }} ms</small>
+                  <span class="timeline-chevron" aria-hidden="true">›</span>
                 </div>
               </div>
               <div v-if="step.revised_at" class="timeline-revised-badge">Planner 修改</div>
@@ -195,61 +199,57 @@
           </ol>
         </section>
 
-        <section
-          v-for="step in plan"
-          :key="`box-${step.index}`"
-          class="studio-surface step-surface"
-          :class="[step.status, { 'is-research': isResearchStep(step.agent_id) }]"
+        <el-dialog
+          v-model="stepDialogOpen"
+          :title="stepDialogStep ? `Step ${stepDialogStep.index} · ${agentLabel(stepDialogStep.agent_id)}` : ''"
+          width="720px"
+          append-to-body
+          destroy-on-close
         >
-          <div class="surface-head compact">
-            <div>
+          <template v-if="stepDialogStep">
+            <div class="step-dialog-meta">
               <span class="surface-kicker">
-                Step {{ step.index }} · {{ step.agent_id }}
-                <span v-if="isResearchStep(step.agent_id)" class="research-tag">research</span>
+                {{ stepDialogStep.agent_id }}
+                <span v-if="isResearchStep(stepDialogStep.agent_id)" class="research-tag">research</span>
               </span>
-              <h2>
-                <span v-if="isResearchStep(step.agent_id)" class="research-glyph" aria-hidden="true">
-                  {{ step.agent_id === 'researcher' ? '🔍' : '🛡' }}
-                </span>
-                {{ agentLabel(step.agent_id) }}
-              </h2>
+              <span class="surface-pill" :class="statusToPill(stepDialogStep.status)">{{ statusLabel(stepDialogStep.status) }}</span>
+              <small v-if="stepDialogStep.duration_ms" class="step-dialog-duration">{{ stepDialogStep.duration_ms }} ms</small>
             </div>
-            <span class="surface-pill" :class="statusToPill(step.status)">{{ statusLabel(step.status) }}</span>
-          </div>
-          <p class="step-description">{{ step.description }}</p>
-          <ul v-if="toolEventsFor(step.index).length" class="tool-trace">
-            <li
-              v-for="(event, idx) in toolEventsFor(step.index)"
-              :key="`${step.index}-${idx}-${event.name}`"
-              class="tool-row"
-              :class="event.status"
-            >
-              <span class="tool-arrow">▸</span>
-              <span class="tool-name">{{ event.name }}</span>
-              <span v-if="formatToolArgs(event.args)" class="tool-args">({{ formatToolArgs(event.args) }})</span>
-              <span v-if="event.status === 'started'" class="tool-status">运行中…</span>
-              <template v-else>
-                <span class="tool-arrow">→</span>
-                <span v-if="event.status === 'failed'" class="tool-error">{{ event.error || '失败' }}</span>
-                <span v-else class="tool-preview">{{ event.preview || '完成' }}</span>
-                <span v-if="event.duration_ms" class="tool-duration">{{ event.duration_ms }} ms</span>
-              </template>
-            </li>
-          </ul>
-          <pre v-if="step.output || streamingOutputs[step.index]" class="step-output">{{ step.output || streamingOutputs[step.index] }}</pre>
-          <div v-else-if="step.status === 'running'" class="step-running">
-            <el-icon class="is-loading"><Loading /></el-icon>
-            <span>正在生成…</span>
-          </div>
-          <div v-else-if="step.status === 'completed'" class="step-empty">
-            该步骤未产出文本输出，仅记录上方工具调用。
-          </div>
-          <div v-else-if="step.status === 'failed'" class="step-empty failed">
-            步骤失败，未产出输出
-          </div>
-          <div v-else-if="step.status === 'skipped'" class="step-empty">已跳过</div>
-          <div v-else class="step-pending">等待执行</div>
-        </section>
+            <p class="step-description">{{ stepDialogStep.description }}</p>
+            <ul v-if="toolEventsFor(stepDialogStep.index).length" class="tool-trace">
+              <li
+                v-for="(event, idx) in toolEventsFor(stepDialogStep.index)"
+                :key="`${stepDialogStep.index}-${idx}-${event.name}`"
+                class="tool-row"
+                :class="event.status"
+              >
+                <span class="tool-arrow">▸</span>
+                <span class="tool-name">{{ event.name }}</span>
+                <span v-if="formatToolArgs(event.args)" class="tool-args">({{ formatToolArgs(event.args) }})</span>
+                <span v-if="event.status === 'started'" class="tool-status">运行中…</span>
+                <template v-else>
+                  <span class="tool-arrow">→</span>
+                  <span v-if="event.status === 'failed'" class="tool-error">{{ event.error || '失败' }}</span>
+                  <span v-else class="tool-preview">{{ event.preview || '完成' }}</span>
+                  <span v-if="event.duration_ms" class="tool-duration">{{ event.duration_ms }} ms</span>
+                </template>
+              </li>
+            </ul>
+            <pre v-if="stepDialogStep.output || streamingOutputs[stepDialogStep.index]" class="step-output">{{ stepDialogStep.output || streamingOutputs[stepDialogStep.index] }}</pre>
+            <div v-else-if="stepDialogStep.status === 'running'" class="step-running">
+              <el-icon class="is-loading"><Loading /></el-icon>
+              <span>正在生成…</span>
+            </div>
+            <div v-else-if="stepDialogStep.status === 'completed'" class="step-empty">
+              该步骤未产出文本输出，仅记录上方工具调用。
+            </div>
+            <div v-else-if="stepDialogStep.status === 'failed'" class="step-empty failed">
+              步骤失败，未产出输出
+            </div>
+            <div v-else-if="stepDialogStep.status === 'skipped'" class="step-empty">已跳过</div>
+            <div v-else class="step-pending">等待执行</div>
+          </template>
+        </el-dialog>
 
         <section v-if="finalContent" class="studio-surface final-surface">
           <div class="surface-head">
@@ -402,6 +402,11 @@ const runId = ref('')
 const plan = ref<PipelinePlanStep[]>([])
 const streamingOutputs = reactive<Record<number, string>>({})
 const stepToolEvents = reactive<Record<number, SubAgentToolEvent[]>>({})
+const stepDialogOpen = ref(false)
+const stepDialogIndex = ref<number | null>(null)
+const stepDialogStep = computed<PipelinePlanStep | null>(() =>
+  stepDialogIndex.value == null ? null : plan.value.find(s => s.index === stepDialogIndex.value) ?? null
+)
 const finalContent = ref<FinalContent | null>(null)
 const savedContentId = ref<number | null>(null)
 const totalPromptTokens = ref(0)
@@ -558,6 +563,16 @@ function toolEventsFor(stepIndex: number): SubAgentToolEvent[] {
   if (live && live.length) return live
   const step = plan.value.find(s => s.index === stepIndex)
   return step?.tool_events ?? []
+}
+
+function registerStepCard(_index: number, _el: HTMLElement | null): void {
+  // No-op now that step detail lives in a dialog. Kept so the template's
+  // legacy :ref="..." (if any other path still passes through) doesn't error.
+}
+
+function scrollToStep(index: number): void {
+  stepDialogIndex.value = index
+  stepDialogOpen.value = true
 }
 
 function formatToolArgs(args: Record<string, unknown>): string {
@@ -1156,6 +1171,7 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-rows: 1fr auto;
   gap: 16px;
+  align-content: start;
 }
 
 
@@ -1309,17 +1325,33 @@ onBeforeUnmount(() => {
   margin: 0;
   padding: 0;
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .timeline-step {
   display: grid;
   gap: 4px;
-  padding: 12px 14px;
+  padding: 8px 12px;
   border: 1px solid var(--c-border);
   border-radius: 6px;
   background: var(--c-bg);
-  transition: border-color 120ms ease;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 120ms ease, background-color 120ms ease, transform 80ms ease;
+}
+
+.timeline-step:hover {
+  border-color: var(--c-border-strong, var(--c-accent));
+  background: var(--c-bg-soft);
+}
+
+.timeline-step:focus-visible {
+  border-color: var(--c-accent);
+  box-shadow: 0 0 0 2px var(--c-accent-soft);
+}
+
+.timeline-step:active {
+  transform: translateY(1px);
 }
 
 .timeline-step.running {
@@ -1390,9 +1422,19 @@ onBeforeUnmount(() => {
 
 .timeline-head {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) auto;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
+}
+
+.timeline-name {
+  color: var(--c-text);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .timeline-index {
@@ -1427,26 +1469,10 @@ onBeforeUnmount(() => {
   background: var(--c-fail-soft);
 }
 
-.timeline-copy strong {
-  display: block;
-  color: var(--c-text);
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-
-.timeline-copy span {
-  display: block;
-  color: var(--c-text-secondary);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
 .timeline-meta {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 2px;
+  align-items: center;
+  gap: 6px;
 }
 
 .timeline-meta small {
@@ -1455,6 +1481,24 @@ onBeforeUnmount(() => {
   font-family: var(--font-mono);
   font-feature-settings: 'tnum';
   font-variant-numeric: tabular-nums;
+}
+
+.timeline-duration {
+  min-width: 4ch;
+  text-align: right;
+}
+
+.timeline-chevron {
+  color: var(--c-text-tertiary);
+  font-size: 16px;
+  line-height: 1;
+  margin-left: 2px;
+  transition: transform 120ms ease, color 120ms ease;
+}
+
+.timeline-step:hover .timeline-chevron {
+  color: var(--c-text);
+  transform: translateX(2px);
 }
 
 .timeline-revised-badge {
@@ -1489,6 +1533,24 @@ onBeforeUnmount(() => {
 
 .step-surface.is-research.completed {
   border-color: #6e56cf;
+}
+
+/* Dialog header that replaces the inline step card surface-head. */
+.step-dialog-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.step-dialog-duration {
+  margin-left: auto;
+  color: var(--c-text-tertiary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-feature-settings: 'tnum';
+  font-variant-numeric: tabular-nums;
 }
 
 .research-surface {

@@ -15,9 +15,10 @@
 
       <div class="selector-field">
         <span>模型</span>
-        <el-select v-model="local.model" placeholder="选择模型">
+        <el-select v-model="local.model" placeholder="选择模型" :fit-input-width="false">
           <el-option v-for="model in activeModels" :key="model.id" :label="model.name" :value="model.id" />
         </el-select>
+        <span v-if="local.model" class="selector-field-caption" :title="local.model">{{ local.model }}</span>
       </div>
     </div>
 
@@ -128,10 +129,23 @@ onMounted(async () => {
   font-weight: 500;
 }
 
+.selector-field-caption {
+  /* Long model ids (e.g. NewAPI's `qwen3.7-plus-preview-thinking`) overflow the
+     el-select input. Show the full id below in mono so users can verify what
+     they actually picked, even if the collapsed input truncates it. */
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--c-text-tertiary);
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+
 .selector-status {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 4px 8px;
   padding: 8px 12px;
   border: 1px solid var(--c-border);
   border-radius: 6px;
@@ -144,6 +158,7 @@ onMounted(async () => {
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
+  margin-top: 6px;
 }
 
 .selector-status-dot.ready {
@@ -167,9 +182,10 @@ onMounted(async () => {
   font-family: var(--font-mono);
   font-size: 11.5px;
   text-align: right;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* Long model ids should wrap rather than be silently ellipsised — the default
+     model name is informational and getting cut off hides which provider/model
+     is currently active. */
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 900px) {
