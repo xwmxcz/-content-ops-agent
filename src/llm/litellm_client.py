@@ -46,6 +46,11 @@ class LiteLLMClient:
             import litellm
         except ImportError as exc:
             raise LLMGenerationError("LLM dependency is not installed") from exc
+        # Mute the "Give Feedback / Get Help: https://github.com/BerriAI/litellm/..."
+        # footer litellm appends to every exception's str(). It's not actionable for
+        # end users and shows up in our SSE step_failed events. Real error text is
+        # still preserved via _format_provider_error.
+        litellm.suppress_debug_info = True
 
         provider = provider.lower()
         api_key = self._api_key(provider)
@@ -73,7 +78,7 @@ class LiteLLMClient:
                 f"LLM request timed out after {config.LLM_TIMEOUT_SECONDS:g} seconds"
             ) from exc
         except Exception as exc:
-            raise LLMGenerationError("LLM request failed") from exc
+            raise LLMGenerationError(_format_provider_error(provider, exc)) from exc
 
         content = response.choices[0].message.content or ""
         if not content.strip():
@@ -118,6 +123,7 @@ class LiteLLMClient:
             import litellm
         except ImportError as exc:
             raise LLMGenerationError("LLM dependency is not installed") from exc
+        litellm.suppress_debug_info = True
 
         provider = provider.lower()
         api_key = self._api_key(provider)
@@ -144,6 +150,13 @@ class LiteLLMClient:
             response = await litellm.acompletion(**request)
         except Exception as exc:
             # Stream not supported → fall back to one-shot
+            import sys
+            print(
+                f"[litellm.stream] open failed, falling back to non-stream: "
+                f"{type(exc).__name__}: {_format_provider_error(provider, exc)}",
+                file=sys.stderr,
+                flush=True,
+            )
             text = await self.generate_from_prompts(
                 provider=provider,
                 model=model,
@@ -218,4 +231,61 @@ class LiteLLMClient:
             return config.DEEPSEEK_API_KEY
         if provider == "moonshot":
             return config.MOONSHOT_API_KEY
+        if provider == "newapi":
+            return config.NEWAPI_API_KEY
         raise LLMConfigurationError(f"Unsupported provider: {provider}")
+
+
+def _format_provider_error(provider: str, exc: BaseException) -> str:
+    """Distil litellm/provider exceptions into a single human-readable line.
+
+    litellm wraps upstream errors in `APIError` whose `str()` contains the upstream
+    body but is buried under a "Give Feedback / Get Help" footer (already muted via
+    `suppress_debug_info`). For NewAPI specifically, the upstream JSON body holds
+    the only useful diagnostic ("model_not_found", "No active API keys", etc.) so
+    we prefer that over the litellm wrapping.
+    """
+    import re
+
+    raw = str(exc) or exc.__class__.__name__
+
+    # Try the upstream JSON error body first (NewAPI / OpenAI gateways embed it).
+    # Brace-count so we handle nested objects like {"error":{...}} correctly —
+    # a regex with non-greedy .*? would stop at the first inner `}`.
+    start = raw.find('{"error"')
+    if start != -1:
+        depth = 0
+        end = -1
+        for idx, ch in enumerate(raw[start:], start=start):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = idx + 1
+                    break
+        if end != -1:
+            try:
+                import json
+                body = json.loads(raw[start:end])
+                msg = (body.get("error") or {}).get("message") or ""
+                if msg:
+                    status_match = re.search(r"status code: (\d+)", raw)
+                    status = f"HTTP {status_match.group(1)} " if status_match else ""
+                    return f"{provider}: {status}{msg.strip()}"
+            except (ValueError, TypeError):
+                pass
+
+    # Fall back to the first non-empty line, stripping the litellm wrapping prefix
+    # so users see "openai_error" instead of "litellm.APIError: APIError: OpenAIException - openai_error".
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        cleaned = re.sub(
+            r"^litellm\.[A-Za-z]+Error:\s*[A-Za-z]+Error:\s*[A-Za-z]+Exception\s*-\s*",
+            "",
+            line,
+        )
+        return f"{provider}: {cleaned}"
+    return f"{provider}: {exc.__class__.__name__}"
