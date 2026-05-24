@@ -2,7 +2,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routes import agent, calendar, content, health, jobs, media, models, publish, stats
+from src.api.routes import agent, calendar, content, health, jobs, media, memory, models, publish, stats
 from src.utils import config
 
 
@@ -29,3 +29,4 @@ app.include_router(publish.router, prefix="/api/publish", tags=["publish"])
 app.include_router(stats.router, prefix="/api/stats", tags=["stats"])
 app.include_router(agent.router, prefix="/api/agent", tags=["agent"])
 app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
+app.include_router(memory.router, prefix="/api/memories", tags=["memories"])

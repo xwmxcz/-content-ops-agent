@@ -222,6 +222,25 @@ class AgentRunEvent(Base):
 Index("ix_agent_run_events_run_seq", AgentRunEvent.run_id, AgentRunEvent.seq)
 
 
+class AgentMemory(Base):
+    """Long-term semantic memory for the chat agent."""
+    __tablename__ = "agent_memories"
+
+    id = Column(String(80), primary_key=True)
+    content = Column(Text, nullable=False)
+    category = Column(String(50), nullable=False)
+    importance = Column(Float, default=0.5)
+    source_thread_id = Column(String(80), nullable=True)
+    access_count = Column(Integer, default=0)
+    last_used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+Index("ix_agent_memories_category", AgentMemory.category)
+Index("ix_agent_memories_importance", AgentMemory.importance)
+
+
 class ContentStore:
     """内容存储管理类"""
 
@@ -1379,4 +1398,125 @@ class ContentStore:
             "updated_at": job.updated_at.isoformat() if job.updated_at else None,
             "started_at": job.started_at.isoformat() if job.started_at else None,
             "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+        }
+
+    # ─── Memory CRUD ───────────────────────────────────────────────────────
+
+    def save_memory(
+        self,
+        memory_id: str,
+        content: str,
+        category: str,
+        importance: float = 0.5,
+        source_thread_id: str | None = None,
+    ) -> Dict[str, Any]:
+        session = self._get_session()
+        try:
+            existing = session.query(AgentMemory).filter_by(id=memory_id).first()
+            if existing:
+                existing.content = content
+                existing.category = category
+                existing.importance = importance
+                existing.updated_at = datetime.now()
+            else:
+                existing = AgentMemory(
+                    id=memory_id,
+                    content=content,
+                    category=category,
+                    importance=importance,
+                    source_thread_id=source_thread_id,
+                )
+                session.add(existing)
+            session.commit()
+            return self._memory_to_dict(existing)
+        except Exception:
+            session.rollback()
+            raise
+
+    def get_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
+        session = self._get_session()
+        mem = session.query(AgentMemory).filter_by(id=memory_id).first()
+        return self._memory_to_dict(mem) if mem else None
+
+    def search_memories_text(self, query: str, category: str | None = None, limit: int = 10) -> List[Dict[str, Any]]:
+        session = self._get_session()
+        q = session.query(AgentMemory)
+        if category:
+            q = q.filter(AgentMemory.category == category)
+        q = q.filter(AgentMemory.content.ilike(f"%{query}%"))
+        q = q.order_by(AgentMemory.importance.desc(), AgentMemory.updated_at.desc())
+        return [self._memory_to_dict(m) for m in q.limit(limit).all()]
+
+    def touch_memory(self, memory_id: str) -> None:
+        session = self._get_session()
+        try:
+            mem = session.query(AgentMemory).filter_by(id=memory_id).first()
+            if mem:
+                mem.access_count = (mem.access_count or 0) + 1
+                mem.last_used_at = datetime.now()
+                session.commit()
+        except Exception:
+            session.rollback()
+            raise
+
+    def delete_memory(self, memory_id: str) -> bool:
+        session = self._get_session()
+        try:
+            mem = session.query(AgentMemory).filter_by(id=memory_id).first()
+            if not mem:
+                return False
+            session.delete(mem)
+            session.commit()
+            return True
+        except Exception:
+            session.rollback()
+            raise
+
+    def count_memories(self) -> int:
+        session = self._get_session()
+        return session.query(AgentMemory).count()
+
+    def evict_memories(self, keep_count: int) -> int:
+        session = self._get_session()
+        try:
+            all_mems = session.query(AgentMemory).all()
+            if len(all_mems) <= keep_count:
+                return 0
+            now = datetime.now()
+            scored = []
+            for m in all_mems:
+                days_since_use = (now - (m.last_used_at or m.created_at)).days
+                recency_score = max(0.0, 1.0 - days_since_use / 90.0)
+                score = (m.importance or 0.5) * 0.7 + recency_score * 0.3
+                scored.append((score, m))
+            scored.sort(key=lambda x: x[0], reverse=True)
+            to_delete = scored[keep_count:]
+            for _, m in to_delete:
+                session.delete(m)
+            session.commit()
+            return len(to_delete)
+        except Exception:
+            session.rollback()
+            raise
+
+    def list_memories(self, category: str | None = None, limit: int = 50) -> List[Dict[str, Any]]:
+        session = self._get_session()
+        q = session.query(AgentMemory)
+        if category:
+            q = q.filter(AgentMemory.category == category)
+        q = q.order_by(AgentMemory.importance.desc(), AgentMemory.updated_at.desc())
+        return [self._memory_to_dict(m) for m in q.limit(limit).all()]
+
+    @staticmethod
+    def _memory_to_dict(mem: AgentMemory) -> Dict[str, Any]:
+        return {
+            "id": mem.id,
+            "content": mem.content,
+            "category": mem.category,
+            "importance": mem.importance,
+            "source_thread_id": mem.source_thread_id,
+            "access_count": mem.access_count or 0,
+            "last_used_at": mem.last_used_at.isoformat() if mem.last_used_at else None,
+            "created_at": mem.created_at.isoformat() if mem.created_at else None,
+            "updated_at": mem.updated_at.isoformat() if mem.updated_at else None,
         }

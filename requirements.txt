@@ -15,3 +15,6 @@ rq>=1.16.0
 psycopg[binary]>=3.1.0
 gunicorn>=22.0.0
 python-multipart>=0.0.9
+chromadb>=0.5.0
+sentence-transformers>=3.0.0
+langchain-community>=0.3.0

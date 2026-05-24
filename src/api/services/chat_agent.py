@@ -24,7 +24,7 @@ from src.utils import config
 
 MAX_LOOPS = 8
 MAX_FAILURES_PER_TOOL = 2
-WRITE_TOOLS = {"create_content", "refine_content", "add_to_calendar"}
+WRITE_TOOLS = {"create_content", "refine_content", "add_to_calendar", "remember", "forget"}
 PLANNER_TEMPERATURE = 0.3
 PLANNER_MAX_TOKENS = 1024
 AVAILABLE_TOOL_NAMES = [
@@ -33,6 +33,7 @@ AVAILABLE_TOOL_NAMES = [
     "get_content_stats", "check_xiaohongshu_login", "search_history",
     "web_search", "analyze_content_performance", "find_optimization_candidates",
     "propose_topics", "propose_publishing_schedule", "commit_publishing_schedule",
+    "remember", "recall", "forget", "list_memories",
 ]
 PLANNER_SYSTEM_PROMPT = (
     "You are a planner. Given the user's request and the available tools, "
@@ -85,7 +86,16 @@ When the user asks to "schedule" or "plan publishing" for content items:
 Write tools (create_content, refine_content, add_to_calendar, commit_publishing_schedule)
 have side effects — never call them without first showing the user what you intend to do
 and getting confirmation, unless the user's original request was already an explicit
-"please do X now" instruction."""
+"please do X now" instruction.
+
+Long-term memory:
+- You have access to `remember` and `recall` tools for persistent cross-session memory.
+- Use `remember` to save user preferences, important facts, or recurring instructions
+  (e.g., "用户偏好简洁风格", "用户的品牌名是 XX"). This is a write tool — confirm before saving.
+- Use `recall` to search past memories when context would help (e.g., user style preferences,
+  past decisions, recurring topics). Recalled memories are injected below when relevant.
+- Do NOT remember ephemeral information (one-off requests, temporary states).
+- When memories conflict with the current request, trust the current request."""
 
 
 _WEEKDAY_CN = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
@@ -121,10 +131,12 @@ class ChatAgentService:
         store: ContentStore,
         llm: LiteLLMClient | None = None,
         model_factory: ModelFactory | None = None,
+        memory_store=None,
     ):
         self.store = store
         self.llm = llm or LiteLLMClient()
         self.model_factory = model_factory or self._create_chat_model
+        self.memory_store = memory_store
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         provider = resolve_provider(request.provider)
@@ -265,6 +277,10 @@ class ChatAgentService:
                 "Mark progress by calling tools roughly in this order. "
                 "If a step does not need a tool, you may skip it."
             )
+
+        memory_context = self._auto_recall(message)
+        if memory_context:
+            system_prompt = system_prompt + memory_context
 
         messages: list[BaseMessage] = [SystemMessage(content=system_prompt)]
         messages.extend(self._history_to_messages(history))
@@ -732,6 +748,73 @@ class ChatAgentService:
                 })
             return json.dumps({"saved": saved, "skipped": skipped, "committed": True}, ensure_ascii=False)
 
+        def remember(content: str, category: str = "fact", importance: float = 0.5) -> str:
+            """Save a piece of information to long-term memory for future conversations.
+
+            Categories: preference, fact, context, instruction.
+            Importance: 0.0 (trivial) to 1.0 (critical).
+            """
+            from uuid import uuid4
+            memory_id = f"mem_{uuid4().hex[:16]}"
+            self.store.save_memory(
+                memory_id=memory_id,
+                content=content,
+                category=category,
+                importance=min(max(importance, 0.0), 1.0),
+                source_thread_id=None,
+            )
+            if self.memory_store:
+                self.memory_store.add(memory_id, content, category)
+            total = self.store.count_memories()
+            if total > config.MEMORY_MAX_COUNT:
+                self.store.evict_memories(config.MEMORY_MAX_COUNT)
+            return json.dumps({"saved": True, "id": memory_id, "content": content, "category": category}, ensure_ascii=False)
+
+        def recall(query: str, category: str | None = None, limit: int = 5) -> str:
+            """Search long-term memory for relevant past information.
+
+            Returns memories ranked by semantic similarity to the query.
+            """
+            results = []
+            if self.memory_store:
+                results = self.memory_store.query(
+                    text=query,
+                    n_results=limit,
+                    category=category,
+                    threshold=config.MEMORY_SIMILARITY_THRESHOLD,
+                )
+                for r in results:
+                    self.store.touch_memory(r["id"])
+            if not results:
+                results = self.store.search_memories_text(query, category=category, limit=limit)
+            return json.dumps({"memories": results, "count": len(results)}, ensure_ascii=False)
+
+        def forget(query: str) -> str:
+            """Delete a memory by searching for it first, then removing the best match.
+
+            Use when the user asks to forget or remove a previously saved memory.
+            """
+            results = []
+            if self.memory_store:
+                results = self.memory_store.query(text=query, n_results=1, threshold=0.3)
+            if not results:
+                results = self.store.search_memories_text(query, limit=1)
+            if not results:
+                return json.dumps({"deleted": False, "reason": "No matching memory found"}, ensure_ascii=False)
+            target = results[0]
+            self.store.delete_memory(target["id"])
+            if self.memory_store:
+                self.memory_store.delete(target["id"])
+            return json.dumps({"deleted": True, "id": target["id"], "content": target["content"]}, ensure_ascii=False)
+
+        def list_memories(category: str | None = None, limit: int = 20) -> str:
+            """List all saved memories, optionally filtered by category.
+
+            Categories: preference, fact, context, instruction.
+            """
+            mems = self.store.list_memories(category=category, limit=limit)
+            return json.dumps({"memories": mems, "count": len(mems)}, ensure_ascii=False)
+
         return [
             StructuredTool.from_function(coroutine=create_content, name="create_content"),
             StructuredTool.from_function(coroutine=refine_content, name="refine_content"),
@@ -750,7 +833,30 @@ class ChatAgentService:
             StructuredTool.from_function(func=propose_topics, name="propose_topics"),
             StructuredTool.from_function(func=propose_publishing_schedule, name="propose_publishing_schedule"),
             StructuredTool.from_function(func=commit_publishing_schedule, name="commit_publishing_schedule"),
+            StructuredTool.from_function(func=remember, name="remember"),
+            StructuredTool.from_function(func=recall, name="recall"),
+            StructuredTool.from_function(func=forget, name="forget"),
+            StructuredTool.from_function(func=list_memories, name="list_memories"),
         ]
+
+    def _auto_recall(self, message: str) -> str:
+        """Retrieve relevant memories and format as context block."""
+        if not self.memory_store:
+            return ""
+        try:
+            results = self.memory_store.query(
+                text=message,
+                n_results=config.MEMORY_AUTO_RECALL_LIMIT,
+                threshold=config.MEMORY_SIMILARITY_THRESHOLD,
+            )
+            if not results:
+                return ""
+            for r in results:
+                self.store.touch_memory(r["id"])
+            lines = [f"- [{r['category']}] {r['content']}" for r in results]
+            return "\n\nRelevant memories from past conversations:\n" + "\n".join(lines)
+        except Exception:
+            return ""
 
     @staticmethod
     def _create_chat_model(provider: str, model: str, temperature: float, max_tokens: int):

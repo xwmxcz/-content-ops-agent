@@ -85,6 +85,7 @@ import { useRoute } from 'vue-router'
 import {
   Calendar,
   ChatDotRound,
+  Collection,
   House,
   MagicStick,
   Tickets,
@@ -103,7 +104,8 @@ const route = useRoute()
 const workspaceNav: NavItem[] = [
   { to: '/', label: '内容工作台', icon: House, exact: true },
   { to: '/refine', label: '内容打磨', icon: MagicStick },
-  { to: '/chat', label: 'Agent 对话', icon: ChatDotRound }
+  { to: '/chat', label: 'Agent 对话', icon: ChatDotRound },
+  { to: '/memory', label: '记忆管理', icon: Collection }
 ]
 
 const operationsNav: NavItem[] = [
