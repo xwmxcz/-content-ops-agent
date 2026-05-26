@@ -73,6 +73,8 @@ Core implementation areas:
 
 ### Publishing Calendar
 
+![Publishing Calendar](docs/screenshots/calendar.png)
+
 The Calendar page is an operational scheduling board: it summarizes the next 60 days, highlights today's planned posts, groups events by platform, and shows the selected day's agenda alongside the upcoming queue.
 
 ## Runtime Modes
