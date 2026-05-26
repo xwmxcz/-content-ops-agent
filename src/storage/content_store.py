@@ -1432,20 +1432,28 @@ class ContentStore:
         except Exception:
             session.rollback()
             raise
+        finally:
+            session.close()
 
     def get_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
         session = self._get_session()
-        mem = session.query(AgentMemory).filter_by(id=memory_id).first()
-        return self._memory_to_dict(mem) if mem else None
+        try:
+            mem = session.query(AgentMemory).filter_by(id=memory_id).first()
+            return self._memory_to_dict(mem) if mem else None
+        finally:
+            session.close()
 
     def search_memories_text(self, query: str, category: str | None = None, limit: int = 10) -> List[Dict[str, Any]]:
         session = self._get_session()
-        q = session.query(AgentMemory)
-        if category:
-            q = q.filter(AgentMemory.category == category)
-        q = q.filter(AgentMemory.content.ilike(f"%{query}%"))
-        q = q.order_by(AgentMemory.importance.desc(), AgentMemory.updated_at.desc())
-        return [self._memory_to_dict(m) for m in q.limit(limit).all()]
+        try:
+            q = session.query(AgentMemory)
+            if category:
+                q = q.filter(AgentMemory.category == category)
+            q = q.filter(AgentMemory.content.ilike(f"%{query}%"))
+            q = q.order_by(AgentMemory.importance.desc(), AgentMemory.updated_at.desc())
+            return [self._memory_to_dict(m) for m in q.limit(limit).all()]
+        finally:
+            session.close()
 
     def touch_memory(self, memory_id: str) -> None:
         session = self._get_session()
@@ -1458,6 +1466,8 @@ class ContentStore:
         except Exception:
             session.rollback()
             raise
+        finally:
+            session.close()
 
     def delete_memory(self, memory_id: str) -> bool:
         session = self._get_session()
@@ -1471,10 +1481,15 @@ class ContentStore:
         except Exception:
             session.rollback()
             raise
+        finally:
+            session.close()
 
     def count_memories(self) -> int:
         session = self._get_session()
-        return session.query(AgentMemory).count()
+        try:
+            return session.query(AgentMemory).count()
+        finally:
+            session.close()
 
     def evict_memories(self, keep_count: int) -> int:
         session = self._get_session()
@@ -1498,14 +1513,19 @@ class ContentStore:
         except Exception:
             session.rollback()
             raise
+        finally:
+            session.close()
 
     def list_memories(self, category: str | None = None, limit: int = 50) -> List[Dict[str, Any]]:
         session = self._get_session()
-        q = session.query(AgentMemory)
-        if category:
-            q = q.filter(AgentMemory.category == category)
-        q = q.order_by(AgentMemory.importance.desc(), AgentMemory.updated_at.desc())
-        return [self._memory_to_dict(m) for m in q.limit(limit).all()]
+        try:
+            q = session.query(AgentMemory)
+            if category:
+                q = q.filter(AgentMemory.category == category)
+            q = q.order_by(AgentMemory.importance.desc(), AgentMemory.updated_at.desc())
+            return [self._memory_to_dict(m) for m in q.limit(limit).all()]
+        finally:
+            session.close()
 
     @staticmethod
     def _memory_to_dict(mem: AgentMemory) -> Dict[str, Any]:

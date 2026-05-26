@@ -21,7 +21,21 @@ api.interceptors.response.use(
   response => response,
   error => {
     const detail = error.response?.data?.detail
-    const message = typeof detail === 'string' ? detail : detail?.message ?? error.message
+    const status = error.response?.status
+    const message = typeof detail === 'string' ? detail : detail?.message ?? fallbackApiMessage(status, error.message)
     return Promise.reject(new ApiError(message, error.response?.status, detail))
   }
 )
+
+function fallbackApiMessage(status?: number, rawMessage = '请求失败') {
+  if (status === 400) return '请求参数有误'
+  if (status === 401) return '未授权，请重新登录'
+  if (status === 403) return '没有权限执行该操作'
+  if (status === 404) return '请求的资源不存在'
+  if (status === 429) return '请求过于频繁，请稍后再试'
+  if (status === 500) return '服务器内部错误，请查看后端日志'
+  if (status === 502) return '上游模型或服务调用失败'
+  if (status === 503) return '服务暂时不可用，请稍后再试'
+  if (status) return `请求失败，状态码 ${status}`
+  return rawMessage === 'Network Error' ? '网络连接失败，请确认后端服务已启动' : rawMessage
+}

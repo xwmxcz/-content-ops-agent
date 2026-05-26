@@ -11,7 +11,7 @@
 
       <nav class="sidebar-nav" aria-label="Primary">
         <div class="nav-section">
-          <span class="nav-caption">Workspace</span>
+          <span class="nav-caption">工作区</span>
           <router-link
             v-for="item in workspaceNav"
             :key="item.to"
@@ -25,7 +25,7 @@
         </div>
 
         <div class="nav-section">
-          <span class="nav-caption">Operations</span>
+          <span class="nav-caption">运营</span>
           <router-link
             v-for="item in operationsNav"
             :key="item.to"
@@ -40,20 +40,20 @@
       </nav>
 
       <div class="sidebar-foot">
-        <span class="foot-kicker">Pipeline</span>
-        <strong>4-stage content system</strong>
-        <p>Strategy, Writer, Editor, Review</p>
+        <span class="foot-kicker">流水线</span>
+        <strong>四阶段内容系统</strong>
+        <p>策略、写作、润色、审核</p>
       </div>
     </aside>
 
     <div class="shell-main">
       <header class="shell-topbar">
         <div class="topbar-copy">
-          <span class="topbar-kicker">Content Operations Console</span>
+          <span class="topbar-kicker">内容运营控制台</span>
           <strong>{{ currentPage.label }}</strong>
         </div>
         <div class="topbar-pills">
-          <span class="topbar-pill live">Pipeline Ready</span>
+          <span class="topbar-pill live">流水线就绪</span>
           <span class="topbar-pill">FastAPI</span>
           <span class="topbar-pill">Vue 3</span>
           <span class="topbar-pill">LiteLLM</span>

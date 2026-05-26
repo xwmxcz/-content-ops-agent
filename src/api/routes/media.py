@@ -94,8 +94,8 @@ def delete_media_asset(
     if not asset:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media asset not found")
 
-    file_path = Path(asset["file_path"])
-    if file_path.exists():
+    file_path = _media_file_path(asset)
+    if file_path and file_path.exists():
         file_path.unlink()
     return {"deleted": True}
 
@@ -109,10 +109,23 @@ def get_media_file(
     if not asset:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media asset not found")
 
-    file_path = Path(asset["file_path"])
+    file_path = _media_file_path(asset)
+    if not file_path:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media file not found")
     if not file_path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media file not found")
     return FileResponse(path=file_path, media_type=asset.get("mime_type"), filename=asset.get("file_name"))
+
+
+def _media_file_path(asset: dict) -> Path | None:
+    try:
+        media_root = Path(config.MEDIA_STORAGE_ROOT).resolve()
+        file_path = Path(asset["file_path"]).resolve()
+    except (KeyError, OSError):
+        return None
+    if file_path == media_root or media_root not in file_path.parents:
+        return None
+    return file_path
 
 
 def _with_file_url(asset: dict) -> dict:

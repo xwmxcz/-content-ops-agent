@@ -12,6 +12,7 @@ from src.api.schemas.content import GenerateRequest
 from src.api.services.chat_agent import ChatAgentService
 from src.api.services.publish_service import PublishService
 from src.api.schemas.models import ModelInfo
+from src.api.routes import media as media_routes
 from src.api.routes import models as model_routes
 from src.llm.litellm_client import LLMGenerationError
 from src.models import ContentType, GeneratedContent
@@ -657,6 +658,41 @@ def test_media_upload_and_image_publish_flow(client, store, fake_xhs_mcp):
     assert store.get_content(content_id)["status"] == "published"
     assert fake_xhs_mcp.calls[0][0] == "publish_content"
     assert len(fake_xhs_mcp.calls[0][1]["images"]) == 1
+
+
+def test_media_file_routes_do_not_touch_files_outside_media_root(client, store, tmp_path, monkeypatch):
+    content_id = store.save_content(
+        GeneratedContent(
+            title="Unsafe media path",
+            content="Keep route file access inside the configured media root.",
+            tags=["media"],
+            content_type=ContentType.XIAOHONGSHU,
+        ),
+        style="casual",
+    )
+    media_root = tmp_path / "media"
+    outside_file = tmp_path / "outside" / "keep.jpg"
+    outside_file.parent.mkdir()
+    outside_file.write_bytes(b"outside")
+    monkeypatch.setattr(media_routes.config, "MEDIA_STORAGE_ROOT", str(media_root))
+
+    asset = store.save_media_asset(
+        content_id=content_id,
+        media_type="image",
+        source_type="upload",
+        file_name="keep.jpg",
+        file_path=str(outside_file),
+        mime_type="image/jpeg",
+    )
+
+    file_response = client.get(f"/api/media/{asset['id']}/file")
+    assert file_response.status_code == 404
+
+    delete_response = client.delete(f"/api/media/{asset['id']}")
+    assert delete_response.status_code == 200
+    assert delete_response.json() == {"deleted": True}
+    assert outside_file.exists()
+    assert store.get_media_asset(asset["id"]) is None
 
 
 def test_publish_rejects_text_only_content(client, store):
