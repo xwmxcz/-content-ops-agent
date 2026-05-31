@@ -7,8 +7,8 @@
         <p class="page-subtitle">多轮会话、模型切换和内容工具调用都会记录在当前 thread。</p>
       </div>
       <div class="hero-actions">
-        <el-button :icon="Refresh" :loading="threadsLoading" @click="loadThreads">刷新</el-button>
-        <el-button type="primary" :icon="Plus" @click="startNewThread">新建会话</el-button>
+        <el-button :icon="Refresh" :loading="chat.threadsLoading" @click="refreshThreads">刷新</el-button>
+        <el-button type="primary" :icon="Plus" @click="chat.startNewThread()">新建会话</el-button>
       </div>
     </section>
 
@@ -16,47 +16,125 @@
       <aside class="thread-panel">
         <div class="panel-head">
           <span>Threads</span>
-          <strong>{{ threads.length }}</strong>
+          <strong>{{ chat.threads.length }}</strong>
         </div>
 
-        <div v-if="!threads.length" class="thread-empty">暂无会话</div>
-        <button
-          v-for="thread in threads"
-          :key="thread.id"
-          type="button"
-          class="thread-item"
-          :class="{ active: thread.id === activeThreadId }"
-          @click="selectThread(thread.id)"
-        >
-          <span>{{ thread.title || thread.id }}</span>
-          <small>{{ thread.message_count }} 条消息 · {{ thread.last_model || '自动模型' }}</small>
-        </button>
+        <div class="thread-search">
+          <el-input
+            v-model="searchInput"
+            placeholder="搜索消息内容"
+            size="small"
+            clearable
+            :prefix-icon="Search"
+            @input="onSearchInput"
+            @clear="onSearchClear"
+          />
+        </div>
+
+        <label class="thread-toggle">
+          <input type="checkbox" :checked="chat.includeArchived" @change="onIncludeArchivedChange" />
+          <span>显示已归档</span>
+        </label>
+
+        <div class="thread-list">
+          <!-- Search results override the thread list when a query is active. -->
+          <div v-if="isSearchActive" class="search-results">
+            <div v-if="chat.searching" class="thread-empty">搜索中…</div>
+            <div v-else-if="!chat.searchResults.length" class="thread-empty">无匹配结果</div>
+            <button
+              v-for="hit in chat.searchResults"
+              :key="`${hit.thread_id}-${hit.message_id}`"
+              type="button"
+              class="thread-item"
+              :class="{ active: hit.thread_id === chat.activeThreadId }"
+              @click="jumpToThread(hit.thread_id)"
+            >
+              <span class="thread-title">{{ threadLabel(hit.thread_id) }}</span>
+              <small class="search-snippet">{{ snippet(hit.content) }}</small>
+              <small>{{ hit.role === 'user' ? 'You' : 'Agent' }} · {{ formatTime(hit.created_at) }}</small>
+            </button>
+          </div>
+
+          <template v-else>
+            <div v-if="!chat.threads.length && !chat.threadsLoading" class="thread-empty">暂无会话</div>
+            <div
+              v-for="thread in chat.threads"
+              :key="thread.id"
+              class="thread-item"
+              :class="{ active: thread.id === chat.activeThreadId, pinned: thread.pinned, archived: thread.archived }"
+            >
+              <button type="button" class="thread-item-body" @click="selectThread(thread.id)">
+                <span class="thread-title">
+                  <span v-if="thread.pinned" class="pin-mark" title="已置顶">📌</span>
+                  <span v-if="thread.archived" class="archive-mark" title="已归档">🗄</span>
+                  {{ thread.title || thread.id }}
+                </span>
+                <small>{{ thread.message_count }} 条消息 · {{ thread.last_model || '自动模型' }}</small>
+              </button>
+              <div class="thread-actions" @click.stop>
+                <el-button text size="small" :icon="Edit" aria-label="重命名" @click="renameThread(thread)" />
+                <el-button
+                  text
+                  size="small"
+                  :icon="Top"
+                  :class="{ 'is-active': thread.pinned }"
+                  :aria-label="thread.pinned ? '取消置顶' : '置顶'"
+                  @click="togglePin(thread)"
+                />
+                <el-button
+                  text
+                  size="small"
+                  :icon="thread.archived ? FolderOpened : FolderRemove"
+                  :class="{ 'is-active': thread.archived }"
+                  :aria-label="thread.archived ? '取消归档' : '归档'"
+                  @click="toggleArchive(thread)"
+                />
+                <el-button text size="small" type="danger" :icon="Delete" aria-label="删除" @click="removeThread(thread)" />
+              </div>
+            </div>
+            <button
+              v-if="chat.hasMoreThreads"
+              type="button"
+              class="thread-load-more"
+              :disabled="chat.threadsLoading"
+              @click="chat.loadMoreThreads()"
+            >
+              {{ chat.threadsLoading ? '加载中…' : '加载更多' }}
+            </button>
+          </template>
+        </div>
       </aside>
 
       <main class="dialog-panel">
         <div class="dialog-head">
           <div>
             <span class="panel-kicker">Current Thread</span>
-            <strong>{{ activeThreadId || 'New thread' }}</strong>
+            <strong>{{ currentThreadLabel }}</strong>
           </div>
-          <el-button
-            v-if="activeThreadId"
-            :icon="Delete"
-            text
-            type="danger"
-            aria-label="删除当前会话"
-            @click="removeThread(activeThreadId)"
-          />
+          <div v-if="chat.activeThreadId" class="dialog-head-actions">
+            <el-button text :icon="Edit" aria-label="重命名当前会话" @click="renameActive" />
+            <el-button text type="danger" :icon="Delete" aria-label="删除当前会话" @click="removeActive" />
+          </div>
         </div>
 
         <div ref="logRef" class="chat-log">
-          <div v-if="!messages.length" class="chat-empty">
+          <button
+            v-if="chat.hasMoreMessages"
+            type="button"
+            class="load-older"
+            :disabled="chat.messagesLoading"
+            @click="loadOlder"
+          >
+            {{ chat.messagesLoading ? '加载中…' : '加载更早的消息' }}
+          </button>
+
+          <div v-if="!chat.messages.length" class="chat-empty">
             <strong>开始一次运营对话</strong>
             <p>可以让 Agent 查询内容库、生成草稿、打磨内容或安排发布日历。</p>
           </div>
 
           <article
-            v-for="message in messages"
+            v-for="message in chat.messages"
             :key="message.local_id || message.id"
             class="message-row"
             :class="message.role"
@@ -134,7 +212,7 @@
           />
           <div class="composer-actions">
             <span>{{ modelConfig.provider || '自动提供商' }} / {{ modelConfig.model || '自动模型' }}</span>
-            <el-button type="primary" :icon="Position" :loading="loading" @click="send">发送</el-button>
+            <el-button type="primary" :icon="Position" :loading="chat.sending" @click="send">发送</el-button>
           </div>
         </div>
       </main>
@@ -160,30 +238,23 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus/es/components/message/index'
-import { Delete, Plus, Position, Refresh } from '@element-plus/icons-vue'
-import ModelSelector from '../components/ModelSelector.vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  chat,
-  deleteAgentThread,
-  getAgentMessages,
-  getAgentThreads,
-  type AgentMessage,
-  type AgentThread,
-  type ChatToolEvent,
-  type PlanStep
-} from '../api/agent'
-
-type UiMessage = Partial<AgentMessage> & {
-  local_id?: string
-  role: 'user' | 'assistant'
-  content: string
-  pending?: boolean
-  tool_events?: ChatToolEvent[]
-  plan?: PlanStep[]
-}
+  Delete,
+  Edit,
+  FolderOpened,
+  FolderRemove,
+  Plus,
+  Position,
+  Refresh,
+  Search,
+  Top
+} from '@element-plus/icons-vue'
+import ModelSelector from '../components/ModelSelector.vue'
+import { useChatStore } from '../stores/chat'
+import type { AgentThread, ChatToolEvent, PlanStep } from '../api/agent'
 
 const tools = [
   'create_content',
@@ -199,104 +270,156 @@ const tools = [
   'search_history'
 ]
 
+const chat = useChatStore()
 const input = ref('')
 const route = useRoute()
 const router = useRouter()
-const loading = ref(false)
-const threadsLoading = ref(false)
-const activeThreadId = ref<string>()
-const threads = ref<AgentThread[]>([])
-const messages = ref<UiMessage[]>([])
 const logRef = ref<HTMLElement>()
 const modelConfig = reactive({ provider: '', model: '', temperature: 0.7, max_tokens: 2048 })
+const searchInput = ref('')
 
-async function loadThreads() {
-  threadsLoading.value = true
+const isSearchActive = computed(() => Boolean(chat.searchQuery))
+const currentThreadLabel = computed(() => {
+  if (!chat.activeThreadId) return 'New thread'
+  return chat.activeThread?.title || chat.activeThreadId
+})
+
+let searchDebounce: ReturnType<typeof setTimeout> | undefined
+
+function onSearchInput(value: string) {
+  if (searchDebounce) clearTimeout(searchDebounce)
+  searchDebounce = setTimeout(() => {
+    void chat.runSearch(value)
+  }, 250)
+}
+
+function onSearchClear() {
+  if (searchDebounce) clearTimeout(searchDebounce)
+  chat.clearSearch()
+}
+
+async function onIncludeArchivedChange(event: Event) {
+  const target = event.target as HTMLInputElement
   try {
-    threads.value = await getAgentThreads()
+    await chat.setIncludeArchived(target.checked)
   } catch (error) {
     ElMessage.error((error as Error).message)
-  } finally {
-    threadsLoading.value = false
+  }
+}
+
+async function refreshThreads() {
+  try {
+    await chat.loadThreads({ reset: true })
+  } catch (error) {
+    ElMessage.error((error as Error).message)
   }
 }
 
 async function selectThread(threadId: string) {
-  activeThreadId.value = threadId
   try {
-    messages.value = await getAgentMessages(threadId)
+    await chat.selectThread(threadId)
     await scrollToBottom()
   } catch (error) {
     ElMessage.error((error as Error).message)
   }
 }
 
-function startNewThread() {
-  activeThreadId.value = undefined
-  messages.value = []
-  input.value = ''
-}
-
-async function removeThread(threadId: string) {
-  try {
-    await deleteAgentThread(threadId)
-    if (activeThreadId.value === threadId) {
-      startNewThread()
-    }
-    await loadThreads()
-  } catch (error) {
-    ElMessage.error((error as Error).message)
-  }
+async function jumpToThread(threadId: string) {
+  // Clearing the search exits the search-results view; the regular thread
+  // list re-renders with the target selected.
+  searchInput.value = ''
+  chat.clearSearch()
+  await selectThread(threadId)
 }
 
 async function send() {
   const text = input.value.trim()
-  if (!text || loading.value) return
-
-  const localMessage: UiMessage = {
-    local_id: `local-${Date.now()}`,
-    role: 'user',
-    content: text,
-    provider: modelConfig.provider,
-    model: modelConfig.model,
-    pending: true,
-    tool_events: []
+  if (!text || chat.sending) return
+  const payload = {
+    message: text,
+    provider: modelConfig.provider || undefined,
+    model: modelConfig.model || undefined,
+    temperature: modelConfig.temperature,
+    max_tokens: modelConfig.max_tokens
   }
-  messages.value.push(localMessage)
   input.value = ''
-  loading.value = true
   await scrollToBottom()
-
   try {
-    const result = await chat({
-      message: text,
-      thread_id: activeThreadId.value,
-      provider: modelConfig.provider || undefined,
-      model: modelConfig.model || undefined,
-      temperature: modelConfig.temperature,
-      max_tokens: modelConfig.max_tokens
-    })
-    localMessage.pending = false
-    activeThreadId.value = result.thread_id
-    messages.value.push({
-      id: result.message_id,
-      thread_id: result.thread_id,
-      role: 'assistant',
-      content: result.response,
-      provider: result.provider,
-      model: result.model,
-      tool_events: result.tool_events,
-      plan: result.plan,
-      status: 'completed'
-    })
-    await loadThreads()
+    await chat.sendMessage(payload)
     await scrollToBottom()
   } catch (error) {
-    localMessage.pending = false
     ElMessage.error((error as Error).message)
-  } finally {
-    loading.value = false
   }
+}
+
+async function loadOlder() {
+  const log = logRef.value
+  const prevHeight = log?.scrollHeight ?? 0
+  await chat.loadOlderMessages()
+  await nextTick()
+  if (log) {
+    // Preserve the user's scroll position relative to the existing content
+    // when older messages are prepended.
+    log.scrollTop = log.scrollHeight - prevHeight
+  }
+}
+
+async function renameThread(thread: AgentThread) {
+  try {
+    const { value } = await ElMessageBox.prompt('修改会话标题', '重命名会话', {
+      inputValue: thread.title || '',
+      inputPlaceholder: '输入新标题',
+      inputValidator: (val: string) => (val.trim().length > 0 ? true : '标题不能为空'),
+      confirmButtonText: '保存',
+      cancelButtonText: '取消'
+    })
+    await chat.renameThread(thread.id, value)
+    ElMessage.success('已重命名')
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error((error as Error).message || '重命名失败')
+  }
+}
+
+async function renameActive() {
+  const target = chat.activeThread
+  if (target) await renameThread(target)
+}
+
+async function togglePin(thread: AgentThread) {
+  try {
+    await chat.togglePin(thread.id)
+  } catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+}
+
+async function toggleArchive(thread: AgentThread) {
+  try {
+    await chat.toggleArchive(thread.id)
+  } catch (error) {
+    ElMessage.error((error as Error).message)
+  }
+}
+
+async function removeThread(thread: AgentThread) {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除会话「${thread.title || thread.id}」吗？该操作不可撤销。`,
+      '删除会话',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' }
+    )
+    await chat.removeThread(thread.id)
+    ElMessage.success('已删除')
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error((error as Error).message || '删除失败')
+  }
+}
+
+async function removeActive() {
+  const target = chat.activeThread
+  if (target) await removeThread(target)
 }
 
 async function scrollToBottom() {
@@ -352,12 +475,42 @@ function planMarker(status: PlanStep['status']) {
   return map[status] ?? '○'
 }
 
+function threadLabel(threadId: string) {
+  const hit = chat.threads.find(t => t.id === threadId)
+  return hit?.title || threadId
+}
+
+function snippet(content: string) {
+  const text = content.replace(/\s+/g, ' ').trim()
+  return text.length > 90 ? `${text.slice(0, 90)}…` : text
+}
+
+function formatTime(iso?: string) {
+  if (!iso) return ''
+  try {
+    return new Date(iso).toLocaleString()
+  } catch {
+    return iso
+  }
+}
+
 onMounted(async () => {
-  await loadThreads()
+  try {
+    await chat.loadThreads({ reset: true })
+    // Restore the previously-active thread (sessionStorage) if it still exists.
+    if (chat.activeThreadId && chat.threads.some(t => t.id === chat.activeThreadId)) {
+      await chat.selectThread(chat.activeThreadId)
+      await scrollToBottom()
+    } else if (chat.activeThreadId) {
+      // Stale session id (deleted in another tab); clear it.
+      chat.startNewThread()
+    }
+  } catch (error) {
+    ElMessage.error((error as Error).message)
+  }
   const seed = route.query.seed
   if (typeof seed === 'string' && seed.trim()) {
     input.value = seed.trim()
-    // Strip the query param so a refresh doesn't re-seed.
     router.replace({ query: {} })
     await nextTick()
     ElMessage.info('已带入待优化提示，确认后点击发送')
@@ -414,14 +567,12 @@ onMounted(async () => {
 
 .chat-workbench {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr) 340px;
+  grid-template-columns: 280px minmax(0, 1fr) 340px;
   gap: 16px;
   min-height: 680px;
   height: calc(100vh - 200px);
   max-height: 920px;
 }
-
-/* Panel shells ---------------------------------------------------------- */
 
 .thread-panel,
 .dialog-panel,
@@ -436,10 +587,30 @@ onMounted(async () => {
 
 .thread-panel,
 .control-panel {
-  align-self: start;
   display: grid;
   gap: 12px;
   padding: 16px;
+}
+
+.control-panel {
+  align-self: start;
+}
+
+.thread-panel {
+  /* Header / search / toggle stay put; only .thread-list (the last row) scrolls. */
+  align-self: stretch;
+  overflow: hidden;
+  min-height: 0;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+
+.thread-list {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-right: 2px;
 }
 
 .dialog-panel {
@@ -455,6 +626,12 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.dialog-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .panel-head span {
@@ -474,6 +651,25 @@ onMounted(async () => {
   font-variant-numeric: tabular-nums;
 }
 
+.thread-search {
+  /* Sits between the header and the thread list. */
+}
+
+.thread-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--c-text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.thread-toggle input {
+  margin: 0;
+  cursor: pointer;
+}
+
 .thread-empty {
   display: grid;
   min-height: 120px;
@@ -482,19 +678,27 @@ onMounted(async () => {
   font-size: 13px;
 }
 
+.search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 /* Thread list items ----------------------------------------------------- */
 
 .thread-item {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   gap: 4px;
   width: 100%;
-  padding: 10px 12px;
+  flex-shrink: 0;
+  padding: 6px 8px 6px 12px;
   border: 1px solid transparent;
   border-radius: 4px;
   color: var(--c-text);
   background: transparent;
   text-align: left;
-  cursor: pointer;
   transition: background-color 80ms ease, border-color 80ms ease;
 }
 
@@ -507,13 +711,39 @@ onMounted(async () => {
   background: var(--c-accent-soft);
 }
 
-.thread-item span {
+.thread-item.archived {
+  opacity: 0.65;
+}
+
+.thread-item-body {
+  display: grid;
+  gap: 4px;
+  padding: 4px 0;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.thread-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   overflow: hidden;
   font-weight: 600;
   font-size: 13px;
   letter-spacing: -0.01em;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.pin-mark,
+.archive-mark {
+  font-size: 12px;
+  flex-shrink: 0;
 }
 
 .thread-item small {
@@ -523,6 +753,56 @@ onMounted(async () => {
   font-family: var(--font-mono);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.thread-actions {
+  display: none;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.thread-item:hover .thread-actions,
+.thread-item.active .thread-actions {
+  display: flex;
+}
+
+.thread-actions :deep(.el-button) {
+  padding: 4px 5px;
+  height: 24px;
+}
+
+.thread-actions :deep(.is-active) {
+  color: var(--c-accent);
+}
+
+.thread-load-more {
+  width: 100%;
+  flex-shrink: 0;
+  padding: 8px;
+  margin-top: 4px;
+  border: 1px dashed var(--c-border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--c-text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  transition: border-color 100ms ease;
+}
+
+.thread-load-more:hover:not(:disabled) {
+  border-color: var(--c-accent);
+  color: var(--c-accent);
+}
+
+.thread-load-more:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.search-snippet {
+  color: var(--c-text-secondary) !important;
+  font-family: var(--font-ui) !important;
 }
 
 .dialog-head {
@@ -563,6 +843,30 @@ onMounted(async () => {
   background: var(--c-text-tertiary);
 }
 
+.load-older {
+  display: block;
+  margin: 0 auto 12px;
+  padding: 4px 14px;
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--c-text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  transition: border-color 100ms ease;
+}
+
+.load-older:hover:not(:disabled) {
+  border-color: var(--c-accent);
+  color: var(--c-accent);
+}
+
+.load-older:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .chat-empty {
   display: grid;
   gap: 6px;
@@ -584,8 +888,6 @@ onMounted(async () => {
   color: var(--c-text-secondary);
   font-size: 13px;
 }
-
-/* Messages -------------------------------------------------------------- */
 
 .message-row {
   display: flex;
@@ -647,8 +949,6 @@ onMounted(async () => {
   gap: 6px;
   margin-top: 14px;
 }
-
-/* Plan board (CLI checklist style) -------------------------------------- */
 
 .plan-board {
   margin-bottom: 14px;
@@ -745,8 +1045,6 @@ onMounted(async () => {
   font-family: var(--font-mono);
   white-space: nowrap;
 }
-
-/* Tool events (structured log entries) ---------------------------------- */
 
 .tool-events-head {
   display: flex;
@@ -936,8 +1234,6 @@ onMounted(async () => {
   border-color: var(--c-fail);
 }
 
-/* Composer -------------------------------------------------------------- */
-
 .composer {
   display: grid;
   gap: 10px;
@@ -965,8 +1261,6 @@ onMounted(async () => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-/* Tool grid (right rail) ------------------------------------------------ */
 
 .tool-panel {
   display: grid;
@@ -996,7 +1290,7 @@ onMounted(async () => {
 
 @media (max-width: 1180px) {
   .chat-workbench {
-    grid-template-columns: 220px minmax(0, 1fr);
+    grid-template-columns: 240px minmax(0, 1fr);
     min-height: 0;
   }
 
@@ -1038,6 +1332,10 @@ onMounted(async () => {
   .composer-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .thread-actions {
+    display: flex; /* Touch devices have no hover. */
   }
 }
 </style>

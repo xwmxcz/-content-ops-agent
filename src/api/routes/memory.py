@@ -1,133 +1,133 @@
-"""REST API routes for memory management."""
+"""REST API routes for the Hermes-style 4-layer memory system.
+
+Endpoints (relative to `/api/memory`):
+
+  GET  /agent              → read MEMORY.md (agent notes)
+  PUT  /agent              → overwrite MEMORY.md
+  GET  /user               → read USER.md (user profile)
+  PUT  /user               → overwrite USER.md
+  POST /search             → FTS5 search over agent_messages
+  POST /refresh-snapshot   → drop the frozen per-thread system-prompt cache
+
+The path was previously `/api/memories` (CRUD over `agent_memories` rows);
+that mount has been retired together with the vector-backed memory.
+"""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from src.api.dependencies import get_memory_store, get_store
+from src.api.dependencies import get_file_memory, get_store
+from src.api.services.chat_agent import ChatAgentService
 from src.storage import ContentStore
-from src.storage.memory_vector_store import MemoryVectorStore
-from src.utils import config
+from src.storage.file_memory import AGENT, FileMemory, MemoryLimitExceeded, USER
+
 
 router = APIRouter()
 
 
-class MemoryCreateRequest(BaseModel):
-    content: str = Field(..., min_length=1, max_length=2000)
-    category: str = Field(default="fact", pattern=r"^(preference|fact|context|instruction)$")
-    importance: float = Field(default=0.5, ge=0.0, le=1.0)
+# ─── Schemas ───────────────────────────────────────────────────────────────
 
 
-class MemoryUpdateRequest(BaseModel):
-    content: str | None = Field(default=None, min_length=1, max_length=2000)
-    category: str | None = Field(default=None, pattern=r"^(preference|fact|context|instruction)$")
-    importance: float | None = Field(default=None, ge=0.0, le=1.0)
+class MemoryFile(BaseModel):
+    content: str = Field(default="")
+    char_count: int
+    char_limit: int
 
 
-class MemoryResponse(BaseModel):
-    id: str
-    content: str
-    category: str
-    importance: float
-    access_count: int = 0
-    last_used_at: str | None = None
-    created_at: str | None = None
-    updated_at: str | None = None
+class MemoryFileUpdate(BaseModel):
+    content: str = Field(default="")
 
 
-@router.get("", response_model=list[MemoryResponse])
-def list_memories(
-    category: str | None = None,
-    limit: int = 50,
-    store: ContentStore = Depends(get_store),
-):
-    return store.list_memories(category=category, limit=limit)
+class SessionSearchRequest(BaseModel):
+    q: str = Field(..., min_length=1, max_length=400)
+    limit: int = Field(default=10, ge=1, le=50)
+    thread_id: str | None = None
 
 
-@router.post("", response_model=MemoryResponse, status_code=status.HTTP_201_CREATED)
-def create_memory(
-    req: MemoryCreateRequest,
-    store: ContentStore = Depends(get_store),
-    memory_store: MemoryVectorStore | None = Depends(get_memory_store),
-):
-    from uuid import uuid4
-    memory_id = f"mem_{uuid4().hex[:16]}"
-    result = store.save_memory(
-        memory_id=memory_id,
-        content=req.content,
-        category=req.category,
-        importance=req.importance,
-    )
-    if memory_store:
-        memory_store.add(memory_id, req.content, req.category)
-    return result
+class SessionSearchResponse(BaseModel):
+    messages: list[dict]
+    count: int
 
 
-@router.get("/{memory_id}", response_model=MemoryResponse)
-def get_memory(
-    memory_id: str,
-    store: ContentStore = Depends(get_store),
-):
-    mem = store.get_memory(memory_id)
-    if not mem:
-        raise HTTPException(status_code=404, detail="Memory not found")
-    return mem
+class RefreshSnapshotRequest(BaseModel):
+    thread_id: str | None = None
 
 
-@router.put("/{memory_id}", response_model=MemoryResponse)
-def update_memory(
-    memory_id: str,
-    req: MemoryUpdateRequest,
-    store: ContentStore = Depends(get_store),
-    memory_store: MemoryVectorStore | None = Depends(get_memory_store),
-):
-    existing = store.get_memory(memory_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail="Memory not found")
-    content = req.content if req.content is not None else existing["content"]
-    category = req.category if req.category is not None else existing["category"]
-    importance = req.importance if req.importance is not None else existing["importance"]
-    result = store.save_memory(
-        memory_id=memory_id,
-        content=content,
-        category=category,
-        importance=importance,
-    )
-    if memory_store:
-        memory_store.delete(memory_id)
-        memory_store.add(memory_id, content, category)
-    return result
+# ─── Helpers ───────────────────────────────────────────────────────────────
 
 
-@router.delete("/{memory_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_memory(
-    memory_id: str,
-    store: ContentStore = Depends(get_store),
-    memory_store: MemoryVectorStore | None = Depends(get_memory_store),
-):
-    deleted = store.delete_memory(memory_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Memory not found")
-    if memory_store:
-        memory_store.delete(memory_id)
-
-
-@router.get("/search/query")
-def search_memories(
-    q: str,
-    category: str | None = None,
-    limit: int = 10,
-    store: ContentStore = Depends(get_store),
-    memory_store: MemoryVectorStore | None = Depends(get_memory_store),
-):
-    results = []
-    if memory_store:
-        results = memory_store.query(
-            text=q,
-            n_results=limit,
-            category=category,
-            threshold=config.MEMORY_SIMILARITY_THRESHOLD,
+def _require_memory(file_memory: FileMemory | None) -> FileMemory:
+    if file_memory is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Memory subsystem disabled (MEMORY_ENABLED=false)",
         )
-    if not results:
-        results = store.search_memories_text(q, category=category, limit=limit)
-    return {"memories": results, "count": len(results)}
+    return file_memory
+
+
+def _stats(file_memory: FileMemory, target: str) -> dict:
+    return file_memory.stats(target)
+
+
+# ─── MEMORY.md (agent notes) ───────────────────────────────────────────────
+
+
+@router.get("/agent", response_model=MemoryFile)
+def read_agent_memory(file_memory: FileMemory | None = Depends(get_file_memory)):
+    return _stats(_require_memory(file_memory), AGENT)
+
+
+@router.put("/agent", response_model=MemoryFile)
+def write_agent_memory(
+    req: MemoryFileUpdate,
+    file_memory: FileMemory | None = Depends(get_file_memory),
+):
+    fm = _require_memory(file_memory)
+    try:
+        fm.save(AGENT, req.content)
+    except MemoryLimitExceeded as exc:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc))
+    return _stats(fm, AGENT)
+
+
+# ─── USER.md (user profile) ────────────────────────────────────────────────
+
+
+@router.get("/user", response_model=MemoryFile)
+def read_user_memory(file_memory: FileMemory | None = Depends(get_file_memory)):
+    return _stats(_require_memory(file_memory), USER)
+
+
+@router.put("/user", response_model=MemoryFile)
+def write_user_memory(
+    req: MemoryFileUpdate,
+    file_memory: FileMemory | None = Depends(get_file_memory),
+):
+    fm = _require_memory(file_memory)
+    try:
+        fm.save(USER, req.content)
+    except MemoryLimitExceeded as exc:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc))
+    return _stats(fm, USER)
+
+
+# ─── Session search (FTS5 over agent_messages) ─────────────────────────────
+
+
+@router.post("/search", response_model=SessionSearchResponse)
+def search_messages(
+    req: SessionSearchRequest,
+    store: ContentStore = Depends(get_store),
+):
+    results = store.search_agent_messages(req.q, limit=req.limit, thread_id=req.thread_id)
+    return {"messages": results, "count": len(results)}
+
+
+# ─── Snapshot management ───────────────────────────────────────────────────
+
+
+@router.post("/refresh-snapshot")
+def refresh_snapshot(req: RefreshSnapshotRequest):
+    ChatAgentService.invalidate_frozen(req.thread_id)
+    return {"refreshed": True, "thread_id": req.thread_id}

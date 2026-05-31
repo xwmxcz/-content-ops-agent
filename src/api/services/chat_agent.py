@@ -11,6 +11,7 @@ from uuid import uuid4
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
+from src.agent.context_engine import ContextEngine
 from src.api.schemas.agent import ChatRequest, ChatResponse, ChatToolEvent, PlanStep
 from src.api.schemas.content import GenerateRequest, RefineRequest, SeoRequest, TitleRequest
 from src.api.services.publish_service import create_publish_service
@@ -19,12 +20,16 @@ from src.api.services.content_service import resolve_provider
 from src.llm.litellm_client import LLMConfigurationError, LiteLLMClient
 from src.models import ContentStyle, ContentType
 from src.storage import ContentStore
+from src.storage.file_memory import AGENT as MEMORY_AGENT, USER as MEMORY_USER, FileMemory, MemoryAmbiguous, MemoryLimitExceeded, MemoryNotFound
 from src.utils import config
 
 
 MAX_LOOPS = 8
 MAX_FAILURES_PER_TOOL = 2
-WRITE_TOOLS = {"create_content", "refine_content", "add_to_calendar", "remember", "forget"}
+WRITE_TOOLS = {
+    "create_content", "refine_content", "add_to_calendar",
+    "memory_add", "memory_replace", "memory_remove",
+}
 PLANNER_TEMPERATURE = 0.3
 PLANNER_MAX_TOKENS = 1024
 AVAILABLE_TOOL_NAMES = [
@@ -33,8 +38,11 @@ AVAILABLE_TOOL_NAMES = [
     "get_content_stats", "check_xiaohongshu_login", "search_history",
     "web_search", "analyze_content_performance", "find_optimization_candidates",
     "propose_topics", "propose_publishing_schedule", "commit_publishing_schedule",
-    "remember", "recall", "forget", "list_memories",
+    "memory_add", "memory_replace", "memory_remove", "session_search",
 ]
+
+
+_FROZEN_PROMPTS: dict[str, str] = {}
 PLANNER_SYSTEM_PROMPT = (
     "You are a planner. Given the user's request and the available tools, "
     "output a JSON array of steps.\n"
@@ -88,27 +96,36 @@ have side effects — never call them without first showing the user what you in
 and getting confirmation, unless the user's original request was already an explicit
 "please do X now" instruction.
 
-Long-term memory:
-- You have access to `remember` and `recall` tools for persistent cross-session memory.
-- Use `remember` to save user preferences, important facts, or recurring instructions
-  (e.g., "用户偏好简洁风格", "用户的品牌名是 XX"). This is a write tool — confirm before saving.
-- Use `recall` to search past memories when context would help (e.g., user style preferences,
-  past decisions, recurring topics). Recalled memories are injected below when relevant.
-- Do NOT remember ephemeral information (one-off requests, temporary states).
-- When memories conflict with the current request, trust the current request."""
+Long-term memory (file-based, frozen per session):
+- The MEMORY.md (your own notes) and USER.md (user profile) sections above
+  were loaded once at session start. Anything you write back via the memory
+  tools takes effect in the NEXT session, not this one.
+- Use `memory_add` to record a durable note (`target="agent"` for project
+  conventions, tool quirks, brand vocabulary; `target="user"` for user name,
+  language, style preferences).
+- Use `memory_replace` to update an existing entry (substring match must be
+  unique).
+- Use `memory_remove` to delete an outdated entry.
+- Do NOT save ephemeral or single-turn information; the files are small (~2KB
+  and ~1KB respectively). Quality over quantity.
+
+Session search:
+- Use `session_search` to recall what was said earlier in this or past
+  threads. It runs full-text search over `agent_messages` and works on Chinese
+  via FTS5 trigram tokenizer. Prefer this over guessing from memory."""
 
 
 _WEEKDAY_CN = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
 
-def _build_system_prompt() -> str:
+def _build_system_prompt(memory_snapshot: dict[str, str] | None = None) -> str:
     today = datetime.now().date()
     tomorrow = today + timedelta(days=1)
     monday_this_week = today - timedelta(days=today.weekday())
     sunday_this_week = monday_this_week + timedelta(days=6)
     next_monday = monday_this_week + timedelta(days=7)
     next_sunday = next_monday + timedelta(days=6)
-    return SYSTEM_PROMPT_TEMPLATE.format(
+    base = SYSTEM_PROMPT_TEMPLATE.format(
         today=today.strftime("%Y-%m-%d"),
         weekday=_WEEKDAY_CN[today.weekday()],
         tomorrow=tomorrow.strftime("%Y-%m-%d"),
@@ -116,6 +133,25 @@ def _build_system_prompt() -> str:
         next_monday=next_monday.strftime("%Y-%m-%d"),
         next_week=f"{next_monday.strftime('%Y-%m-%d')}..{next_sunday.strftime('%Y-%m-%d')}",
     )
+    snap = memory_snapshot or {}
+    memory_md = (snap.get("memory") or "").strip()
+    user_md = (snap.get("user") or "").strip()
+    blocks = [base]
+    if memory_md:
+        blocks.append(
+            "\n══════════════════════════════════════════════\n"
+            "MEMORY.md (your personal notes — frozen for this session)\n"
+            "══════════════════════════════════════════════\n"
+            f"{memory_md}"
+        )
+    if user_md:
+        blocks.append(
+            "\n══════════════════════════════════════════════\n"
+            "USER.md (user profile — frozen for this session)\n"
+            "══════════════════════════════════════════════\n"
+            f"{user_md}"
+        )
+    return "".join(blocks)
 
 
 ModelFactory = Callable[[str, str, float, int], Any]
@@ -131,12 +167,14 @@ class ChatAgentService:
         store: ContentStore,
         llm: LiteLLMClient | None = None,
         model_factory: ModelFactory | None = None,
-        memory_store=None,
+        file_memory: FileMemory | None = None,
+        context_engine: ContextEngine | None = None,
     ):
         self.store = store
         self.llm = llm or LiteLLMClient()
         self.model_factory = model_factory or self._create_chat_model
-        self.memory_store = memory_store
+        self.file_memory = file_memory
+        self.context_engine = context_engine
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         provider = resolve_provider(request.provider)
@@ -144,6 +182,9 @@ class ChatAgentService:
         thread_id = request.thread_id or f"chat_{uuid4().hex[:10]}"
         title = self._make_thread_title(request.message)
 
+        # Title here is an auto-generated suggestion. ContentStore guards against
+        # overwriting an existing thread's title (and respects title_pinned set
+        # via PATCH /threads/{id}), so this is safe on rename-locked threads.
         self.store.upsert_agent_thread(thread_id, title=title, provider=provider, model=model)
         history = self.store.list_agent_messages(thread_id, limit=20)
         self.store.save_agent_message(
@@ -175,6 +216,7 @@ class ChatAgentService:
                 temperature=request.temperature,
                 max_tokens=request.max_tokens,
                 plan=plan,
+                thread_id=thread_id,
             )
         except LLMConfigurationError:
             raise
@@ -257,6 +299,7 @@ class ChatAgentService:
         temperature: float,
         max_tokens: int,
         plan: list[PlanStep] | None = None,
+        thread_id: str | None = None,
     ) -> tuple[str, list[ChatToolEvent], list[PlanStep]]:
         plan = plan or []
         tools = self._build_tools(provider, model, temperature, max_tokens)
@@ -265,28 +308,42 @@ class ChatAgentService:
         if hasattr(chat_model, "bind_tools"):
             chat_model = chat_model.bind_tools(tools)
 
-        system_prompt = _build_system_prompt()
+        frozen = self._get_frozen_system_prompt(thread_id)
+        messages: list[BaseMessage] = [SystemMessage(content=frozen)]
         if plan:
             numbered = "\n".join(
                 f"  {step.index}. {step.description}"
                 + (f" [hint: {step.tool_hint}]" if step.tool_hint else "")
                 for step in plan
             )
-            system_prompt = (
-                f"{system_prompt}\n\nHere is your plan for this request:\n{numbered}\n"
+            plan_block = (
+                "Here is your plan for this request:\n"
+                f"{numbered}\n"
                 "Mark progress by calling tools roughly in this order. "
                 "If a step does not need a tool, you may skip it."
             )
-
-        memory_context = self._auto_recall(message)
-        if memory_context:
-            system_prompt = system_prompt + memory_context
-
-        messages: list[BaseMessage] = [SystemMessage(content=system_prompt)]
+            messages.append(SystemMessage(content=plan_block))
         messages.extend(self._history_to_messages(history))
         messages.append(HumanMessage(content=message))
 
         tool_events: list[ChatToolEvent] = []
+        if self.context_engine is not None:
+            try:
+                result = await self.context_engine.maybe_compress(
+                    messages, provider=provider, model=model
+                )
+                if result.compressed:
+                    messages = result.messages
+                    tool_events.append(ChatToolEvent(
+                        name="context_compress",
+                        args={"dropped": result.dropped_count},
+                        output=(result.summary or "")[:1200],
+                        status="completed",
+                        attempt=1,
+                    ))
+            except Exception:
+                pass
+
         attempt_count: dict[str, int] = {}
         failure_count: dict[str, int] = {}
         last_content = ""
@@ -748,72 +805,79 @@ class ChatAgentService:
                 })
             return json.dumps({"saved": saved, "skipped": skipped, "committed": True}, ensure_ascii=False)
 
-        def remember(content: str, category: str = "fact", importance: float = 0.5) -> str:
-            """Save a piece of information to long-term memory for future conversations.
+        def memory_add(target: str, text: str) -> str:
+            """Append a durable note to the file-based memory.
 
-            Categories: preference, fact, context, instruction.
-            Importance: 0.0 (trivial) to 1.0 (critical).
+            target: 'agent' (writes to MEMORY.md — project conventions, tool
+                    quirks, brand vocabulary) or 'user' (writes to USER.md —
+                    name, language, style preferences).
+            text:   the entry body, may be multiline.
+            The entry takes effect in the NEXT session, not this one.
             """
-            from uuid import uuid4
-            memory_id = f"mem_{uuid4().hex[:16]}"
-            self.store.save_memory(
-                memory_id=memory_id,
-                content=content,
-                category=category,
-                importance=min(max(importance, 0.0), 1.0),
-                source_thread_id=None,
-            )
-            if self.memory_store:
-                self.memory_store.add(memory_id, content, category)
-            total = self.store.count_memories()
-            if total > config.MEMORY_MAX_COUNT:
-                self.store.evict_memories(config.MEMORY_MAX_COUNT)
-            return json.dumps({"saved": True, "id": memory_id, "content": content, "category": category}, ensure_ascii=False)
+            if not self.file_memory:
+                return json.dumps({"saved": False, "reason": "memory disabled"}, ensure_ascii=False)
+            try:
+                self.file_memory.add(target, text)
+            except (MemoryLimitExceeded, ValueError) as exc:
+                return json.dumps({"saved": False, "reason": str(exc)}, ensure_ascii=False)
+            stats = self.file_memory.stats(target)
+            return json.dumps({
+                "saved": True,
+                "target": target,
+                "char_count": stats["char_count"],
+                "char_limit": stats["char_limit"],
+            }, ensure_ascii=False)
 
-        def recall(query: str, category: str | None = None, limit: int = 5) -> str:
-            """Search long-term memory for relevant past information.
+        def memory_replace(target: str, old_text: str, new_text: str) -> str:
+            """Replace one occurrence of old_text with new_text in the named file.
 
-            Returns memories ranked by semantic similarity to the query.
+            target:   'agent' or 'user'.
+            old_text: substring to find; MUST match exactly one place.
+            new_text: replacement body.
             """
-            results = []
-            if self.memory_store:
-                results = self.memory_store.query(
-                    text=query,
-                    n_results=limit,
-                    category=category,
-                    threshold=config.MEMORY_SIMILARITY_THRESHOLD,
-                )
-                for r in results:
-                    self.store.touch_memory(r["id"])
-            if not results:
-                results = self.store.search_memories_text(query, category=category, limit=limit)
-            return json.dumps({"memories": results, "count": len(results)}, ensure_ascii=False)
+            if not self.file_memory:
+                return json.dumps({"replaced": False, "reason": "memory disabled"}, ensure_ascii=False)
+            try:
+                self.file_memory.replace(target, old_text, new_text)
+            except (MemoryNotFound, MemoryAmbiguous, MemoryLimitExceeded, ValueError) as exc:
+                return json.dumps({"replaced": False, "reason": str(exc)}, ensure_ascii=False)
+            stats = self.file_memory.stats(target)
+            return json.dumps({
+                "replaced": True,
+                "target": target,
+                "char_count": stats["char_count"],
+                "char_limit": stats["char_limit"],
+            }, ensure_ascii=False)
 
-        def forget(query: str) -> str:
-            """Delete a memory by searching for it first, then removing the best match.
+        def memory_remove(target: str, old_text: str) -> str:
+            """Delete one occurrence of old_text from the named file.
 
-            Use when the user asks to forget or remove a previously saved memory.
+            target:   'agent' or 'user'.
+            old_text: substring to find; MUST match exactly one place.
             """
-            results = []
-            if self.memory_store:
-                results = self.memory_store.query(text=query, n_results=1, threshold=0.3)
-            if not results:
-                results = self.store.search_memories_text(query, limit=1)
-            if not results:
-                return json.dumps({"deleted": False, "reason": "No matching memory found"}, ensure_ascii=False)
-            target = results[0]
-            self.store.delete_memory(target["id"])
-            if self.memory_store:
-                self.memory_store.delete(target["id"])
-            return json.dumps({"deleted": True, "id": target["id"], "content": target["content"]}, ensure_ascii=False)
+            if not self.file_memory:
+                return json.dumps({"removed": False, "reason": "memory disabled"}, ensure_ascii=False)
+            try:
+                self.file_memory.remove(target, old_text)
+            except (MemoryNotFound, MemoryAmbiguous, ValueError) as exc:
+                return json.dumps({"removed": False, "reason": str(exc)}, ensure_ascii=False)
+            stats = self.file_memory.stats(target)
+            return json.dumps({
+                "removed": True,
+                "target": target,
+                "char_count": stats["char_count"],
+                "char_limit": stats["char_limit"],
+            }, ensure_ascii=False)
 
-        def list_memories(category: str | None = None, limit: int = 20) -> str:
-            """List all saved memories, optionally filtered by category.
+        def session_search(query: str, limit: int = 5, thread_id: str | None = None) -> str:
+            """Full-text search over all stored assistant↔user messages.
 
-            Categories: preference, fact, context, instruction.
+            Uses SQLite FTS5 with the trigram tokenizer, so Chinese substrings
+            (≥ 3 chars) match. Shorter queries fall back to LIKE.
+            Use to recall what was said in this or past conversation threads.
             """
-            mems = self.store.list_memories(category=category, limit=limit)
-            return json.dumps({"memories": mems, "count": len(mems)}, ensure_ascii=False)
+            results = self.store.search_agent_messages(query, limit=limit, thread_id=thread_id)
+            return json.dumps({"messages": results, "count": len(results)}, ensure_ascii=False)
 
         return [
             StructuredTool.from_function(coroutine=create_content, name="create_content"),
@@ -833,30 +897,37 @@ class ChatAgentService:
             StructuredTool.from_function(func=propose_topics, name="propose_topics"),
             StructuredTool.from_function(func=propose_publishing_schedule, name="propose_publishing_schedule"),
             StructuredTool.from_function(func=commit_publishing_schedule, name="commit_publishing_schedule"),
-            StructuredTool.from_function(func=remember, name="remember"),
-            StructuredTool.from_function(func=recall, name="recall"),
-            StructuredTool.from_function(func=forget, name="forget"),
-            StructuredTool.from_function(func=list_memories, name="list_memories"),
+            StructuredTool.from_function(func=memory_add, name="memory_add"),
+            StructuredTool.from_function(func=memory_replace, name="memory_replace"),
+            StructuredTool.from_function(func=memory_remove, name="memory_remove"),
+            StructuredTool.from_function(func=session_search, name="session_search"),
         ]
 
-    def _auto_recall(self, message: str) -> str:
-        """Retrieve relevant memories and format as context block."""
-        if not self.memory_store:
-            return ""
-        try:
-            results = self.memory_store.query(
-                text=message,
-                n_results=config.MEMORY_AUTO_RECALL_LIMIT,
-                threshold=config.MEMORY_SIMILARITY_THRESHOLD,
-            )
-            if not results:
-                return ""
-            for r in results:
-                self.store.touch_memory(r["id"])
-            lines = [f"- [{r['category']}] {r['content']}" for r in results]
-            return "\n\nRelevant memories from past conversations:\n" + "\n".join(lines)
-        except Exception:
-            return ""
+    def _get_frozen_system_prompt(self, thread_id: str | None) -> str:
+        """Return the cached system prompt for `thread_id`, building it once.
+
+        The snapshot captures MEMORY.md + USER.md at first call for the thread,
+        then never re-reads them — matching Hermes' "frozen for the session"
+        semantics. Mutations made via memory_add/replace/remove only take
+        effect when a new thread is started (or `invalidate_frozen` is called
+        externally, e.g. by the /refresh-snapshot endpoint).
+        """
+        key = thread_id or "_anonymous"
+        cached = _FROZEN_PROMPTS.get(key)
+        if cached is not None:
+            return cached
+        snapshot = self.file_memory.snapshot() if self.file_memory else None
+        prompt = _build_system_prompt(snapshot)
+        _FROZEN_PROMPTS[key] = prompt
+        return prompt
+
+    @staticmethod
+    def invalidate_frozen(thread_id: str | None = None) -> None:
+        """Drop the cached system prompt for one thread or all threads."""
+        if thread_id is None:
+            _FROZEN_PROMPTS.clear()
+        else:
+            _FROZEN_PROMPTS.pop(thread_id, None)
 
     @staticmethod
     def _create_chat_model(provider: str, model: str, temperature: float, max_tokens: int):

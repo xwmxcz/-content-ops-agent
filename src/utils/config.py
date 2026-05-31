@@ -59,13 +59,22 @@ class Config:
     XHS_MCP_URL = os.getenv("XHS_MCP_URL", "http://127.0.0.1:18060/mcp")
     XHS_MCP_TIMEOUT_SECONDS = float(os.getenv("XHS_MCP_TIMEOUT_SECONDS", "120"))
 
-    # Memory system
+    # Memory system (Hermes-style 4-layer)
     MEMORY_ENABLED = os.getenv("MEMORY_ENABLED", "true").lower() == "true"
-    MEMORY_CHROMA_DIR = os.getenv("MEMORY_CHROMA_DIR", "data/chroma")
-    MEMORY_EMBEDDING_MODEL = os.getenv("MEMORY_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
-    MEMORY_MAX_COUNT = int(os.getenv("MEMORY_MAX_COUNT", "500"))
-    MEMORY_AUTO_RECALL_LIMIT = int(os.getenv("MEMORY_AUTO_RECALL_LIMIT", "5"))
-    MEMORY_SIMILARITY_THRESHOLD = float(os.getenv("MEMORY_SIMILARITY_THRESHOLD", "0.35"))
+    MEMORY_DIR = os.getenv("MEMORY_DIR", "data/memory")
+    MEMORY_MD_LIMIT = int(os.getenv("MEMORY_MD_LIMIT", "2200"))
+    USER_MD_LIMIT = int(os.getenv("USER_MD_LIMIT", "1375"))
+    # Context compressor (layer 4): when in-session messages exceed the threshold
+    # ratio of the model's context window, the middle slice is summarized.
+    CONTEXT_COMPRESS_ENABLED = os.getenv("CONTEXT_COMPRESS_ENABLED", "true").lower() == "true"
+    CONTEXT_COMPRESS_TRIGGER_MESSAGES = int(os.getenv("CONTEXT_COMPRESS_TRIGGER_MESSAGES", "30"))
+    CONTEXT_COMPRESS_KEEP_HEAD = int(os.getenv("CONTEXT_COMPRESS_KEEP_HEAD", "4"))
+    CONTEXT_COMPRESS_KEEP_TAIL = int(os.getenv("CONTEXT_COMPRESS_KEEP_TAIL", "8"))
+    # Memory curator: when a thread is closed, an auxiliary LLM proposes
+    # add/replace/remove operations on MEMORY.md / USER.md and applies them.
+    MEMORY_CURATOR_ENABLED = os.getenv("MEMORY_CURATOR_ENABLED", "true").lower() == "true"
+    MEMORY_CURATOR_MIN_MESSAGES = int(os.getenv("MEMORY_CURATOR_MIN_MESSAGES", "4"))
+    MEMORY_CURATOR_MAX_ACTIONS = int(os.getenv("MEMORY_CURATOR_MAX_ACTIONS", "6"))
 
     # App Settings
     DEBUG = os.getenv("DEBUG", "False").lower() == "true"

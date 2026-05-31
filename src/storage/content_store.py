@@ -4,7 +4,7 @@ from datetime import datetime, date, timedelta
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 
-from sqlalchemy import Column, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, create_engine, func, inspect, or_, text
+from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, create_engine, func, inspect, or_, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
@@ -125,11 +125,16 @@ class AgentThread(Base):
     title = Column(Text, nullable=True)
     last_provider = Column(String(50), nullable=True)
     last_model = Column(String(200), nullable=True)
+    pinned = Column(Boolean, default=False, nullable=False)
+    archived = Column(Boolean, default=False, nullable=False)
+    title_pinned = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
 Index("ix_agent_threads_updated_at", AgentThread.updated_at)
+Index("ix_agent_threads_pinned_updated", AgentThread.pinned, AgentThread.updated_at)
+Index("ix_agent_threads_archived", AgentThread.archived)
 
 
 class AgentMessage(Base):
@@ -222,25 +227,6 @@ class AgentRunEvent(Base):
 Index("ix_agent_run_events_run_seq", AgentRunEvent.run_id, AgentRunEvent.seq)
 
 
-class AgentMemory(Base):
-    """Long-term semantic memory for the chat agent."""
-    __tablename__ = "agent_memories"
-
-    id = Column(String(80), primary_key=True)
-    content = Column(Text, nullable=False)
-    category = Column(String(50), nullable=False)
-    importance = Column(Float, default=0.5)
-    source_thread_id = Column(String(80), nullable=True)
-    access_count = Column(Integer, default=0)
-    last_used_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
-
-
-Index("ix_agent_memories_category", AgentMemory.category)
-Index("ix_agent_memories_importance", AgentMemory.importance)
-
-
 class ContentStore:
     """内容存储管理类"""
 
@@ -275,6 +261,8 @@ class ContentStore:
                 connection.execute(text("PRAGMA busy_timeout=30000"))
         Base.metadata.create_all(self.engine)
         self._ensure_legacy_columns()
+        if url.drivername.startswith("sqlite"):
+            self._ensure_fts5()
         self.SessionLocal = sessionmaker(bind=self.engine)
 
     def _ensure_legacy_columns(self) -> None:
@@ -283,12 +271,74 @@ class ContentStore:
             with self.engine.begin() as connection:
                 connection.execute(text("ALTER TABLE agent_messages ADD COLUMN plan TEXT"))
 
+        thread_cols = {col["name"] for col in inspect(self.engine).get_columns("agent_threads")}
+        with self.engine.begin() as connection:
+            if "pinned" not in thread_cols:
+                connection.execute(text(
+                    "ALTER TABLE agent_threads ADD COLUMN pinned BOOLEAN NOT NULL DEFAULT 0"
+                ))
+            if "archived" not in thread_cols:
+                connection.execute(text(
+                    "ALTER TABLE agent_threads ADD COLUMN archived BOOLEAN NOT NULL DEFAULT 0"
+                ))
+            if "title_pinned" not in thread_cols:
+                connection.execute(text(
+                    "ALTER TABLE agent_threads ADD COLUMN title_pinned BOOLEAN NOT NULL DEFAULT 0"
+                ))
+
         job_cols = {col["name"] for col in inspect(self.engine).get_columns("jobs")}
         with self.engine.begin() as connection:
             if "token_usage" not in job_cols:
                 connection.execute(text("ALTER TABLE jobs ADD COLUMN token_usage INTEGER DEFAULT 0"))
             if "cost_estimate" not in job_cols:
                 connection.execute(text("ALTER TABLE jobs ADD COLUMN cost_estimate FLOAT DEFAULT 0"))
+
+    def _ensure_fts5(self) -> None:
+        """Create the FTS5 virtual table + triggers for agent_messages search.
+
+        Uses the trigram tokenizer so substring matching on Chinese works without
+        a CJK-aware analyzer. Requires SQLite >= 3.34, which ships with Python
+        >= 3.10 on every supported platform.
+
+        On a fresh DB the virtual table is created empty; on an existing DB it
+        is backfilled from `agent_messages` once, then kept in sync via triggers.
+        """
+        if "agent_messages_fts" in inspect(self.engine).get_table_names():
+            return
+        try:
+            with self.engine.begin() as connection:
+                connection.execute(text(
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS agent_messages_fts USING fts5("
+                    "content, role UNINDEXED, thread_id UNINDEXED, "
+                    "tokenize='trigram'"
+                    ")"
+                ))
+                connection.execute(text(
+                    "INSERT INTO agent_messages_fts(rowid, content, role, thread_id) "
+                    "SELECT id, content, role, thread_id FROM agent_messages"
+                ))
+                connection.execute(text(
+                    "CREATE TRIGGER IF NOT EXISTS agent_messages_ai AFTER INSERT ON agent_messages BEGIN "
+                    "INSERT INTO agent_messages_fts(rowid, content, role, thread_id) "
+                    "VALUES (new.id, new.content, new.role, new.thread_id); "
+                    "END"
+                ))
+                connection.execute(text(
+                    "CREATE TRIGGER IF NOT EXISTS agent_messages_ad AFTER DELETE ON agent_messages BEGIN "
+                    "DELETE FROM agent_messages_fts WHERE rowid = old.id; "
+                    "END"
+                ))
+                connection.execute(text(
+                    "CREATE TRIGGER IF NOT EXISTS agent_messages_au AFTER UPDATE ON agent_messages BEGIN "
+                    "DELETE FROM agent_messages_fts WHERE rowid = old.id; "
+                    "INSERT INTO agent_messages_fts(rowid, content, role, thread_id) "
+                    "VALUES (new.id, new.content, new.role, new.thread_id); "
+                    "END"
+                ))
+        except Exception:
+            # FTS5 is optional — if the SQLite build doesn't ship it, fall back
+            # to the ilike path silently. Search will still work via `search_agent_messages`.
+            pass
 
     def _get_session(self) -> Session:
         return self.SessionLocal()
@@ -1021,6 +1071,14 @@ class ContentStore:
         provider: str | None = None,
         model: str | None = None,
     ) -> Dict[str, Any]:
+        """Create or touch a thread row.
+
+        Auto-title path: `title` is only written when the thread is brand-new
+        OR the existing thread has neither a title nor a manual lock. Once
+        `title_pinned=1` (set via `update_agent_thread`), title is never
+        overwritten here. Provider/model always refresh to reflect the latest
+        turn.
+        """
         session = self._get_session()
         try:
             thread = session.query(AgentThread).filter(AgentThread.id == thread_id).first()
@@ -1036,7 +1094,7 @@ class ContentStore:
                 )
                 session.add(thread)
             else:
-                if title and not thread.title:
+                if title and not thread.title and not thread.title_pinned:
                     thread.title = title
                 thread.last_provider = provider or thread.last_provider
                 thread.last_model = model or thread.last_model
@@ -1049,16 +1107,44 @@ class ContentStore:
         finally:
             session.close()
 
-    def list_agent_threads(self, limit: int = 30) -> List[Dict[str, Any]]:
+    def list_agent_threads(
+        self,
+        limit: int = 30,
+        offset: int = 0,
+        include_archived: bool = False,
+        q: str | None = None,
+    ) -> List[Dict[str, Any]]:
+        """List threads with pin-first ordering, optional archived filter, optional title/id search.
+
+        Uses a single LEFT JOIN + GROUP BY to fetch message_count, replacing the
+        previous N+1 (one COUNT per thread) pattern.
+        """
         session = self._get_session()
         try:
-            threads = (
-                session.query(AgentThread)
-                .order_by(AgentThread.updated_at.desc())
+            query = session.query(
+                AgentThread,
+                func.count(AgentMessage.id).label("message_count"),
+            ).outerjoin(AgentMessage, AgentMessage.thread_id == AgentThread.id)
+
+            if not include_archived:
+                query = query.filter(AgentThread.archived.is_(False))
+            if q and q.strip():
+                pattern = f"%{q.strip()}%"
+                query = query.filter(
+                    or_(AgentThread.title.ilike(pattern), AgentThread.id.ilike(pattern))
+                )
+
+            query = (
+                query.group_by(AgentThread.id)
+                .order_by(AgentThread.pinned.desc(), AgentThread.updated_at.desc())
                 .limit(limit)
-                .all()
+                .offset(offset)
             )
-            return [self._agent_thread_to_dict(thread, session) for thread in threads]
+            rows = query.all()
+            return [
+                self._agent_thread_to_dict(thread, session, message_count=message_count)
+                for thread, message_count in rows
+            ]
         finally:
             session.close()
 
@@ -1069,6 +1155,44 @@ class ContentStore:
             if not thread:
                 return None
             return self._agent_thread_to_dict(thread, session)
+        finally:
+            session.close()
+
+    def update_agent_thread(
+        self,
+        thread_id: str,
+        *,
+        title: str | None = None,
+        pinned: bool | None = None,
+        archived: bool | None = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Manual edits to a thread row.
+
+        - Passing `title` writes it and sets `title_pinned=True`, which locks
+          out the auto-title path in `upsert_agent_thread` / `save_agent_message`.
+        - All three fields are independently optional; pass only what changes.
+        - Returns the refreshed dict, or None if the thread doesn't exist.
+        """
+        if title is None and pinned is None and archived is None:
+            raise ValueError("update_agent_thread requires at least one field")
+        session = self._get_session()
+        try:
+            thread = session.query(AgentThread).filter(AgentThread.id == thread_id).first()
+            if not thread:
+                return None
+            if title is not None:
+                thread.title = title.strip() or None
+                thread.title_pinned = True
+            if pinned is not None:
+                thread.pinned = bool(pinned)
+            if archived is not None:
+                thread.archived = bool(archived)
+            thread.updated_at = datetime.now()
+            session.commit()
+            return self._agent_thread_to_dict(thread, session)
+        except Exception:
+            session.rollback()
+            raise
         finally:
             session.close()
 
@@ -1094,7 +1218,7 @@ class ContentStore:
                     last_model=model,
                 )
                 session.add(thread)
-            elif role == "user" and not thread.title:
+            elif role == "user" and not thread.title and not thread.title_pinned:
                 thread.title = self._make_thread_title(content)
 
             thread.last_provider = provider or thread.last_provider
@@ -1120,17 +1244,85 @@ class ContentStore:
         finally:
             session.close()
 
-    def list_agent_messages(self, thread_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+    def list_agent_messages(
+        self,
+        thread_id: str,
+        limit: int = 50,
+        before_id: int | None = None,
+    ) -> List[Dict[str, Any]]:
+        """List messages oldest-first.
+
+        Without `before_id`, returns the most recent `limit` messages.
+        With `before_id`, returns the `limit` messages with id < before_id
+        (cursor-style "load older history"), still oldest-first within the slice.
+        """
         session = self._get_session()
         try:
-            messages = (
-                session.query(AgentMessage)
-                .filter(AgentMessage.thread_id == thread_id)
-                .order_by(AgentMessage.created_at.desc())
-                .limit(limit)
-                .all()
-            )
+            query = session.query(AgentMessage).filter(AgentMessage.thread_id == thread_id)
+            if before_id is not None:
+                query = query.filter(AgentMessage.id < before_id)
+            messages = query.order_by(AgentMessage.created_at.desc()).limit(limit).all()
             return [self._agent_message_to_dict(message) for message in reversed(messages)]
+        finally:
+            session.close()
+
+    def search_agent_messages(
+        self,
+        query: str,
+        limit: int = 10,
+        thread_id: str | None = None,
+    ) -> List[Dict[str, Any]]:
+        """Full-text search over agent_messages content.
+
+        On SQLite, uses the FTS5 trigram virtual table (CJK-safe substring
+        search). On any other backend (or if FTS5 wasn't created), falls back
+        to `ilike` over `content`.
+        """
+        query = (query or "").strip()
+        if not query:
+            return []
+        session = self._get_session()
+        try:
+            if self.engine.url.drivername.startswith("sqlite"):
+                has_fts = "agent_messages_fts" in inspect(self.engine).get_table_names()
+            else:
+                has_fts = False
+            # Trigram tokenizer needs at least 3 chars to form a single trigram;
+            # shorter queries (very common for 2-char Chinese words like "微博")
+            # return zero rows from FTS5. Fall back to ilike in that case.
+            use_fts = has_fts and len(query) >= 3
+            if use_fts:
+                sql = (
+                    "SELECT m.id, m.thread_id, m.role, m.content, m.provider, m.model, "
+                    "m.status, m.created_at "
+                    "FROM agent_messages_fts f "
+                    "JOIN agent_messages m ON m.id = f.rowid "
+                    "WHERE agent_messages_fts MATCH :q"
+                )
+                params: Dict[str, Any] = {"q": query, "limit": limit}
+                if thread_id:
+                    sql += " AND m.thread_id = :tid"
+                    params["tid"] = thread_id
+                sql += " ORDER BY rank LIMIT :limit"
+                rows = session.execute(text(sql), params).all()
+                return [
+                    {
+                        "id": r[0],
+                        "thread_id": r[1],
+                        "role": r[2],
+                        "content": r[3],
+                        "provider": r[4],
+                        "model": r[5],
+                        "status": r[6],
+                        "created_at": r[7].isoformat() if hasattr(r[7], "isoformat") else r[7],
+                    }
+                    for r in rows
+                ]
+            q = session.query(AgentMessage).filter(AgentMessage.content.ilike(f"%{query}%"))
+            if thread_id:
+                q = q.filter(AgentMessage.thread_id == thread_id)
+            messages = q.order_by(AgentMessage.created_at.desc()).limit(limit).all()
+            return [self._agent_message_to_dict(m) for m in messages]
         finally:
             session.close()
 
@@ -1316,13 +1508,23 @@ class ContentStore:
         }
 
     @staticmethod
-    def _agent_thread_to_dict(thread: AgentThread, session: Session) -> Dict[str, Any]:
-        message_count = session.query(AgentMessage).filter(AgentMessage.thread_id == thread.id).count()
+    def _agent_thread_to_dict(
+        thread: AgentThread,
+        session: Session,
+        message_count: int | None = None,
+    ) -> Dict[str, Any]:
+        if message_count is None:
+            message_count = (
+                session.query(AgentMessage).filter(AgentMessage.thread_id == thread.id).count()
+            )
         return {
             "id": thread.id,
             "title": thread.title,
             "last_provider": thread.last_provider,
             "last_model": thread.last_model,
+            "pinned": bool(thread.pinned),
+            "archived": bool(thread.archived),
+            "title_pinned": bool(thread.title_pinned),
             "message_count": message_count,
             "created_at": thread.created_at.isoformat() if thread.created_at else None,
             "updated_at": thread.updated_at.isoformat() if thread.updated_at else None,
@@ -1398,145 +1600,4 @@ class ContentStore:
             "updated_at": job.updated_at.isoformat() if job.updated_at else None,
             "started_at": job.started_at.isoformat() if job.started_at else None,
             "completed_at": job.completed_at.isoformat() if job.completed_at else None,
-        }
-
-    # ─── Memory CRUD ───────────────────────────────────────────────────────
-
-    def save_memory(
-        self,
-        memory_id: str,
-        content: str,
-        category: str,
-        importance: float = 0.5,
-        source_thread_id: str | None = None,
-    ) -> Dict[str, Any]:
-        session = self._get_session()
-        try:
-            existing = session.query(AgentMemory).filter_by(id=memory_id).first()
-            if existing:
-                existing.content = content
-                existing.category = category
-                existing.importance = importance
-                existing.updated_at = datetime.now()
-            else:
-                existing = AgentMemory(
-                    id=memory_id,
-                    content=content,
-                    category=category,
-                    importance=importance,
-                    source_thread_id=source_thread_id,
-                )
-                session.add(existing)
-            session.commit()
-            return self._memory_to_dict(existing)
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
-
-    def get_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
-        session = self._get_session()
-        try:
-            mem = session.query(AgentMemory).filter_by(id=memory_id).first()
-            return self._memory_to_dict(mem) if mem else None
-        finally:
-            session.close()
-
-    def search_memories_text(self, query: str, category: str | None = None, limit: int = 10) -> List[Dict[str, Any]]:
-        session = self._get_session()
-        try:
-            q = session.query(AgentMemory)
-            if category:
-                q = q.filter(AgentMemory.category == category)
-            q = q.filter(AgentMemory.content.ilike(f"%{query}%"))
-            q = q.order_by(AgentMemory.importance.desc(), AgentMemory.updated_at.desc())
-            return [self._memory_to_dict(m) for m in q.limit(limit).all()]
-        finally:
-            session.close()
-
-    def touch_memory(self, memory_id: str) -> None:
-        session = self._get_session()
-        try:
-            mem = session.query(AgentMemory).filter_by(id=memory_id).first()
-            if mem:
-                mem.access_count = (mem.access_count or 0) + 1
-                mem.last_used_at = datetime.now()
-                session.commit()
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
-
-    def delete_memory(self, memory_id: str) -> bool:
-        session = self._get_session()
-        try:
-            mem = session.query(AgentMemory).filter_by(id=memory_id).first()
-            if not mem:
-                return False
-            session.delete(mem)
-            session.commit()
-            return True
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
-
-    def count_memories(self) -> int:
-        session = self._get_session()
-        try:
-            return session.query(AgentMemory).count()
-        finally:
-            session.close()
-
-    def evict_memories(self, keep_count: int) -> int:
-        session = self._get_session()
-        try:
-            all_mems = session.query(AgentMemory).all()
-            if len(all_mems) <= keep_count:
-                return 0
-            now = datetime.now()
-            scored = []
-            for m in all_mems:
-                days_since_use = (now - (m.last_used_at or m.created_at)).days
-                recency_score = max(0.0, 1.0 - days_since_use / 90.0)
-                score = (m.importance or 0.5) * 0.7 + recency_score * 0.3
-                scored.append((score, m))
-            scored.sort(key=lambda x: x[0], reverse=True)
-            to_delete = scored[keep_count:]
-            for _, m in to_delete:
-                session.delete(m)
-            session.commit()
-            return len(to_delete)
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
-
-    def list_memories(self, category: str | None = None, limit: int = 50) -> List[Dict[str, Any]]:
-        session = self._get_session()
-        try:
-            q = session.query(AgentMemory)
-            if category:
-                q = q.filter(AgentMemory.category == category)
-            q = q.order_by(AgentMemory.importance.desc(), AgentMemory.updated_at.desc())
-            return [self._memory_to_dict(m) for m in q.limit(limit).all()]
-        finally:
-            session.close()
-
-    @staticmethod
-    def _memory_to_dict(mem: AgentMemory) -> Dict[str, Any]:
-        return {
-            "id": mem.id,
-            "content": mem.content,
-            "category": mem.category,
-            "importance": mem.importance,
-            "source_thread_id": mem.source_thread_id,
-            "access_count": mem.access_count or 0,
-            "last_used_at": mem.last_used_at.isoformat() if mem.last_used_at else None,
-            "created_at": mem.created_at.isoformat() if mem.created_at else None,
-            "updated_at": mem.updated_at.isoformat() if mem.updated_at else None,
         }

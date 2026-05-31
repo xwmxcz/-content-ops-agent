@@ -86,6 +86,9 @@ export interface AgentThread {
   title?: string
   last_provider?: string
   last_model?: string
+  pinned: boolean
+  archived: boolean
+  title_pinned: boolean
   message_count: number
   created_at?: string
   updated_at?: string
@@ -104,6 +107,34 @@ export interface AgentMessage {
   created_at?: string
 }
 
+export interface AgentSearchHit {
+  message_id: number
+  thread_id: string
+  role: 'user' | 'assistant'
+  content: string
+  provider?: string
+  model?: string
+  created_at?: string
+}
+
+export interface ListThreadsParams {
+  limit?: number
+  offset?: number
+  include_archived?: boolean
+  q?: string
+}
+
+export interface ListMessagesParams {
+  limit?: number
+  before_id?: number
+}
+
+export interface UpdateThreadPatch {
+  title?: string
+  pinned?: boolean
+  archived?: boolean
+}
+
 export async function chat(payload: ChatPayload) {
   const { data } = await api.post<ChatResponse>('/agent/chat', payload)
   return data
@@ -114,18 +145,30 @@ export async function runAgentPipeline(payload: AgentRunPayload) {
   return data
 }
 
-export async function getAgentThreads() {
-  const { data } = await api.get<AgentThread[]>('/agent/threads')
+export async function getAgentThreads(params: ListThreadsParams = {}) {
+  const { data } = await api.get<AgentThread[]>('/agent/threads', { params })
   return data
 }
 
-export async function getAgentMessages(threadId: string) {
-  const { data } = await api.get<AgentMessage[]>(`/agent/threads/${threadId}/messages`)
+export async function getAgentMessages(threadId: string, params: ListMessagesParams = {}) {
+  const { data } = await api.get<AgentMessage[]>(`/agent/threads/${threadId}/messages`, { params })
   return data
 }
 
 export async function deleteAgentThread(threadId: string) {
   const { data } = await api.delete<{ deleted: boolean }>(`/agent/threads/${threadId}`)
+  return data
+}
+
+export async function updateAgentThread(threadId: string, patch: UpdateThreadPatch) {
+  const { data } = await api.patch<AgentThread>(`/agent/threads/${threadId}`, patch)
+  return data
+}
+
+export async function searchAgentMessages(q: string, opts: { limit?: number; thread_id?: string } = {}) {
+  const { data } = await api.get<AgentSearchHit[]>('/agent/threads/search', {
+    params: { q, ...opts }
+  })
   return data
 }
 

@@ -1,6 +1,6 @@
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from src.models import ContentStyle, ContentType
 
@@ -47,9 +47,34 @@ class AgentThreadResponse(BaseModel):
     title: Optional[str] = None
     last_provider: Optional[str] = None
     last_model: Optional[str] = None
+    pinned: bool = False
+    archived: bool = False
+    title_pinned: bool = False
     message_count: int = 0
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+
+
+class AgentThreadUpdateRequest(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    pinned: Optional[bool] = None
+    archived: Optional[bool] = None
+
+    @model_validator(mode="after")
+    def _require_one_field(self) -> "AgentThreadUpdateRequest":
+        if self.title is None and self.pinned is None and self.archived is None:
+            raise ValueError("at least one of title / pinned / archived is required")
+        return self
+
+
+class AgentSearchHit(BaseModel):
+    message_id: int
+    thread_id: str
+    role: Literal["user", "assistant"]
+    content: str
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    created_at: Optional[str] = None
 
 
 class AgentMessageResponse(BaseModel):

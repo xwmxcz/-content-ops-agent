@@ -29,6 +29,7 @@ data/*.db-shm
 data/*.db-wal
 data/*.sqlite3
 data/chroma/
+data/memory/
 data/pytest*/
 
 # Logs

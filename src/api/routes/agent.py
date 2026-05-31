@@ -2,15 +2,17 @@ import asyncio
 import json
 import time
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
-from src.api.dependencies import get_chat_agent_service, get_litellm_client, get_store
+from src.api.dependencies import get_chat_agent_service, get_litellm_client, get_memory_curator, get_store
 from src.api.schemas.agent import (
     AgentMessageResponse,
     AgentRunRequest,
     AgentRunResponse,
+    AgentSearchHit,
     AgentThreadResponse,
+    AgentThreadUpdateRequest,
     ChatRequest,
     ChatResponse,
     PipelineRunHandle,
@@ -19,6 +21,7 @@ from src.api.schemas.agent import (
 from src.api.services.chat_agent import ChatAgentExecutionError, ChatAgentService
 from src.api.services.agent_pipeline import PipelineExecutionError, run_agent_pipeline
 from src.api.services.dynamic_pipeline import DynamicPipeline
+from src.agent.memory_curator import MemoryCurator
 from src.llm.litellm_client import LiteLLMClient
 from src.storage import ContentStore
 
@@ -179,22 +182,112 @@ async def chat(
 
 
 @router.get("/threads", response_model=list[AgentThreadResponse])
-def list_threads(store: ContentStore = Depends(get_store)) -> list[dict]:
-    return store.list_agent_threads()
+def list_threads(
+    store: ContentStore = Depends(get_store),
+    limit: int = Query(30, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    include_archived: bool = Query(False),
+    q: str | None = Query(None, max_length=200),
+) -> list[dict]:
+    return store.list_agent_threads(
+        limit=limit,
+        offset=offset,
+        include_archived=include_archived,
+        q=q,
+    )
+
+
+@router.get("/threads/search", response_model=list[AgentSearchHit])
+def search_threads(
+    store: ContentStore = Depends(get_store),
+    q: str = Query(..., min_length=1, max_length=200),
+    limit: int = Query(20, ge=1, le=100),
+    thread_id: str | None = Query(None, max_length=80),
+) -> list[dict]:
+    hits = store.search_agent_messages(q, limit=limit, thread_id=thread_id)
+    return [
+        {
+            "message_id": hit["id"],
+            "thread_id": hit["thread_id"],
+            "role": hit["role"],
+            "content": hit["content"],
+            "provider": hit.get("provider"),
+            "model": hit.get("model"),
+            "created_at": hit.get("created_at"),
+        }
+        for hit in hits
+    ]
 
 
 @router.get("/threads/{thread_id}/messages", response_model=list[AgentMessageResponse])
-def list_thread_messages(thread_id: str, store: ContentStore = Depends(get_store)) -> list[dict]:
+def list_thread_messages(
+    thread_id: str,
+    store: ContentStore = Depends(get_store),
+    limit: int = Query(200, ge=1, le=500),
+    before_id: int | None = Query(None, ge=1),
+) -> list[dict]:
     if not store.get_agent_thread(thread_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Thread {thread_id} was not found")
-    return store.list_agent_messages(thread_id, limit=200)
+    return store.list_agent_messages(thread_id, limit=limit, before_id=before_id)
+
+
+@router.patch("/threads/{thread_id}", response_model=AgentThreadResponse)
+def update_thread(
+    thread_id: str,
+    request: AgentThreadUpdateRequest,
+    store: ContentStore = Depends(get_store),
+) -> dict:
+    updated = store.update_agent_thread(
+        thread_id,
+        title=request.title,
+        pinned=request.pinned,
+        archived=request.archived,
+    )
+    if not updated:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Thread {thread_id} was not found")
+    return updated
 
 
 @router.delete("/threads/{thread_id}", response_model=dict)
-def delete_thread(thread_id: str, store: ContentStore = Depends(get_store)) -> dict:
+def delete_thread(
+    thread_id: str,
+    background: BackgroundTasks,
+    store: ContentStore = Depends(get_store),
+    curator: MemoryCurator | None = Depends(get_memory_curator),
+) -> dict:
+    if not store.get_agent_thread(thread_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Thread {thread_id} was not found")
+    # Capture transcript BEFORE delete cascades the messages away. Pick provider/model
+    # from the most recent assistant message so the curator runs on the same backend
+    # the user was talking to.
+    messages = store.list_agent_messages(thread_id, limit=500) if curator else []
+    provider = None
+    model = None
+    if curator:
+        for m in reversed(messages):
+            if m.get("role") == "assistant" and m.get("provider"):
+                provider = m["provider"]
+                model = m.get("model")
+                break
     if not store.delete_agent_thread(thread_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Thread {thread_id} was not found")
+    if curator and messages:
+        background.add_task(_run_memory_curator, curator, messages, provider, model)
     return {"deleted": True}
+
+
+async def _run_memory_curator(
+    curator: MemoryCurator,
+    messages: list[dict],
+    provider: str | None,
+    model: str | None,
+) -> None:
+    try:
+        await curator.curate(messages, provider=provider, model=model)
+    except Exception:
+        # curate() already logs failures; swallow here so BackgroundTasks doesn't
+        # raise into Starlette's exception handler after the response is sent.
+        pass
 
 
 @router.get("/stream")

@@ -448,6 +448,123 @@ def test_agent_thread_endpoints(client):
     assert missing_response.status_code == 404
 
 
+def _send_chat(client, *, thread_id: str, message: str = "hello"):
+    return client.post(
+        "/api/agent/chat",
+        json={
+            "message": message,
+            "thread_id": thread_id,
+            "provider": "siliconflow",
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+        },
+    )
+
+
+def test_patch_thread_rename_locks_title(client, store):
+    _send_chat(client, thread_id="thread-rename", message="initial topic")
+
+    # Auto-derived title from the first user message.
+    threads_before = client.get("/api/agent/threads").json()
+    auto_title = next(t["title"] for t in threads_before if t["id"] == "thread-rename")
+    assert auto_title  # auto-generated
+
+    rename = client.patch("/api/agent/threads/thread-rename", json={"title": "My pinned title"})
+    assert rename.status_code == 200
+    body = rename.json()
+    assert body["title"] == "My pinned title"
+    assert body["title_pinned"] is True
+
+    # A follow-up message must NOT clobber the manual title.
+    _send_chat(client, thread_id="thread-rename", message="follow up message that would otherwise become the title")
+    threads_after = client.get("/api/agent/threads").json()
+    after = next(t for t in threads_after if t["id"] == "thread-rename")
+    assert after["title"] == "My pinned title"
+    assert after["title_pinned"] is True
+
+
+def test_patch_thread_pin_orders_list(client):
+    _send_chat(client, thread_id="thread-old", message="old one")
+    _send_chat(client, thread_id="thread-new", message="newer one")
+
+    # Without pinning, "thread-new" sits first (most recently updated).
+    default = client.get("/api/agent/threads").json()
+    assert default[0]["id"] == "thread-new"
+
+    pin = client.patch("/api/agent/threads/thread-old", json={"pinned": True})
+    assert pin.status_code == 200
+    assert pin.json()["pinned"] is True
+
+    pinned_first = client.get("/api/agent/threads").json()
+    assert pinned_first[0]["id"] == "thread-old"
+    assert pinned_first[0]["pinned"] is True
+
+
+def test_patch_thread_archive_filters_list(client):
+    _send_chat(client, thread_id="thread-archive")
+
+    archive = client.patch("/api/agent/threads/thread-archive", json={"archived": True})
+    assert archive.status_code == 200
+    assert archive.json()["archived"] is True
+
+    default = client.get("/api/agent/threads").json()
+    assert all(t["id"] != "thread-archive" for t in default)
+
+    with_archived = client.get("/api/agent/threads", params={"include_archived": True}).json()
+    assert any(t["id"] == "thread-archive" and t["archived"] for t in with_archived)
+
+
+def test_list_threads_pagination(client):
+    for i in range(3):
+        _send_chat(client, thread_id=f"thread-page-{i}", message=f"page {i}")
+
+    page_one = client.get("/api/agent/threads", params={"limit": 2, "offset": 0}).json()
+    page_two = client.get("/api/agent/threads", params={"limit": 2, "offset": 2}).json()
+    assert len(page_one) == 2
+    assert len(page_two) == 1
+    page_one_ids = {t["id"] for t in page_one}
+    page_two_ids = {t["id"] for t in page_two}
+    assert page_one_ids.isdisjoint(page_two_ids)
+
+
+def test_list_messages_before_id(client):
+    for i in range(5):
+        _send_chat(client, thread_id="thread-cursor", message=f"msg {i}")
+
+    all_messages = client.get("/api/agent/threads/thread-cursor/messages").json()
+    assert len(all_messages) == 10  # 5 user + 5 assistant
+
+    cursor_id = all_messages[5]["id"]  # split point
+    older = client.get(
+        "/api/agent/threads/thread-cursor/messages",
+        params={"limit": 100, "before_id": cursor_id},
+    ).json()
+    assert all(m["id"] < cursor_id for m in older)
+    assert len(older) == 5
+
+
+def test_search_threads(client):
+    _send_chat(client, thread_id="thread-search", message="please plan a calendar week for me")
+    _send_chat(client, thread_id="thread-other", message="completely unrelated note")
+
+    response = client.get("/api/agent/threads/search", params={"q": "calendar"})
+    assert response.status_code == 200
+    hits = response.json()
+    assert any(h["thread_id"] == "thread-search" for h in hits)
+    for hit in hits:
+        assert "message_id" in hit and "thread_id" in hit and "content" in hit
+
+
+def test_patch_thread_rejects_empty_payload(client):
+    _send_chat(client, thread_id="thread-empty-patch")
+    response = client.patch("/api/agent/threads/thread-empty-patch", json={})
+    assert response.status_code == 422
+
+
+def test_patch_missing_thread_returns_404(client):
+    response = client.patch("/api/agent/threads/does-not-exist", json={"title": "x"})
+    assert response.status_code == 404
+
+
 def test_models_contract(client, monkeypatch):
     async def no_dynamic_models(provider: str):
         return None

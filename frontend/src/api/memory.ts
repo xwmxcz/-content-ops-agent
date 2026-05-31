@@ -1,55 +1,56 @@
 import { api } from './index'
 
-export interface Memory {
-  id: string
+export interface MemoryFile {
   content: string
-  category: string
-  importance: number
-  access_count: number
-  last_used_at: string | null
-  created_at: string | null
-  updated_at: string | null
+  char_count: number
+  char_limit: number
 }
 
-export interface MemoryCreatePayload {
+export interface SessionSearchHit {
+  id: number
+  thread_id: string
+  role: string
   content: string
-  category: string
-  importance: number
+  provider?: string | null
+  model?: string | null
+  status?: string | null
+  created_at?: string | null
 }
 
-export interface MemoryUpdatePayload {
-  content?: string
-  category?: string
-  importance?: number
-}
-
-export interface MemorySearchResult {
-  memories: Memory[]
+export interface SessionSearchResult {
+  messages: SessionSearchHit[]
   count: number
 }
 
-export async function getMemories(category?: string, limit = 50) {
-  const { data } = await api.get<Memory[]>('/memories', { params: { category, limit } })
+export async function getAgentMemory() {
+  const { data } = await api.get<MemoryFile>('/memory/agent')
   return data
 }
 
-export async function createMemory(payload: MemoryCreatePayload) {
-  const { data } = await api.post<Memory>('/memories', payload)
+export async function saveAgentMemory(content: string) {
+  const { data } = await api.put<MemoryFile>('/memory/agent', { content })
   return data
 }
 
-export async function deleteMemory(id: string) {
-  await api.delete(`/memories/${id}`)
-}
-
-export async function updateMemory(id: string, payload: MemoryUpdatePayload) {
-  const { data } = await api.put<Memory>(`/memories/${id}`, payload)
+export async function getUserMemory() {
+  const { data } = await api.get<MemoryFile>('/memory/user')
   return data
 }
 
-export async function searchMemories(q: string, category?: string, limit = 10) {
-  const { data } = await api.get<MemorySearchResult>('/memories/search/query', {
-    params: { q, category, limit }
+export async function saveUserMemory(content: string) {
+  const { data } = await api.put<MemoryFile>('/memory/user', { content })
+  return data
+}
+
+export async function searchSessions(q: string, limit = 10, threadId?: string) {
+  const { data } = await api.post<SessionSearchResult>('/memory/search', {
+    q,
+    limit,
+    thread_id: threadId ?? null,
   })
   return data
+}
+
+export async function refreshSnapshot(threadId?: string) {
+  await api.post('/memory/refresh-snapshot', { thread_id: threadId ?? null })
 }
