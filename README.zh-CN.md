@@ -17,7 +17,8 @@ AI Content Ops 是一个面向内容运营团队的可演示 SaaS 原型。项�
 - 素材与发布：上传图片/视频素材，并通过本地 MCP 集成路径提交小红书立即发布或定时发布任务。
 - 发布日历：查看未来 60 天发布队列、平台分布、单日议程，并支持快速手动排期。
 - 统计分析：查看内容类型和状态分布。
-- 模型控制台：通过同一套 API 使用 Claude、SiliconFlow、DeepSeek、Moonshot。
+- 模型控制台：通过同一套 API 使用 Claude、SiliconFlow、DeepSeek、Moonshot，以及任意 NewAPI 兼容网关。
+- 长期记忆：Hermes 风格的文件型记忆层（`MEMORY.md` + `USER.md`），配合会话内上下文压缩器和线程关闭后的自动 curator。详见下方 [长期记忆](#长期记忆) 章节。
 
 当前 UI 中没有单独的 Campaigns / 内容活动工作区。内容生产留在内容工作台，内容修改留在内容打磨，计划和排期留在发布日历与 Agent 工具里。
 
@@ -38,6 +39,8 @@ graph LR
   C --> E[LiteLLM Adapter]
   D --> E
   D --> F[LangChain Tool Calling]
+  D --> M[File Memory + Context Compressor]
+  M --> N[(MEMORY.md / USER.md)]
   Q --> G[BackgroundTasks or RQ]
   G --> H[(SQLite or PostgreSQL)]
   G --> I[(Redis for RQ mode)]
@@ -48,14 +51,59 @@ graph LR
 - `frontend/`: Vue 3 前端、Element Plus 界面、基于轮询的任务流和内容/模型 API client。
 - `src/api/`: FastAPI 路由、schema、服务层、依赖注入和契约测试接口。
 - `src/api/services/agent_pipeline.py`: 四阶段 Agent 流程，负责策略、初稿、润色和审核。
-- `src/api/services/chat_agent.py`: 持久化的工具型对话 Agent。
+- `src/api/services/chat_agent.py`: 持久化的工具型对话 Agent，内置内容运营工具、文件记忆工具（`memory_add` / `memory_replace` / `memory_remove`），以及基于 FTS5 的 `session_search` 全文检索工具。
 - `src/api/routes/jobs.py`: 工作台和打磨页使用的异步任务接口。
 - `src/api/routes/media.py`: 本地图片/视频素材的上传、列表、访问和删除，并包含文件路径安全检查。
 - `src/api/routes/publish.py` 和 `src/api/services/publish_service.py`: 小红书发布校验、任务入队、立即发布和定时发布挂钩。
+- `src/api/routes/memory.py`: 直接读写 `MEMORY.md` / `USER.md`、FTS5 会话检索，以及 frozen-snapshot 失效接口。
+- `src/agent/`: 会话内上下文压缩器（Hermes 第 4 层）和线程关闭后的记忆 curator（Hermes 第 3 层）。
+- `src/storage/file_memory.py`: 线程安全的 `MEMORY.md` / `USER.md` 读写器，带硬字符上限。
 - `src/jobs/`: 队列适配层和共享任务执行器，兼容 background 模式和 RQ worker。
-- `src/llm/`: 基于 LiteLLM 的多 provider 适配。
+- `src/llm/`: 基于 LiteLLM 的 Claude、SiliconFlow、DeepSeek、Moonshot、NewAPI 多 provider 适配。
 - `src/storage/content_store.py`: SQLAlchemy 持久化内容、素材、发布记录、日历、统计、Agent 会话和任务状态。
-- `tests/`: 健康检查、任务接口、内容生成、Agent 流程、对话持久化、工具事件、素材安全、发布流程和模型列表的契约测试。
+- `tests/`: 健康检查、任务接口、内容生成、Agent 流程、对话持久化、工具事件、素材安全、发布流程、模型列表、文件记忆、记忆 curator、上下文压缩器、chat agent 记忆集成、会话搜索的契约测试。
+
+## 长期记忆
+
+对话 Agent 内置了一个 Hermes 风格的四层长期记忆系统，每一层都可通过环境变量单独关闭——如果你不需要记忆，可以一直收缩到一个无状态的 chat Agent。
+
+| 层 | 位置 | 作用 |
+|----:|------|------|
+| 1 | `data/memory/MEMORY.md` + `data/memory/USER.md` | 两个 flat markdown 文件，带硬字符上限（默认 2200 / 1375）。`MEMORY.md` 是 Agent 自己的笔记本（项目惯例、品牌词、工具坑），`USER.md` 是用户画像（姓名、语言、风格偏好）。 |
+| 2 | `src/api/services/chat_agent.py` | 每个 thread 启动时把两个文件**一次性冻结**进系统 prompt，整个 session 不再重读——目的是让 Anthropic prompt caching 保暖。Agent 拥有 `memory_add` / `memory_replace` / `memory_remove` 工具来写入文件，但所有改动**下次 session 才生效**，不影响当前对话。 |
+| 3 | `src/agent/memory_curator.py` | 用户删除会话（`DELETE /api/agent/threads/{id}`）时，后台用辅助 LLM 跑一遍完整 transcript + 当前文件，输出一组 `add` / `replace` / `remove` 操作。单个操作失败（超限、匹配歧义）会被记录，但不会拖垮整批。 |
+| 4 | `src/agent/context_compressor.py` | 会话消息超过阈值（默认 30 条）时，把中间段交给辅助 LLM 压缩成 13 段固定结构的 markdown checkpoint。Tool call ↔ tool result 配对会被保护，分界永远不会切到一半。后续轮次检测到已有 checkpoint，会改用迭代 prompt 在原地更新。 |
+
+前端"长期记忆"页是这两个文件的直接编辑器，带字符占用进度条。进阶接口有 `POST /api/memory/refresh-snapshot`（主动失效单个或全部 thread 的 frozen 缓存），以及 `POST /api/memory/search`（FTS5 trigram 全文搜索 `agent_messages`——支持中文 ≥ 3 字符，短查询自动回退到 LIKE）。
+
+### 记忆相关环境变量
+
+默认值对单用户 demo 已经够用；需要时在 `.env` 里调：
+
+```env
+MEMORY_ENABLED=true                       # 第 1-3 层总开关
+MEMORY_DIR=data/memory                    # MEMORY.md / USER.md 存放目录
+MEMORY_MD_LIMIT=2200                      # MEMORY.md 硬字符上限
+USER_MD_LIMIT=1375                        # USER.md 硬字符上限
+CONTEXT_COMPRESS_ENABLED=true             # 第 4 层
+CONTEXT_COMPRESS_TRIGGER_MESSAGES=30      # 消息数超过该阈值触发压缩
+CONTEXT_COMPRESS_KEEP_HEAD=4              # 头部保留原文条数
+CONTEXT_COMPRESS_KEEP_TAIL=8              # 尾部保留原文条数
+MEMORY_CURATOR_ENABLED=true               # 第 3 层
+MEMORY_CURATOR_MIN_MESSAGES=4             # 太短的 thread 不 curate
+MEMORY_CURATOR_MAX_ACTIONS=6              # 每个关闭 thread 最多写多少条
+```
+
+### 从旧版向量记忆迁移
+
+更早版本把记忆存为 `agent_memories` 表里的行，并在 `data/chroma/` 下保留 embedding。这两块已经下线。如果你在升级已有数据库，**重新部署前**先跑一次性迁移脚本：
+
+```bash
+python examples/migrate_memories.py --db data/content_ops.db --memory-dir data/memory
+# 加 --dry-run 可以只预览分桶结果，不写文件
+```
+
+脚本会读 `agent_memories`，把 `preference` 类别落进 `USER.md`，其余落进 `MEMORY.md`；超出字符上限的条目写到 `data/memory/_overflow_<timestamp>.md` 供人工挑选合并。脚本不会动 `agent_memories` 表和 `data/chroma/` 目录，确认迁移成功后由你自己删除。
 
 ## 界面截图
 
