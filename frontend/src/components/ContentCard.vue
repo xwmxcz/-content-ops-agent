@@ -40,7 +40,7 @@ const styleLabel = computed(() => getStyleLabel(props.item.style))
   padding: 16px;
   border: 1px solid var(--c-border);
   border-radius: 6px;
-  background: var(--c-bg);
+  background: var(--c-surface);
   box-shadow: none;
   backdrop-filter: none;
   transition: border-color 100ms ease;
@@ -69,11 +69,11 @@ const styleLabel = computed(() => getStyleLabel(props.item.style))
   padding: 0 8px;
   border-radius: 999px;
   border: 1px solid var(--c-border);
-  background: var(--c-bg);
+  background: var(--c-surface);
   font-size: 11px;
   font-weight: 500;
   font-family: var(--font-mono);
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .card-type {
@@ -95,7 +95,7 @@ const styleLabel = computed(() => getStyleLabel(props.item.style))
   font-size: 14.5px;
   font-weight: 600;
   line-height: 1.4;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .card-body {

@@ -501,12 +501,19 @@ class DynamicPipeline:
             except Exception:
                 continue
         steps.sort(key=lambda s: s.index)
-        # Renumber to 1..N to keep indices contiguous after dedupe / drop
-        for new_idx, step in enumerate(steps, start=1):
-            if step.index != new_idx:
-                # Need to remap inputs_from references
-                old_index = step.index
-                step.index = new_idx
+        # Renumber to 1..N after dropping invalid or duplicate planner steps.
+        # Keep dependency edges attached to the same surviving original steps.
+        old_to_new = {step.index: new_idx for new_idx, step in enumerate(steps, start=1)}
+        for step in steps:
+            old_index = step.index
+            new_index = old_to_new[old_index]
+            step.index = new_index
+            remapped_inputs = {
+                old_to_new[source]
+                for source in step.inputs_from
+                if source in old_to_new and old_to_new[source] < new_index
+            }
+            step.inputs_from = sorted(remapped_inputs)
         # Trim if last step is not writer/editor
         if steps and steps[-1].agent_id not in ("writer", "editor"):
             steps = steps + [PipelinePlanStep(
@@ -572,6 +579,12 @@ class DynamicPipeline:
         if prior_blocks:
             ctx += "\n" + "\n\n".join(prior_blocks) + "\n"
         instruction = step.instruction or step.description
+        if step.agent_id in ("researcher", "fact_checker"):
+            instruction += (
+                "\nWhen using web_search, include the topic's specific qualifiers in every query "
+                "(location, product/object, platform, audience, scenario, year). If a query is too "
+                "generic or returns irrelevant results, retry with the original topic words included."
+            )
         return f"{ctx}\n\nYour task: {instruction}\n"
 
     @staticmethod

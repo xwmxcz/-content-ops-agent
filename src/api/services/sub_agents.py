@@ -95,6 +95,10 @@ SUB_AGENTS: dict[SubAgentId, SubAgentSpec] = {
             "appropriate tool(s) before answering. If you are confident the topic is generic "
             "enough that you can answer from your own knowledge, you may skip tools — that "
             "decision is yours.\n\n"
+            "When calling web_search, preserve the topic's core qualifiers in the query: "
+            "location, product name, platform, target audience, year, and scenario. "
+            "Do not reduce a specific topic such as `河北周末徒步路线` to a generic query "
+            "such as `weekend hiking recommendations`.\n\n"
             "After any tool calls (or directly if you skipped them), summarize the key findings "
             "the writer should know — keep it tight, prefer 5-8 bullet points."
         ),
@@ -243,15 +247,15 @@ class SubAgentRunner:
     ) -> tuple[str, int, int]:
         tools = self._build_whitelisted_tools(spec.tools)
         tools_by_name = {t.name: t for t in tools}
-        chat_model = self.model_factory(provider, model, spec.temperature, max_tokens)
-        if hasattr(chat_model, "bind_tools"):
-            chat_model = chat_model.bind_tools(tools)
+        base_chat_model = self.model_factory(provider, model, spec.temperature, max_tokens)
+        chat_model = base_chat_model.bind_tools(tools) if hasattr(base_chat_model, "bind_tools") else base_chat_model
 
         messages: list[BaseMessage] = [
             SystemMessage(content=spec.system_prompt),
             HumanMessage(content=user_prompt),
         ]
         last_text = ""
+        tool_results: list[dict[str, Any]] = []
         prompt_tokens = 0
         completion_tokens = 0
         for _ in range(self.MAX_TOOL_LOOPS):
@@ -277,6 +281,10 @@ class SubAgentRunner:
                 if not tool:
                     output = f"Tool `{name}` is not available to {spec.id}."
                     duration_ms = int((time.perf_counter() - started) * 1000)
+                    tool_results.append({
+                        "name": name, "args": args, "status": "failed",
+                        "error": output, "output": "", "duration_ms": duration_ms,
+                    })
                     if tool_sink is not None:
                         try:
                             await tool_sink("tool_call_result", {
@@ -290,17 +298,25 @@ class SubAgentRunner:
                         raw = await tool.ainvoke(args) if hasattr(tool, "ainvoke") else tool.invoke(args)
                         output = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)
                         duration_ms = int((time.perf_counter() - started) * 1000)
+                        tool_results.append({
+                            "name": name, "args": args, "status": "completed",
+                            "output": output, "duration_ms": duration_ms,
+                        })
                         if tool_sink is not None:
                             try:
                                 await tool_sink("tool_call_result", {
                                     "name": name, "args": args, "status": "completed",
-                                    "preview": output[:300], "duration_ms": duration_ms,
+                                    "preview": self._tool_preview(output), "duration_ms": duration_ms,
                                 })
                             except Exception:
                                 pass
                     except Exception as exc:
                         output = f"Tool failed: {exc}"
                         duration_ms = int((time.perf_counter() - started) * 1000)
+                        tool_results.append({
+                            "name": name, "args": args, "status": "failed",
+                            "error": str(exc), "output": "", "duration_ms": duration_ms,
+                        })
                         if tool_sink is not None:
                             try:
                                 await tool_sink("tool_call_result", {
@@ -310,7 +326,23 @@ class SubAgentRunner:
                             except Exception:
                                 pass
                 messages.append(ToolMessage(content=output, tool_call_id=call.get("id") or name or "x"))
-        return last_text or "(no output)", prompt_tokens, completion_tokens
+        final_text = self._clean_final_text(last_text)
+        if final_text:
+            return final_text, prompt_tokens, completion_tokens
+
+        synthesis_text, synth_prompt_tokens, synth_completion_tokens = await self._synthesize_tool_summary(
+            base_chat_model=base_chat_model,
+            spec=spec,
+            user_prompt=user_prompt,
+            tool_results=tool_results,
+        )
+        prompt_tokens += synth_prompt_tokens
+        completion_tokens += synth_completion_tokens
+
+        final_text = self._clean_final_text(synthesis_text)
+        if final_text:
+            return final_text, prompt_tokens, completion_tokens
+        return self._technical_no_output_summary(tool_results), prompt_tokens, completion_tokens
 
     def _build_whitelisted_tools(self, allowed: tuple[str, ...]) -> list[StructuredTool]:
         from src.api.services import content_service  # noqa: F401  (kept for parity with chat_agent imports)
@@ -371,3 +403,150 @@ class SubAgentRunner:
         if isinstance(content, str):
             return content
         return json.dumps(content, ensure_ascii=False)
+
+    @classmethod
+    def _clean_final_text(cls, text: str) -> str:
+        stripped = (text or "").strip()
+        if (
+            not stripped
+            or stripped == "(no output)"
+            or cls._is_empty_json_value(stripped)
+            or cls._looks_like_tool_call_markup(stripped)
+        ):
+            return ""
+        return stripped
+
+    @classmethod
+    async def _synthesize_tool_summary(
+        self,
+        base_chat_model: Any,
+        spec: SubAgentSpec,
+        user_prompt: str,
+        tool_results: list[dict[str, Any]],
+    ) -> tuple[str, int, int]:
+        synthesis_prompt = (
+            "The previous assistant turn called tools but returned no final text. "
+            "Now write the actual final answer for this sub-agent using ONLY the tool results below "
+            "and the original user request. If the tools found no usable records, say that clearly "
+            "and explain what that means for the writer. Do not invent sources, places, dates, or URLs. "
+            "Do not output tool-call XML, JSON function calls, or code blocks.\n\n"
+            f"Original request:\n{user_prompt}\n\n"
+            f"Tool results:\n{self._tool_results_for_prompt(tool_results)}"
+        )
+        ai_message = await base_chat_model.ainvoke([
+            SystemMessage(content=(
+                "You are a synthesis assistant. Tools are NOT available in this turn. "
+                "Do not call tools. Do not emit <tool_call>, function-call JSON, or arguments. "
+                "Write a concise, human-readable answer in the same language as the original request. "
+                "Use only the provided tool results and be explicit when search failed or returned no reliable data."
+            )),
+            HumanMessage(content=synthesis_prompt),
+        ])
+        usage = getattr(ai_message, "usage_metadata", None) or {}
+        return (
+            self._message_text(ai_message.content),
+            int(usage.get("input_tokens", 0) or 0),
+            int(usage.get("output_tokens", 0) or 0),
+        )
+
+    @classmethod
+    def _technical_no_output_summary(cls, tool_results: list[dict[str, Any]]) -> str:
+        if not tool_results:
+            return "模型没有调用工具，也没有返回文本。"
+
+        lines = ["模型在工具调用后没有返回文本。以下是真实工具结果："]
+        for result in tool_results:
+            call = cls._format_tool_call(result.get("name", ""), result.get("args") or {})
+            if result.get("status") == "failed":
+                lines.append(f"- {call}: 调用失败，{result.get('error') or '未返回错误详情'}")
+                continue
+            output = str(result.get("output") or "")
+            if cls._is_empty_tool_output(output):
+                lines.append(f"- {call}: 未返回结果")
+            else:
+                lines.append(f"- {call}: {cls._tool_preview(output)}")
+        return "\n".join(lines)
+
+    @classmethod
+    def _tool_results_for_prompt(cls, tool_results: list[dict[str, Any]]) -> str:
+        if not tool_results:
+            return "No tools were called."
+        return "\n".join(
+            json.dumps({
+                "tool": result.get("name", ""),
+                "args": result.get("args") or {},
+                "status": result.get("status", "completed"),
+                "error": result.get("error"),
+                "output": result.get("output", ""),
+            }, ensure_ascii=False)
+            for result in tool_results
+        )
+
+    @classmethod
+    def _tool_preview(cls, output: str, limit: int = 300) -> str:
+        text = (output or "").strip()
+        if cls._is_empty_tool_output(text):
+            return "无结果"
+        try:
+            parsed = json.loads(text)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return text[:limit]
+
+        if isinstance(parsed, list):
+            first = parsed[0] if parsed else None
+            if isinstance(first, dict):
+                title = first.get("title") or first.get("name") or first.get("content") or first.get("text")
+                snippet = first.get("snippet") or first.get("summary") or first.get("body")
+                preview = "；".join(str(part) for part in [title, snippet] if part)
+                return f"{len(parsed)} 条结果" + (f"：{preview[:limit]}" if preview else "")
+            return f"{len(parsed)} 条结果：{str(first)[:limit]}" if first is not None else "无结果"
+        if isinstance(parsed, dict):
+            error = parsed.get("error")
+            results = parsed.get("results")
+            if error and isinstance(results, list) and not results:
+                return f"搜索失败：{error}"
+            preview = parsed.get("title") or parsed.get("name") or parsed.get("content") or parsed.get("text")
+            if preview:
+                return str(preview)[:limit]
+            keys = ", ".join(list(parsed.keys())[:6])
+            return f"返回对象：{keys}" if keys else "无结果"
+        return text[:limit]
+
+    @staticmethod
+    def _format_tool_call(name: str, args: dict[str, Any]) -> str:
+        if not args:
+            return name
+        formatted = ", ".join(
+            f"{key}: {value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)}"
+            for key, value in args.items()
+        )
+        return f"{name}({formatted})"
+
+    @classmethod
+    def _is_empty_tool_output(cls, output: str) -> bool:
+        text = (output or "").strip()
+        if not text:
+            return True
+        return cls._is_empty_json_value(text)
+
+    @staticmethod
+    def _is_empty_json_value(text: str) -> bool:
+        try:
+            parsed = json.loads(text)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return False
+        if parsed is None:
+            return True
+        if isinstance(parsed, (list, dict, str)):
+            return len(parsed) == 0
+        return False
+
+    @staticmethod
+    def _looks_like_tool_call_markup(text: str) -> bool:
+        lowered = text.lower()
+        return (
+            lowered.startswith("<tool_call")
+            or "<tool_call" in lowered
+            or "<arg_key>" in lowered
+            or "<arg_value>" in lowered
+        )

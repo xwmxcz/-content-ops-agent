@@ -3,7 +3,7 @@ import type { AgentRunPayload, AgentRunResponse } from './agent'
 import type { ContentItem, GeneratePayload, RefinePayload } from './content'
 import type { Publication } from './publish'
 
-export type JobStatus = 'queued' | 'running' | 'completed' | 'failed'
+export type JobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
 export type JobType = 'content_generation' | 'agent_run' | 'refine' | 'titles' | 'seo' | 'publish_xiaohongshu'
 
 export interface JobResponse {
@@ -52,6 +52,11 @@ export async function getJob(jobId: string) {
   return data
 }
 
+export async function cancelJob(jobId: string) {
+  const { data } = await api.delete<JobResponse>(`/jobs/${jobId}`)
+  return data
+}
+
 export async function waitForJobResult<T>(
   jobId: string,
   extract: (job: JobResponse) => T | undefined,
@@ -69,6 +74,9 @@ export async function waitForJobResult<T>(
     }
     if (job.status === 'failed') {
       throw new Error(job.error || '任务执行失败')
+    }
+    if (job.status === 'cancelled') {
+      throw new Error(job.error || '任务已取消')
     }
     await new Promise(resolve => window.setTimeout(resolve, 1500))
   }

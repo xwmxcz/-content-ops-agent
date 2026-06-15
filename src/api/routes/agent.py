@@ -2,7 +2,7 @@ import asyncio
 import json
 import time
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
 from src.api.dependencies import get_chat_agent_service, get_litellm_client, get_memory_curator, get_store
@@ -118,12 +118,17 @@ def get_pipeline_run(run_id: str, store: ContentStore = Depends(get_store)) -> d
 
 
 @router.get("/runs/{run_id}/stream")
-async def stream_pipeline_run(run_id: str, store: ContentStore = Depends(get_store)):
+async def stream_pipeline_run(
+    run_id: str,
+    store: ContentStore = Depends(get_store),
+    after_seq: int | None = Query(default=None, ge=0),
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+):
     if not store.get_run(run_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Run {run_id} was not found")
 
     async def event_stream():
-        last_seq = 0
+        last_seq = after_seq if after_seq is not None else _parse_last_event_id(last_event_id)
         deadline = time.time() + 600
         terminal = {"run_complete", "run_failed", "run_cancelled"}
         yield "event: hello\ndata: {}\n\n"
@@ -131,7 +136,7 @@ async def stream_pipeline_run(run_id: str, store: ContentStore = Depends(get_sto
             events = store.list_run_events(run_id, after_seq=last_seq, limit=100)
             for evt in events:
                 last_seq = evt["seq"]
-                yield f"event: {evt['event_type']}\ndata: {evt['payload']}\n\n"
+                yield f"id: {evt['seq']}\nevent: {evt['event_type']}\ndata: {evt['payload']}\n\n"
                 if evt["event_type"] in terminal:
                     return
             await asyncio.sleep(0.4)
@@ -145,6 +150,15 @@ async def stream_pipeline_run(run_id: str, store: ContentStore = Depends(get_sto
             "Connection": "keep-alive",
         },
     )
+
+
+def _parse_last_event_id(value: str | None) -> int:
+    if not value:
+        return 0
+    try:
+        return max(0, int(value))
+    except ValueError:
+        return 0
 
 
 @router.delete("/runs/{run_id}", response_model=dict)

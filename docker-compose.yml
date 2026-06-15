@@ -1,4 +1,121 @@
+x-app-env: &app-env
+  LLM_PROVIDER: ${LLM_PROVIDER:-deepseek}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  SILICONFLOW_API_KEY: ${SILICONFLOW_API_KEY:-}
+  DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+  MOONSHOT_API_KEY: ${MOONSHOT_API_KEY:-}
+  NEWAPI_API_KEY: ${NEWAPI_API_KEY:-}
+  NEWAPI_BASE_URL: ${NEWAPI_BASE_URL:-}
+  CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-3-5-sonnet-20241022}
+  SILICONFLOW_MODEL: ${SILICONFLOW_MODEL:-zai-org/GLM-4.5-Air}
+  DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-flash}
+  MOONSHOT_MODEL: ${MOONSHOT_MODEL:-moonshot-v1-8k}
+  NEWAPI_MODEL: ${NEWAPI_MODEL:-gpt-4o-mini}
+  SILICONFLOW_BASE_URL: ${SILICONFLOW_BASE_URL:-https://api.siliconflow.cn/v1}
+  DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
+  MOONSHOT_BASE_URL: ${MOONSHOT_BASE_URL:-https://api.moonshot.cn/v1}
+  MAX_TOKENS: ${MAX_TOKENS:-4096}
+  TEMPERATURE: ${TEMPERATURE:-0.7}
+  LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-120}
+  CHAT_PLAN_ENABLED: ${CHAT_PLAN_ENABLED:-true}
+  AUTH_ENABLED: ${AUTH_ENABLED:-false}
+  AUTH_USERNAME: ${AUTH_USERNAME:-admin}
+  AUTH_PASSWORD: ${AUTH_PASSWORD:-}
+  AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-}
+  AUTH_TOKEN_EXPIRE_MINUTES: ${AUTH_TOKEN_EXPIRE_MINUTES:-1440}
+  DATABASE_URL: postgresql+psycopg://content_ops:content_ops@postgres:5432/content_ops
+  DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
+  DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-20}
+  DB_POOL_TIMEOUT_SECONDS: ${DB_POOL_TIMEOUT_SECONDS:-30}
+  JOB_QUEUE_MODE: rq
+  REDIS_URL: redis://redis:6379/0
+  JOB_QUEUE_NAME: ${JOB_QUEUE_NAME:-content_ops}
+  JOB_TIMEOUT_SECONDS: ${JOB_TIMEOUT_SECONDS:-300}
+  MAX_PROVIDER_INFLIGHT_JOBS: ${MAX_PROVIDER_INFLIGHT_JOBS:-8}
+  MEDIA_STORAGE_ROOT: /app/data/media
+  MEDIA_MAX_IMAGE_COUNT: ${MEDIA_MAX_IMAGE_COUNT:-9}
+  MEDIA_MAX_VIDEO_SIZE_MB: ${MEDIA_MAX_VIDEO_SIZE_MB:-512}
+  WEB_SEARCH_PROVIDER: ${WEB_SEARCH_PROVIDER:-auto}
+  SERPER_API_KEY: ${SERPER_API_KEY:-}
+  TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+  BRAVE_SEARCH_API_KEY: ${BRAVE_SEARCH_API_KEY:-}
+  SEARXNG_BASE_URL: ${SEARXNG_BASE_URL:-}
+  XHS_MCP_ENABLED: ${XHS_MCP_ENABLED:-true}
+  XHS_MCP_URL: ${XHS_MCP_URL:-http://host.docker.internal:18060/mcp}
+  XHS_MCP_TIMEOUT_SECONDS: ${XHS_MCP_TIMEOUT_SECONDS:-120}
+  MEMORY_ENABLED: ${MEMORY_ENABLED:-true}
+  MEMORY_DIR: /app/data/memory
+  MEMORY_MD_LIMIT: ${MEMORY_MD_LIMIT:-2200}
+  USER_MD_LIMIT: ${USER_MD_LIMIT:-1375}
+  CONTEXT_COMPRESS_ENABLED: ${CONTEXT_COMPRESS_ENABLED:-true}
+  CONTEXT_COMPRESS_TRIGGER_MESSAGES: ${CONTEXT_COMPRESS_TRIGGER_MESSAGES:-30}
+  CONTEXT_COMPRESS_KEEP_HEAD: ${CONTEXT_COMPRESS_KEEP_HEAD:-4}
+  CONTEXT_COMPRESS_KEEP_TAIL: ${CONTEXT_COMPRESS_KEEP_TAIL:-8}
+  MEMORY_CURATOR_ENABLED: ${MEMORY_CURATOR_ENABLED:-true}
+  MEMORY_CURATOR_MIN_MESSAGES: ${MEMORY_CURATOR_MIN_MESSAGES:-4}
+  MEMORY_CURATOR_MAX_ACTIONS: ${MEMORY_CURATOR_MAX_ACTIONS:-6}
+  DEBUG: ${DEBUG:-false}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  API_HOST: 0.0.0.0
+  API_PORT: 8000
+  API_RELOAD: false
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8088,http://localhost:8000}
+
 services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    environment:
+      <<: *app-env
+    ports:
+      - "8000:8000"
+    volumes:
+      - app_data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=5).read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    command: ["python", "worker.py"]
+    environment:
+      <<: *app-env
+    volumes:
+      - app_data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: frontend
+    ports:
+      - "${FRONTEND_PORT:-8088}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
   postgres:
     image: postgres:16-alpine
     environment:
@@ -26,4 +143,5 @@ services:
       retries: 5
 
 volumes:
+  app_data:
   postgres_data:

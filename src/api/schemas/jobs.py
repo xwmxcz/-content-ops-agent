@@ -6,7 +6,7 @@ from src.api.schemas.agent import AgentRunRequest
 from src.api.schemas.content import GenerateRequest, RefineRequest, SeoRequest, TitleRequest
 
 
-JobStatus = Literal["queued", "running", "completed", "failed"]
+JobStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
 JobType = Literal["content_generation", "agent_run", "refine", "titles", "seo", "publish_xiaohongshu"]
 
 

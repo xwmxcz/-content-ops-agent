@@ -2,7 +2,7 @@
   <div class="calendar-page">
     <section class="calendar-hero">
       <div class="hero-copy">
-        <span class="hero-kicker">Publishing Calendar</span>
+        <span class="hero-kicker">发布排期</span>
         <h1>发布日历</h1>
         <p>{{ calendarRangeLabel }}</p>
       </div>
@@ -39,7 +39,7 @@
       <main class="calendar-panel">
         <div class="panel-head">
           <div>
-            <span class="panel-kicker">Month View</span>
+            <span class="panel-kicker">月视图</span>
             <h2>排期总览</h2>
           </div>
           <span class="range-pill">{{ events.length ? '已同步' : '暂无计划' }}</span>
@@ -77,7 +77,7 @@
         <section class="side-section selected-day">
           <div class="panel-head compact">
             <div>
-              <span class="panel-kicker">Selected Day</span>
+              <span class="panel-kicker">选中日期</span>
               <h2>{{ selectedDayTitle }}</h2>
             </div>
             <el-button size="small" :icon="Plus" @click="openDialog(selectedDay)">添加</el-button>
@@ -99,7 +99,7 @@
         <section class="side-section">
           <div class="panel-head compact">
             <div>
-              <span class="panel-kicker">Next Queue</span>
+              <span class="panel-kicker">近期队列</span>
               <h2>近期计划</h2>
             </div>
             <span class="range-pill">{{ upcomingEvents.length }}</span>
@@ -147,7 +147,19 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { ElCalendar } from 'element-plus/es/components/calendar/index'
+import { ElDatePicker } from 'element-plus/es/components/date-picker/index'
+import { ElDialog } from 'element-plus/es/components/dialog/index'
+import { ElEmpty } from 'element-plus/es/components/empty/index'
+import { ElForm, ElFormItem } from 'element-plus/es/components/form/index'
+import { ElInputNumber } from 'element-plus/es/components/input-number/index'
 import { ElMessage } from 'element-plus/es/components/message/index'
+import 'element-plus/es/components/calendar/style/css'
+import 'element-plus/es/components/date-picker/style/css'
+import 'element-plus/es/components/dialog/style/css'
+import 'element-plus/es/components/empty/style/css'
+import 'element-plus/es/components/form/style/css'
+import 'element-plus/es/components/input-number/style/css'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import { createEvent, getEvents, type CalendarEvent } from '../api/calendar'
 import { CONTENT_TYPE_OPTIONS, getContentTypeLabel } from '../constants/content'
@@ -330,10 +342,7 @@ onMounted(load)
   min-height: calc(100vh - 56px);
   padding: 24px 32px 32px;
   color: var(--c-text);
-  background:
-    linear-gradient(135deg, rgba(50, 132, 255, 0.08), transparent 34%),
-    linear-gradient(315deg, rgba(23, 163, 74, 0.07), transparent 28%),
-    var(--c-bg);
+  background: var(--c-bg);
 }
 
 .calendar-hero {
@@ -361,9 +370,10 @@ onMounted(load)
 
 .hero-copy h1 {
   margin: 6px 0 6px;
-  font-size: 30px;
+  font-size: var(--fs-h1);
   font-weight: 650;
   line-height: 1.15;
+  letter-spacing: 0;
 }
 
 .hero-copy p {
@@ -392,8 +402,8 @@ onMounted(load)
   padding: 15px 16px;
   border: 1px solid var(--c-border);
   border-radius: 6px;
-  background: color-mix(in srgb, var(--c-bg) 92%, white);
-  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.04);
+  background: var(--c-surface);
+  box-shadow: none;
 }
 
 .signal-card span,
@@ -429,7 +439,7 @@ onMounted(load)
   padding: 20px;
   border: 1px solid var(--c-border);
   border-radius: 6px;
-  background: var(--c-bg);
+  background: var(--c-surface);
 }
 
 .side-panel {
@@ -642,7 +652,7 @@ onMounted(load)
   min-width: 0;
   border: 1px solid var(--c-border);
   border-radius: 6px;
-  background: var(--c-bg);
+  background: var(--c-surface);
 }
 
 .agenda-row {

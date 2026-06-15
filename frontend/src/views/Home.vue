@@ -2,9 +2,9 @@
   <div class="page dashboard-page">
     <section class="dashboard-hero">
       <div>
-        <span class="hero-kicker">Operations Snapshot</span>
+        <span class="hero-kicker">运营总览</span>
         <h1 class="page-title">内容运营概览</h1>
-        <p class="page-subtitle">查看内容资产、工作流入口和近期产出，把日常动作压缩到一个总览页。</p>
+        <p class="page-subtitle">集中查看内容资产、近期产出和常用工作入口。</p>
       </div>
       <div class="hero-actions">
         <el-button type="primary" :icon="EditPen" @click="$router.push('/')">打开工作台</el-button>
@@ -69,6 +69,8 @@
 
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import { ElEmpty } from 'element-plus/es/components/empty/index'
+import 'element-plus/es/components/empty/style/css'
 import { EditPen, Refresh, Tickets } from '@element-plus/icons-vue'
 import ContentCard from '../components/ContentCard.vue'
 import { getStats, type StatsPayload } from '../api/stats'
@@ -121,9 +123,9 @@ onMounted(load)
 
 .dashboard-hero .page-title {
   margin-top: 6px;
-  font-size: 32px;
+  font-size: var(--fs-h1);
   font-weight: 600;
-  letter-spacing: -0.025em;
+  letter-spacing: 0;
   line-height: 1.15;
 }
 
@@ -152,7 +154,7 @@ onMounted(load)
   padding: 16px 20px;
   border: 1px solid var(--c-border);
   border-radius: 6px;
-  background: var(--c-bg);
+  background: var(--c-surface);
   box-shadow: none;
   backdrop-filter: none;
   transition: border-color 100ms ease;
@@ -179,7 +181,7 @@ onMounted(load)
   margin: 8px 0 4px;
   color: var(--c-text);
   font-weight: 600;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
 }
 
 .metric-card strong {
@@ -205,7 +207,7 @@ onMounted(load)
 .quick-card span {
   font-size: 12.5px;
   text-transform: none;
-  letter-spacing: -0.005em;
+  letter-spacing: 0;
   color: var(--c-text-secondary);
   font-weight: 400;
 }
@@ -213,14 +215,14 @@ onMounted(load)
 .recent {
   border: 1px solid var(--c-border);
   border-radius: 6px;
-  background: var(--c-bg);
+  background: var(--c-surface);
   padding: 24px;
 }
 
 .recent .page-title {
   font-size: 18px;
   font-weight: 600;
-  letter-spacing: -0.015em;
+  letter-spacing: 0;
 }
 
 .recent .page-subtitle {

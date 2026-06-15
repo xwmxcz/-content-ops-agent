@@ -32,7 +32,9 @@ async def run_job_async(job_id: str, store: ContentStore) -> None:
         return
 
     attempts = int(job.get("attempts") or 0) + 1
-    store.update_job(job_id, status="running", progress=5, attempts=attempts)
+    job = store.start_job(job_id, attempts=attempts, progress=5)
+    if not job:
+        return
     llm = create_litellm_client()
 
     try:
@@ -46,12 +48,23 @@ async def run_job_async(job_id: str, store: ContentStore) -> None:
         PublicationValidationError,
         McpClientError,
     ) as exc:
+        if _is_cancelled(job_id, store):
+            return
         store.update_job(job_id, status="failed", progress=100, error=str(exc))
     except Exception as exc:
+        if _is_cancelled(job_id, store):
+            return
         message = str(exc).strip() or "Job failed unexpectedly"
         store.update_job(job_id, status="failed", progress=100, error=message)
     else:
+        if _is_cancelled(job_id, store):
+            return
         store.update_job(job_id, status="completed", progress=100, result=result, error=None)
+
+
+def _is_cancelled(job_id: str, store: ContentStore) -> bool:
+    current = store.get_job(job_id)
+    return bool(current and current.get("status") == "cancelled")
 
 
 async def _execute_job(job: dict[str, Any], llm: LiteLLMClient, store: ContentStore) -> dict[str, Any]:

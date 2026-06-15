@@ -1,5 +1,7 @@
 import axios from 'axios'
 
+const AUTH_TOKEN_STORAGE_KEY = 'content_ops_agent_auth_token'
+
 export class ApiError extends Error {
   status?: number
   detail: unknown
@@ -17,11 +19,50 @@ export const api = axios.create({
   timeout: 120000
 })
 
+export function getAuthToken() {
+  return window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY)
+}
+
+export function setAuthToken(token: string) {
+  window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token)
+}
+
+export function clearAuthToken() {
+  window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY)
+}
+
+export function withAuthQuery(url: string) {
+  const token = getAuthToken()
+  if (!token) return url
+
+  const parsed = new URL(url, window.location.origin)
+  parsed.searchParams.set('access_token', token)
+  return parsed.origin === window.location.origin
+    ? `${parsed.pathname}${parsed.search}${parsed.hash}`
+    : parsed.toString()
+}
+
+api.interceptors.request.use(config => {
+  const token = getAuthToken()
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
 api.interceptors.response.use(
   response => response,
   error => {
     const detail = error.response?.data?.detail
     const status = error.response?.status
+    const requestUrl = error.config?.url ?? ''
+    if (status === 401 && !requestUrl.includes('/auth/login') && !requestUrl.includes('/auth/status')) {
+      clearAuthToken()
+      const next = `${window.location.pathname}${window.location.search}`
+      if (!window.location.pathname.startsWith('/login')) {
+        window.location.assign(`/login?next=${encodeURIComponent(next)}`)
+      }
+    }
     const message = typeof detail === 'string' ? detail : detail?.message ?? fallbackApiMessage(status, error.message)
     return Promise.reject(new ApiError(message, error.response?.status, detail))
   }

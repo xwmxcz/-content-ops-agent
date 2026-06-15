@@ -2,7 +2,7 @@
   <div class="page refine-page">
     <section class="refine-hero">
       <div>
-        <span class="hero-kicker">Refine Workspace</span>
+        <span class="hero-kicker">内容打磨</span>
         <h1 class="page-title">内容打磨</h1>
         <p class="page-subtitle">从内容库中选择现有内容，直接改写、换风格、做标题优化或 SEO 分析。</p>
       </div>
@@ -15,7 +15,7 @@
       <section class="section source-section">
         <div class="section-head">
           <div>
-            <span class="section-kicker">Source</span>
+            <span class="section-kicker">来源</span>
             <h2>选择内容</h2>
           </div>
           <span class="section-pill">{{ source ? `#${source.id}` : '未选择' }}</span>
@@ -53,7 +53,7 @@
       <section class="section action-section">
         <div class="section-head">
           <div>
-            <span class="section-kicker">Action</span>
+            <span class="section-kicker">操作</span>
             <h2>打磨方式</h2>
           </div>
         </div>
@@ -76,7 +76,7 @@
           </el-tab-pane>
 
           <el-tab-pane label="风格切换" name="style">
-            <el-segmented v-model="newStyle" :options="STYLE_OPTIONS" />
+            <el-segmented v-model="newStyle" :options="styleSegmentOptions" />
             <el-button type="primary" :loading="loading" class="action-btn" @click="switchStyle">切换风格</el-button>
           </el-tab-pane>
 
@@ -95,7 +95,7 @@
       <section class="section result-section">
         <div class="section-head">
           <div>
-            <span class="section-kicker">Result</span>
+            <span class="section-kicker">结果</span>
             <h2>输出结果</h2>
           </div>
           <div class="hero-actions">
@@ -117,7 +117,19 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
+import { ElEmpty } from 'element-plus/es/components/empty/index'
+import { ElInputNumber } from 'element-plus/es/components/input-number/index'
 import { ElMessage } from 'element-plus/es/components/message/index'
+import { ElSegmented } from 'element-plus/es/components/segmented/index'
+import { ElSkeleton } from 'element-plus/es/components/skeleton/index'
+import { ElSlider } from 'element-plus/es/components/slider/index'
+import { ElTabPane, ElTabs } from 'element-plus/es/components/tabs/index'
+import 'element-plus/es/components/empty/style/css'
+import 'element-plus/es/components/input-number/style/css'
+import 'element-plus/es/components/segmented/style/css'
+import 'element-plus/es/components/skeleton/style/css'
+import 'element-plus/es/components/slider/style/css'
+import 'element-plus/es/components/tabs/style/css'
 import { DocumentCopy, Refresh, Search } from '@element-plus/icons-vue'
 import ModelSelector from '../components/ModelSelector.vue'
 import { getContent, getContents, type ContentItem } from '../api/content'
@@ -125,6 +137,7 @@ import { createRefineJob, createSeoJob, createTitlesJob, extractContent, extract
 import { STYLE_OPTIONS, getContentTypeLabel, getStatusLabel, getStyleLabel } from '../constants/content'
 
 const route = useRoute()
+const styleSegmentOptions = STYLE_OPTIONS.map(item => ({ ...item }))
 
 const modelConfig = reactive({ provider: '', model: '', temperature: 0.7, max_tokens: 2048 })
 const contentId = ref(1)
@@ -302,9 +315,9 @@ onMounted(async () => {
 
 .refine-hero .page-title {
   margin-top: 6px;
-  font-size: 32px;
+  font-size: var(--fs-h1);
   font-weight: 600;
-  letter-spacing: -0.025em;
+  letter-spacing: 0;
   line-height: 1.15;
 }
 
@@ -346,7 +359,7 @@ onMounted(async () => {
   color: var(--c-text);
   font-size: 18px;
   font-weight: 600;
-  letter-spacing: -0.015em;
+  letter-spacing: 0;
 }
 
 .section-pill {
@@ -357,10 +370,10 @@ onMounted(async () => {
   border: 1px solid var(--c-border);
   border-radius: 999px;
   color: var(--c-text-secondary);
-  background: var(--c-bg);
+  background: var(--c-surface);
   font-size: 11px;
   font-family: var(--font-mono);
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .manual-loader {
@@ -400,7 +413,7 @@ onMounted(async () => {
   border: 1px solid var(--c-border);
   border-radius: 4px;
   color: var(--c-text);
-  background: var(--c-bg);
+  background: var(--c-surface);
   text-align: left;
   cursor: pointer;
   transition: border-color 100ms ease, background-color 100ms ease;
@@ -419,7 +432,7 @@ onMounted(async () => {
   color: var(--c-text);
   font-size: 13px;
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .recent-card span,

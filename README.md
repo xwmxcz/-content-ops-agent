@@ -155,13 +155,34 @@ Prepared config file:
 
 Additional deployment notes live in [DEPLOYMENT.md](DEPLOYMENT.md).
 
+### Docker Compose full stack
+
+The repository uses one multi-stage `Dockerfile` plus `docker-compose.yml` to start the full stack: Vue/Nginx frontend, FastAPI API, RQ worker, PostgreSQL, and Redis.
+
+```bash
+cp .env.docker.example .env
+docker compose up --build
+```
+
+Open `http://localhost:8088`. Docker mode uses PostgreSQL + Redis/RQ by default. To enable the login gate, set `AUTH_ENABLED=true`, `AUTH_PASSWORD`, and `AUTH_SECRET_KEY` in `.env`.
+
+For reliable web research, configure one search API key in `.env`: `SERPER_API_KEY`, `TAVILY_API_KEY`, or `BRAVE_SEARCH_API_KEY`. Without a key, the app falls back to keyless HTML search, which may be blocked by search-engine anti-bot checks.
+
+Useful commands:
+
+```bash
+docker compose ps
+docker compose logs -f api
+docker compose down
+```
+
 ## Portable Setup
 
 Prerequisites:
 
 - Python 3.10+
 - Node.js 18+
-- Docker Desktop if you want PostgreSQL + Redis locally
+- Docker Desktop if you want the full Compose stack or PostgreSQL + Redis locally
 - An API key for at least one supported LLM provider if you want live generation. Demo seed data does not call external APIs.
 
 Install backend dependencies:
@@ -272,7 +293,7 @@ npm run dev
 
 Notes:
 
-- `docker-compose.yml` in this repo starts PostgreSQL and Redis only.
+- `docker-compose.yml` in this repo starts the full Docker stack. For host-based development, you can still run only `postgres` and `redis` with `docker compose up -d postgres redis`.
 - On Windows, `worker.py` automatically uses RQ `SimpleWorker`.
 - If Redis is not running, `python worker.py` will fail with a connection error. That is expected.
 

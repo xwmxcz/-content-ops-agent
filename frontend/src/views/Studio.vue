@@ -47,7 +47,7 @@
         <section class="studio-surface">
           <div class="surface-head">
             <div>
-              <span class="surface-kicker">Creative Brief</span>
+              <span class="surface-kicker">创作简报</span>
               <h2>创作配置</h2>
             </div>
             <span class="surface-pill">{{ platformLabel }}</span>
@@ -87,7 +87,7 @@
         <section v-if="mode === 'dynamic'" class="studio-surface research-surface">
           <div class="surface-head compact">
             <div>
-              <span class="surface-kicker">Research Sources</span>
+              <span class="surface-kicker">研究来源</span>
               <h2>研究来源</h2>
             </div>
             <span class="surface-pill mono">{{ activeSourceCount }}/2</span>
@@ -105,7 +105,7 @@
             >
               <el-switch v-model="research.use_web_search" @click.stop />
               <div class="toggle-copy">
-                <strong>Web Search</strong>
+                <strong>网页检索</strong>
                 <span>DuckDuckGo · 时事 / 横评</span>
               </div>
             </div>
@@ -121,7 +121,7 @@
             >
               <el-switch v-model="research.use_history_search" @click.stop />
               <div class="toggle-copy">
-                <strong>History Search</strong>
+                <strong>历史内容库</strong>
                 <span>本地内容库 · 复用沉淀</span>
               </div>
             </div>
@@ -138,7 +138,7 @@
         <section class="studio-surface">
           <div class="surface-head compact">
             <div>
-              <span class="surface-kicker">Execution</span>
+              <span class="surface-kicker">执行参数</span>
               <h2>模型与执行参数</h2>
             </div>
           </div>
@@ -150,7 +150,7 @@
         <section class="studio-surface">
           <div class="surface-head">
             <div>
-              <span class="surface-kicker">{{ mode === 'dynamic' ? 'Plan Timeline' : 'Pipeline Stages' }}</span>
+              <span class="surface-kicker">{{ mode === 'dynamic' ? '执行计划' : '工作流阶段' }}</span>
               <h2>{{ pipelineTitle }}</h2>
             </div>
             <div class="surface-actions">
@@ -182,13 +182,13 @@
                 <span class="timeline-index">{{ step.index }}</span>
                 <strong class="timeline-name">
                   <span v-if="isResearchStep(step.agent_id)" class="research-glyph" aria-hidden="true">
-                    {{ step.agent_id === 'researcher' ? '🔍' : '🛡' }}
+                    {{ step.agent_id === 'researcher' ? 'R' : 'F' }}
                   </span>
                   {{ agentLabel(step.agent_id) }}
                 </strong>
                 <div class="timeline-meta">
                   <small v-if="toolEventsFor(step.index).length" class="tool-pill" :title="`${toolEventsFor(step.index).length} 个工具调用`">
-                    🛠 {{ toolEventsFor(step.index).length }}
+                    工具 {{ toolEventsFor(step.index).length }}
                   </small>
                   <small v-if="step.duration_ms" class="timeline-duration">{{ step.duration_ms }} ms</small>
                   <span class="timeline-chevron" aria-hidden="true">›</span>
@@ -230,7 +230,7 @@
                 <template v-else>
                   <span class="tool-arrow">→</span>
                   <span v-if="event.status === 'failed'" class="tool-error">{{ event.error || '失败' }}</span>
-                  <span v-else class="tool-preview">{{ event.preview || '完成' }}</span>
+                  <span v-else class="tool-preview">{{ formatToolPreview(event.preview) }}</span>
                   <span v-if="event.duration_ms" class="tool-duration">{{ event.duration_ms }} ms</span>
                 </template>
               </li>
@@ -254,7 +254,7 @@
         <section v-if="finalContent" class="studio-surface final-surface">
           <div class="surface-head">
             <div>
-              <span class="surface-kicker">Final Content</span>
+              <span class="surface-kicker">最终内容</span>
               <h2>{{ finalContent.title || form.topic || '未命名' }}</h2>
             </div>
             <div class="surface-actions">
@@ -286,7 +286,17 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElAlert } from 'element-plus/es/components/alert/index'
+import { ElDialog } from 'element-plus/es/components/dialog/index'
 import { ElMessage } from 'element-plus/es/components/message/index'
+import { ElRadioButton, ElRadioGroup } from 'element-plus/es/components/radio/index'
+import { ElSegmented } from 'element-plus/es/components/segmented/index'
+import { ElSwitch } from 'element-plus/es/components/switch/index'
+import 'element-plus/es/components/alert/style/css'
+import 'element-plus/es/components/dialog/style/css'
+import 'element-plus/es/components/radio/style/css'
+import 'element-plus/es/components/segmented/style/css'
+import 'element-plus/es/components/switch/style/css'
 import {
   CircleClose,
   ChatDotRound,
@@ -299,18 +309,19 @@ import ModelSelector from '../components/ModelSelector.vue'
 import {
   cancelPipelineRun,
   createPipelineRun,
-  pipelineStreamUrl,
   type PipelinePlanStep,
   type PipelineRunPayload,
   type SubAgentId,
   type SubAgentToolEvent
 } from '../api/agent'
 import {
+  cancelJob,
   createAgentRunJob,
   extractAgentRun,
-  getJob,
   type JobResponse
 } from '../api/jobs'
+import { useJobPolling } from '../composables/useJobPolling'
+import { usePipelineStream } from '../composables/usePipelineStream'
 import type { AgentRunPayload, AgentRunResponse, AgentStep } from '../api/agent'
 
 interface FinalContent {
@@ -351,8 +362,8 @@ const quickPrompts = computed(() => QUICK_PROMPTS_BY_MODE[mode.value])
 void quickPrompts // kept for future re-introduction; not currently rendered
 
 const modeOptions = [
-  { label: '内容生产线 · Workflow', value: 'workflow' },
-  { label: '研究型 Pipeline · Dynamic', value: 'dynamic' }
+  { label: '标准工作流', value: 'workflow' },
+  { label: '研究型 Pipeline', value: 'dynamic' }
 ]
 
 const AGENT_LABELS: Record<string, string> = {
@@ -415,9 +426,109 @@ const totalCost = ref(0)
 const revisionCount = ref(0)
 const status = ref<RunStatus>('idle')
 
-let eventSource: EventSource | null = null
 let workflowJobId: string | null = null
-let workflowAbort = false
+const workflowPolling = useJobPolling()
+const pipelineStream = usePipelineStream({
+  onPlanReady(nextPlan) {
+    plan.value = nextPlan.map(step => ({ ...step }))
+    status.value = 'running'
+  },
+  onStepStart(index) {
+    streamingOutputs[index] = ''
+    stepToolEvents[index] = []
+    const step = plan.value.find(s => s.index === index)
+    if (step) step.status = 'running'
+  },
+  onStepToken(index, delta) {
+    streamingOutputs[index] = (streamingOutputs[index] || '') + delta
+  },
+  onToolCallStart(event) {
+    if (!stepToolEvents[event.index]) stepToolEvents[event.index] = []
+    stepToolEvents[event.index].push({
+      name: event.name,
+      args: event.args || {},
+      status: 'started',
+      preview: '',
+      duration_ms: 0
+    })
+  },
+  onToolCallResult(event) {
+    const list = stepToolEvents[event.index] || (stepToolEvents[event.index] = [])
+    const pending = [...list].reverse().find(t => t.name === event.name && t.status === 'started')
+    const nextEvent: SubAgentToolEvent = {
+      name: event.name,
+      args: event.args || {},
+      status: event.status,
+      preview: event.preview || '',
+      error: event.error || null,
+      duration_ms: event.duration_ms || 0
+    }
+    if (pending) Object.assign(pending, nextEvent)
+    else list.push(nextEvent)
+  },
+  onStepComplete(event) {
+    const step = plan.value.find(s => s.index === event.index)
+    if (step) {
+      step.status = 'completed'
+      step.output = event.output
+      step.duration_ms = event.duration_ms
+      step.prompt_tokens = event.prompt_tokens
+      step.completion_tokens = event.completion_tokens
+      step.cost_estimate = event.cost_estimate
+      step.tool_events = event.tool_events || []
+    }
+    streamingOutputs[event.index] = event.output
+    if (event.tool_events) stepToolEvents[event.index] = event.tool_events
+    totalPromptTokens.value += event.prompt_tokens
+    totalCompletionTokens.value += event.completion_tokens
+    totalCost.value += event.cost_estimate
+  },
+  onStepFailed(index, error) {
+    const step = plan.value.find(s => s.index === index)
+    if (step) step.status = 'failed'
+    errorMessage.value = `Step ${index} 失败：${error}`
+  },
+  onPlanRevised(nextPlan, revision) {
+    const knownIndices = new Set(plan.value.map(s => s.index))
+    plan.value = nextPlan.map(step => {
+      const isNew = !knownIndices.has(step.index)
+      return { ...step, revised_at: isNew ? revision : step.revised_at }
+    })
+    revisionCount.value = revision
+  },
+  onRunComplete(event) {
+    finalContent.value = event.final_content
+    savedContentId.value = event.saved_content_id ?? null
+    totalPromptTokens.value = event.total_prompt_tokens
+    totalCompletionTokens.value = event.total_completion_tokens
+    totalCost.value = event.total_cost
+    revisionCount.value = event.revision_count
+    status.value = 'completed'
+    running.value = false
+    closeStream()
+    ElMessage.success(savedContentId.value ? `已完成，已保存 #${savedContentId.value}` : '已完成')
+  },
+  onRunFailed(error) {
+    status.value = 'failed'
+    running.value = false
+    errorMessage.value = error || '运行失败'
+    closeStream()
+  },
+  onRunCancelled() {
+    status.value = 'cancelled'
+    running.value = false
+    errorMessage.value = '已停止运行'
+    closeStream()
+  },
+  onConnectionLost() {
+    if (status.value !== 'completed' && status.value !== 'failed' && status.value !== 'cancelled') {
+      status.value = 'failed'
+      running.value = false
+      errorMessage.value = errorMessage.value || 'SSE 连接中断'
+      closeStream()
+    }
+  }
+})
 
 const totalTokens = computed(() => totalPromptTokens.value + totalCompletionTokens.value)
 void totalTokens // kept for future re-introduction; not currently displayed
@@ -583,11 +694,26 @@ function formatToolArgs(args: Record<string, unknown>): string {
     .join(', ')
 }
 
+function formatToolPreview(preview?: string | null): string {
+  const trimmed = (preview || '').trim()
+  if (!trimmed) return '完成'
+  try {
+    const parsed = JSON.parse(trimmed)
+    if (Array.isArray(parsed) && parsed.length === 0) return '无结果'
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.keys(parsed).length === 0) {
+      return '无结果'
+    }
+  } catch {
+    // Plain text previews are displayed as-is.
+  }
+  return trimmed
+}
+
 function resetWorkspace() {
   if (running.value) return
   closeStream()
   workflowJobId = null
-  workflowAbort = false
+  workflowPolling.reset()
   runId.value = ''
   plan.value = []
   Object.keys(streamingOutputs).forEach(k => delete streamingOutputs[Number(k)])
@@ -603,10 +729,7 @@ function resetWorkspace() {
 }
 
 function closeStream() {
-  if (eventSource) {
-    eventSource.close()
-    eventSource = null
-  }
+  pipelineStream.close()
 }
 
 function stop() {
@@ -622,7 +745,12 @@ function stop() {
     }
     closeStream()
   } else {
-    workflowAbort = true
+    workflowPolling.abort()
+    if (workflowJobId) {
+      cancelJob(workflowJobId).catch(() => {
+        /* already terminal or network blip — frontend state is already 'cancelled' */
+      })
+    }
   }
   running.value = false
   status.value = 'cancelled'
@@ -674,154 +802,11 @@ async function runDynamic() {
 }
 
 function subscribe(id: string) {
-  closeStream()
-  const evt = new EventSource(pipelineStreamUrl(id))
-  eventSource = evt
-
-  evt.addEventListener('plan_ready', e => {
-    const data = JSON.parse((e as MessageEvent).data) as { plan: PipelinePlanStep[] }
-    plan.value = data.plan.map(step => ({ ...step }))
-    status.value = 'running'
-  })
-
-  evt.addEventListener('step_start', e => {
-    const data = JSON.parse((e as MessageEvent).data) as { index: number }
-    streamingOutputs[data.index] = ''
-    stepToolEvents[data.index] = []
-    const step = plan.value.find(s => s.index === data.index)
-    if (step) step.status = 'running'
-  })
-
-  evt.addEventListener('step_token', e => {
-    const data = JSON.parse((e as MessageEvent).data) as { index: number; delta: string }
-    streamingOutputs[data.index] = (streamingOutputs[data.index] || '') + data.delta
-  })
-
-  evt.addEventListener('tool_call_start', e => {
-    const data = JSON.parse((e as MessageEvent).data) as {
-      index: number
-      name: string
-      args: Record<string, unknown>
-    }
-    if (!stepToolEvents[data.index]) stepToolEvents[data.index] = []
-    stepToolEvents[data.index].push({
-      name: data.name,
-      args: data.args || {},
-      status: 'started',
-      preview: '',
-      duration_ms: 0
-    })
-  })
-
-  evt.addEventListener('tool_call_result', e => {
-    const data = JSON.parse((e as MessageEvent).data) as {
-      index: number
-      name: string
-      args: Record<string, unknown>
-      status: 'completed' | 'failed'
-      preview?: string
-      error?: string | null
-      duration_ms?: number
-    }
-    const list = stepToolEvents[data.index] || (stepToolEvents[data.index] = [])
-    const pending = [...list].reverse().find(t => t.name === data.name && t.status === 'started')
-    const event: SubAgentToolEvent = {
-      name: data.name,
-      args: data.args || {},
-      status: data.status,
-      preview: data.preview || '',
-      error: data.error || null,
-      duration_ms: data.duration_ms || 0
-    }
-    if (pending) Object.assign(pending, event)
-    else list.push(event)
-  })
-
-  evt.addEventListener('step_complete', e => {
-    const data = JSON.parse((e as MessageEvent).data) as {
-      index: number
-      output: string
-      duration_ms: number
-      prompt_tokens: number
-      completion_tokens: number
-      cost_estimate: number
-      tool_events?: SubAgentToolEvent[]
-    }
-    const step = plan.value.find(s => s.index === data.index)
-    if (step) {
-      step.status = 'completed'
-      step.output = data.output
-      step.duration_ms = data.duration_ms
-      step.prompt_tokens = data.prompt_tokens
-      step.completion_tokens = data.completion_tokens
-      step.cost_estimate = data.cost_estimate
-      step.tool_events = data.tool_events || []
-    }
-    streamingOutputs[data.index] = data.output
-    if (data.tool_events) stepToolEvents[data.index] = data.tool_events
-    totalPromptTokens.value += data.prompt_tokens
-    totalCompletionTokens.value += data.completion_tokens
-    totalCost.value += data.cost_estimate
-  })
-
-  evt.addEventListener('step_failed', e => {
-    const data = JSON.parse((e as MessageEvent).data) as { index: number; error: string }
-    const step = plan.value.find(s => s.index === data.index)
-    if (step) step.status = 'failed'
-    errorMessage.value = `Step ${data.index} 失败：${data.error}`
-  })
-
-  evt.addEventListener('plan_revised', e => {
-    const data = JSON.parse((e as MessageEvent).data) as { plan: PipelinePlanStep[]; revision: number }
-    const knownIndices = new Set(plan.value.map(s => s.index))
-    plan.value = data.plan.map(step => {
-      const isNew = !knownIndices.has(step.index)
-      return { ...step, revised_at: isNew ? data.revision : step.revised_at }
-    })
-    revisionCount.value = data.revision
-  })
-
-  evt.addEventListener('run_complete', e => {
-    const data = JSON.parse((e as MessageEvent).data) as {
-      final_content: FinalContent
-      saved_content_id?: number | null
-      total_prompt_tokens: number
-      total_completion_tokens: number
-      total_cost: number
-      revision_count: number
-    }
-    finalContent.value = data.final_content
-    savedContentId.value = data.saved_content_id ?? null
-    totalPromptTokens.value = data.total_prompt_tokens
-    totalCompletionTokens.value = data.total_completion_tokens
-    totalCost.value = data.total_cost
-    revisionCount.value = data.revision_count
-    status.value = 'completed'
-    running.value = false
-    closeStream()
-    ElMessage.success(savedContentId.value ? `已完成，已保存 #${savedContentId.value}` : '已完成')
-  })
-
-  evt.addEventListener('run_failed', e => {
-    const data = JSON.parse((e as MessageEvent).data) as { error?: string }
-    status.value = 'failed'
-    running.value = false
-    errorMessage.value = data.error || '运行失败'
-    closeStream()
-  })
-
-  evt.onerror = () => {
-    if (status.value !== 'completed' && status.value !== 'failed' && status.value !== 'cancelled') {
-      status.value = 'failed'
-      running.value = false
-      errorMessage.value = errorMessage.value || 'SSE 连接中断'
-      closeStream()
-    }
-  }
+  pipelineStream.subscribe(id)
 }
 
 async function runWorkflow() {
-  workflowAbort = false
+  workflowPolling.reset()
   plan.value = ['strategy', 'writer', 'editor', 'review'].map((id, idx) => ({
     index: idx + 1,
     agent_id: id as SubAgentId,
@@ -855,10 +840,10 @@ async function runWorkflow() {
     workflowJobId = job.id
     runId.value = job.id
     const result = await pollWorkflowJob(job.id)
-    if (workflowAbort) return
+    if (workflowPolling.isAborted()) return
     applyWorkflowResult(result)
   } catch (error) {
-    if (workflowAbort) return
+    if (workflowPolling.isAborted()) return
     running.value = false
     status.value = 'failed'
     errorMessage.value = (error as Error).message
@@ -867,21 +852,10 @@ async function runWorkflow() {
 }
 
 async function pollWorkflowJob(jobId: string): Promise<AgentRunResponse> {
-  const started = Date.now()
-  const timeoutMs = 360000
-  while (Date.now() - started < timeoutMs) {
-    if (workflowAbort) throw new Error('已停止')
-    const job: JobResponse = await getJob(jobId)
-    advanceWorkflowSteps(job)
-    if (job.status === 'completed') {
-      const result = extractAgentRun(job)
-      if (!result) throw new Error('任务已完成，但结果为空')
-      return result
-    }
-    if (job.status === 'failed') throw new Error(job.error || '任务执行失败')
-    await new Promise(resolve => window.setTimeout(resolve, 1500))
-  }
-  throw new Error('任务等待超时')
+  return workflowPolling.poll(jobId, {
+    extract: extractAgentRun,
+    onUpdate: advanceWorkflowSteps
+  })
 }
 
 function advanceWorkflowSteps(job: JobResponse) {
@@ -954,12 +928,27 @@ onBeforeUnmount(() => {
 }
 
 .studio-banner {
+  position: relative;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: 24px;
   margin: 0 auto 16px;
+  padding: 22px 24px;
   max-width: 1520px;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  background: var(--c-surface);
+  box-shadow: var(--shadow-panel);
+  overflow: hidden;
+}
+
+.studio-banner::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: linear-gradient(90deg, var(--c-accent), #38bdf8);
 }
 
 .banner-copy {
@@ -979,10 +968,10 @@ onBeforeUnmount(() => {
 .banner-copy h1 {
   margin: 8px 0 6px;
   color: var(--c-text);
-  font-size: 30px;
+  font-size: 28px;
   font-weight: 600;
   line-height: 1.18;
-  letter-spacing: -0.025em;
+  letter-spacing: 0;
 }
 
 .banner-copy p {
@@ -1005,7 +994,8 @@ onBeforeUnmount(() => {
   padding: 12px 16px;
   border: 1px solid var(--c-border);
   border-radius: 6px;
-  background: var(--c-bg);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-panel);
 }
 
 .ghost-action {
@@ -1017,7 +1007,7 @@ onBeforeUnmount(() => {
   border: 1px solid var(--c-border);
   border-radius: 4px;
   color: var(--c-text);
-  background: var(--c-bg);
+  background: var(--c-surface);
   cursor: pointer;
   font-size: 13px;
   font-weight: 500;
@@ -1079,7 +1069,7 @@ onBeforeUnmount(() => {
   font-family: var(--font-mono);
   color: var(--c-accent);
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .progress-count {
@@ -1117,10 +1107,23 @@ onBeforeUnmount(() => {
 }
 
 .signal-card {
+  position: relative;
   padding: 14px 16px;
   border: 1px solid var(--c-border);
   border-radius: 6px;
-  background: var(--c-bg);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-panel);
+  overflow: hidden;
+}
+
+.signal-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--c-accent);
 }
 
 .signal-card span {
@@ -1139,7 +1142,7 @@ onBeforeUnmount(() => {
   font-size: 22px;
   font-weight: 600;
   line-height: 1.2;
-  letter-spacing: -0.015em;
+  letter-spacing: 0;
   font-feature-settings: 'tnum';
   font-variant-numeric: tabular-nums;
 }
@@ -1180,7 +1183,8 @@ onBeforeUnmount(() => {
   padding: 20px;
   border: 1px solid var(--c-border);
   border-radius: 6px;
-  background: var(--c-bg);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-panel);
 }
 
 .surface-head {
@@ -1201,7 +1205,7 @@ onBeforeUnmount(() => {
   font-size: 18px;
   font-weight: 600;
   line-height: 1.25;
-  letter-spacing: -0.015em;
+  letter-spacing: 0;
 }
 
 .surface-actions {
@@ -1219,11 +1223,11 @@ onBeforeUnmount(() => {
   border: 1px solid var(--c-border);
   border-radius: 999px;
   color: var(--c-text-secondary);
-  background: var(--c-bg);
+  background: var(--c-surface);
   font-size: 11px;
   font-weight: 500;
   font-family: var(--font-mono);
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
   white-space: nowrap;
 }
 
@@ -1290,7 +1294,7 @@ onBeforeUnmount(() => {
   border: 1px solid var(--c-border);
   border-radius: 999px;
   color: var(--c-text-secondary);
-  background: var(--c-bg);
+  background: var(--c-surface);
   cursor: pointer;
   font-size: 12px;
   line-height: 1.45;
@@ -1334,7 +1338,7 @@ onBeforeUnmount(() => {
   padding: 8px 12px;
   border: 1px solid var(--c-border);
   border-radius: 6px;
-  background: var(--c-bg);
+  background: var(--c-surface);
   cursor: pointer;
   outline: none;
   transition: border-color 120ms ease, background-color 120ms ease, transform 80ms ease;
@@ -1370,24 +1374,32 @@ onBeforeUnmount(() => {
 
 .timeline-step.is-revised {
   border-style: dashed;
-  border-color: #6e56cf;
-  background: rgba(110, 86, 207, 0.06);
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
 }
 
 .timeline-step.is-research {
-  border-color: rgba(110, 86, 207, 0.45);
-  background: linear-gradient(180deg, rgba(110, 86, 207, 0.08), rgba(110, 86, 207, 0.02));
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
 }
 
 .timeline-step.is-research.completed {
-  border-color: #6e56cf;
+  border-color: var(--c-accent);
 }
 
 .research-glyph {
-  display: inline-block;
-  margin-right: 4px;
-  font-size: 13px;
-  vertical-align: -1px;
+  display: inline-grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  margin-right: 5px;
+  border: 1px solid var(--c-accent);
+  border-radius: 999px;
+  color: var(--c-accent);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  vertical-align: 1px;
 }
 
 .research-tag {
@@ -1397,8 +1409,8 @@ onBeforeUnmount(() => {
   margin-left: 6px;
   padding: 0 6px;
   border-radius: 999px;
-  background: rgba(110, 86, 207, 0.16);
-  color: #6e56cf;
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
   font-size: 9.5px;
   font-weight: 600;
   font-family: var(--font-mono);
@@ -1417,7 +1429,7 @@ onBeforeUnmount(() => {
   font-family: var(--font-mono);
   font-size: 10.5px;
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .timeline-head {
@@ -1431,7 +1443,7 @@ onBeforeUnmount(() => {
   color: var(--c-text);
   font-size: 13px;
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1506,12 +1518,12 @@ onBeforeUnmount(() => {
   margin-top: 4px;
   padding: 2px 8px;
   border-radius: 999px;
-  background: rgba(110, 86, 207, 0.16);
-  color: #6e56cf;
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
   font-size: 11px;
   font-family: var(--font-mono);
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .step-surface.completed {
@@ -1527,12 +1539,12 @@ onBeforeUnmount(() => {
 }
 
 .step-surface.is-research {
-  border-color: rgba(110, 86, 207, 0.4);
-  background: linear-gradient(180deg, rgba(110, 86, 207, 0.05), transparent 36%);
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
 }
 
 .step-surface.is-research.completed {
-  border-color: #6e56cf;
+  border-color: var(--c-accent);
 }
 
 /* Dialog header that replaces the inline step card surface-head. */
@@ -1554,8 +1566,8 @@ onBeforeUnmount(() => {
 }
 
 .research-surface {
-  border-color: rgba(110, 86, 207, 0.5);
-  background: linear-gradient(180deg, rgba(110, 86, 207, 0.07), transparent 60%);
+  border-color: var(--c-accent);
+  background: var(--c-surface);
 }
 
 .research-hint {
@@ -1579,7 +1591,7 @@ onBeforeUnmount(() => {
   padding: 10px 12px;
   border: 1px solid var(--c-border);
   border-radius: 6px;
-  background: var(--c-bg);
+  background: var(--c-surface);
   cursor: pointer;
   user-select: none;
   transition: border-color 120ms ease, background-color 120ms ease;
@@ -1595,8 +1607,8 @@ onBeforeUnmount(() => {
 }
 
 .research-toggle.active {
-  border-color: rgba(110, 86, 207, 0.55);
-  background: rgba(110, 86, 207, 0.06);
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
 }
 
 .toggle-copy strong {
@@ -1604,7 +1616,7 @@ onBeforeUnmount(() => {
   color: var(--c-text);
   font-size: 13px;
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .toggle-copy span {
@@ -1671,18 +1683,22 @@ onBeforeUnmount(() => {
 }
 
 .tool-preview {
-  flex: 1;
+  flex: 1 0 100%;
   min-width: 0;
+  margin-left: 18px;
   color: var(--c-text-secondary);
   word-break: break-word;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 
 .tool-error {
-  flex: 1;
+  flex: 1 0 100%;
   min-width: 0;
+  margin-left: 18px;
   color: var(--c-fail);
   word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .tool-duration {

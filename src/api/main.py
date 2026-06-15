@@ -2,7 +2,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routes import agent, calendar, content, health, jobs, media, memory, models, publish, stats
+from src.api.routes import agent, auth, calendar, content, health, jobs, media, memory, models, publish, stats
+from src.api.security import AuthMiddleware
 from src.utils import config
 
 
@@ -12,6 +13,7 @@ app = FastAPI(
     description="REST API for content generation, refinement, scheduling, and analytics.",
 )
 
+app.add_middleware(AuthMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.CORS_ORIGINS,
@@ -21,6 +23,7 @@ app.add_middleware(
 )
 
 app.include_router(health.router, prefix="/api", tags=["health"])
+app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(models.router, prefix="/api/models", tags=["models"])
 app.include_router(content.router, prefix="/api/content", tags=["content"])
 app.include_router(media.router, prefix="/api", tags=["media"])

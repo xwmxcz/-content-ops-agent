@@ -69,6 +69,22 @@ def get_job(job_id: str, store: ContentStore = Depends(get_store)) -> dict:
     return job
 
 
+@router.delete("/{job_id}", response_model=JobResponse)
+def cancel_job(job_id: str, store: ContentStore = Depends(get_store)) -> dict:
+    job = store.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Job {job_id} was not found")
+    if job["status"] in {"completed", "failed", "cancelled"}:
+        return job
+    updated = store.update_job(
+        job_id,
+        status="cancelled",
+        progress=100,
+        error="Cancelled by user",
+    )
+    return updated or job
+
+
 def _create_job(
     job_type: str,
     payload: dict,

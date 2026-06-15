@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { vLoading } from 'element-plus/es/components/loading/index'
+import { ElMessage } from 'element-plus/es/components/message/index'
+import { ElTabPane, ElTabs } from 'element-plus/es/components/tabs/index'
+import { ElTag } from 'element-plus/es/components/tag/index'
+import 'element-plus/es/components/loading/style/css'
+import 'element-plus/es/components/tabs/style/css'
+import 'element-plus/es/components/tag/style/css'
 import { Search, Refresh, DocumentCopy } from '@element-plus/icons-vue'
 import {
   getAgentMemory,
@@ -234,21 +240,45 @@ onMounted(() => {
 
 <style scoped>
 .memory-page {
-  padding: 24px 32px;
-  max-width: 1200px;
+  width: min(100%, 1240px);
+  margin: 0 auto;
+  padding: 28px 32px 40px;
+  background: var(--c-bg);
 }
+
+.memory-page .page-header {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 18px;
+}
+
 .page-header h2 {
   margin: 0 0 4px;
   color: var(--c-text);
+  font-size: var(--fs-h1);
+  font-weight: 600;
 }
+
 .subtitle {
   color: var(--c-text-secondary);
-  margin: 0 0 20px;
+  margin: 0;
   font-size: 13px;
+  line-height: 1.6;
 }
+
 .mem-tabs {
   margin-top: 12px;
+  padding: 18px 20px 20px;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  background: var(--c-surface);
+  box-shadow: var(--shadow-panel);
 }
+
+.mem-tabs :deep(.el-tabs__header) {
+  margin-bottom: 16px;
+}
+
 .edit-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -259,9 +289,9 @@ onMounted(() => {
 }
 .pane {
   border: 1px solid var(--c-border);
-  border-radius: 10px;
+  border-radius: 6px;
   padding: 16px;
-  background: var(--c-bg);
+  background: #fbfcfe;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -299,7 +329,8 @@ onMounted(() => {
   margin-top: 18px;
   padding: 12px 16px;
   border: 1px dashed var(--c-border);
-  border-radius: 8px;
+  border-radius: 6px;
+  background: #fbfcfe;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -324,10 +355,10 @@ onMounted(() => {
 }
 .hit-card {
   border: 1px solid var(--c-border);
-  border-radius: 8px;
+  border-radius: 6px;
   padding: 12px 14px;
   margin-bottom: 10px;
-  background: var(--c-bg);
+  background: var(--c-surface);
 }
 .hit-card:hover {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);

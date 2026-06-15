@@ -2,7 +2,7 @@
   <div class="page chat-page">
     <section class="chat-topline">
       <div>
-        <span class="hero-kicker">Tool Agent</span>
+        <span class="hero-kicker">工具型 Agent</span>
         <h1 class="page-title">Agent 对话</h1>
         <p class="page-subtitle">多轮会话、模型切换和内容工具调用都会记录在当前 thread。</p>
       </div>
@@ -108,7 +108,7 @@
       <main class="dialog-panel">
         <div class="dialog-head">
           <div>
-            <span class="panel-kicker">Current Thread</span>
+            <span class="panel-kicker">当前会话</span>
             <strong>{{ currentThreadLabel }}</strong>
           </div>
           <div v-if="chat.activeThreadId" class="dialog-head-actions">
@@ -147,7 +147,7 @@
               </div>
 
               <section v-if="message.plan?.length" class="plan-board">
-                <div class="plan-head">📋 Agent 计划</div>
+                <div class="plan-head">Agent 计划</div>
                 <ol>
                   <li v-for="step in message.plan" :key="step.index" :class="step.status">
                     <span class="plan-marker">{{ planMarker(step.status) }}</span>
@@ -240,7 +240,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus/es/components/message/index'
+import { ElMessageBox } from 'element-plus/es/components/message-box/index'
+import 'element-plus/es/components/message-box/style/css'
 import {
   Delete,
   Edit,
@@ -546,9 +548,9 @@ onMounted(async () => {
 
 .chat-topline .page-title {
   margin-top: 6px;
-  font-size: 32px;
+  font-size: var(--fs-h1);
   font-weight: 600;
-  letter-spacing: -0.025em;
+  letter-spacing: 0;
   line-height: 1.15;
 }
 
@@ -580,7 +582,7 @@ onMounted(async () => {
 .tool-panel {
   border: 1px solid var(--c-border);
   border-radius: 6px;
-  background: var(--c-bg);
+  background: var(--c-surface);
   box-shadow: none;
   backdrop-filter: none;
 }
@@ -735,7 +737,7 @@ onMounted(async () => {
   overflow: hidden;
   font-weight: 600;
   font-size: 13px;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -824,7 +826,7 @@ onMounted(async () => {
   min-height: 0;
   padding: 20px;
   overflow-y: auto;
-  background: var(--c-bg);
+  background: var(--c-bg-soft);
   border: 0;
   border-radius: 0;
   scroll-behavior: smooth;
@@ -880,7 +882,7 @@ onMounted(async () => {
   color: var(--c-text);
   font-size: 18px;
   font-weight: 600;
-  letter-spacing: -0.015em;
+  letter-spacing: 0;
 }
 
 .chat-empty p {
@@ -904,7 +906,7 @@ onMounted(async () => {
   border: 1px solid var(--c-border);
   border-radius: 6px;
   color: var(--c-text);
-  background: var(--c-bg);
+  background: var(--c-surface);
 }
 
 .message-row.user .message-bubble {
@@ -923,7 +925,7 @@ onMounted(async () => {
   color: var(--c-text);
   font-weight: 600;
   font-size: 12px;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .message-meta small {
@@ -1071,7 +1073,7 @@ onMounted(async () => {
 .tool-event {
   border: 1px solid var(--c-border);
   border-radius: 4px;
-  background: var(--c-bg);
+  background: var(--c-surface);
   overflow: hidden;
   font-family: var(--font-mono);
   transition: border-color 100ms ease;
@@ -1134,7 +1136,7 @@ onMounted(async () => {
   font-size: 12.5px;
   font-weight: 500;
   font-family: var(--font-mono);
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
   word-break: break-all;
   flex-shrink: 0;
 }
@@ -1239,7 +1241,7 @@ onMounted(async () => {
   gap: 10px;
   padding: 14px 20px 16px;
   border-top: 1px solid var(--c-border);
-  background: var(--c-bg);
+  background: var(--c-surface);
   min-width: 0;
 }
 
@@ -1282,10 +1284,10 @@ onMounted(async () => {
   border: 1px solid var(--c-border);
   border-radius: 999px;
   color: var(--c-text-secondary);
-  background: var(--c-bg);
+  background: var(--c-surface);
   font-size: 11px;
   font-family: var(--font-mono);
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 @media (max-width: 1180px) {

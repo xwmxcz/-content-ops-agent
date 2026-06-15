@@ -48,6 +48,10 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, watch } from 'vue'
+import { ElInputNumber } from 'element-plus/es/components/input-number/index'
+import { ElSlider } from 'element-plus/es/components/slider/index'
+import 'element-plus/es/components/input-number/style/css'
+import 'element-plus/es/components/slider/style/css'
 import { getModels, type ProviderInfo } from '../api/content'
 
 type ModelConfig = {
@@ -172,7 +176,7 @@ onMounted(async () => {
 .selector-status-text {
   font-weight: 600;
   color: var(--c-text);
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .selector-status-meta {

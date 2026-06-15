@@ -155,13 +155,34 @@ python examples/migrate_memories.py --db data/content_ops.db --memory-dir data/m
 
 额外部署说明见 [DEPLOYMENT.md](DEPLOYMENT.md)。
 
+### Docker Compose 完整栈
+
+仓库使用一个多阶段 `Dockerfile` 加 `docker-compose.yml` 启动完整栈：Vue/Nginx 前端、FastAPI API、RQ worker、PostgreSQL 和 Redis。
+
+```bash
+cp .env.docker.example .env
+docker compose up --build
+```
+
+打开 `http://localhost:8088`。Docker 模式默认使用 PostgreSQL + Redis/RQ。需要登录保护时，在 `.env` 里设置 `AUTH_ENABLED=true`、`AUTH_PASSWORD` 和 `AUTH_SECRET_KEY`。
+
+研究型 Pipeline 的网页检索建议配置稳定搜索 API。在 `.env` 中填入 `SERPER_API_KEY`、`TAVILY_API_KEY` 或 `BRAVE_SEARCH_API_KEY` 任意一个即可；不填时会退回到无 key 的 HTML 搜索，可能被搜索引擎反爬限制。
+
+常用命令：
+
+```bash
+docker compose ps
+docker compose logs -f api
+docker compose down
+```
+
 ## 通用安装
 
 环境要求：
 
 - Python 3.10+
 - Node.js 18+
-- 如果你要在本地起 PostgreSQL + Redis，需要 Docker Desktop
+- 如果你要启动完整 Compose 栈，或只在本地起 PostgreSQL + Redis，需要 Docker Desktop
 - 如果要调用真实模型，至少需要配置一个可用的 LLM provider API key。演示数据脚本不会调用外部模型。
 
 安装后端依赖：
@@ -272,7 +293,7 @@ npm run dev
 
 说明：
 
-- 仓库里的 `docker-compose.yml` 只会启动 PostgreSQL 和 Redis，不会自动把 API 和前端一起容器化
+- 仓库里的 `docker-compose.yml` 会启动完整 Docker 栈。若做宿主机开发，也可以只运行 `docker compose up -d postgres redis`
 - Windows 下 `worker.py` 会自动使用 RQ `SimpleWorker`
 - 如果 Redis 没启动，执行 `python worker.py` 出现连接错误是符合预期的
 

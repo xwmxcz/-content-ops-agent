@@ -2,7 +2,7 @@
   <div class="page history-page">
     <section class="history-hero">
       <div>
-        <span class="hero-kicker">Content Library</span>
+        <span class="hero-kicker">内容库</span>
         <h1 class="page-title">历史内容</h1>
         <p class="page-subtitle">查看内容、补充素材、发起小红书发布，并管理归档或删除本地记录。</p>
       </div>
@@ -33,7 +33,7 @@
       <div class="section list-section">
         <div class="section-head">
           <div>
-            <span class="section-kicker">Library</span>
+            <span class="section-kicker">列表</span>
             <h2>内容列表</h2>
           </div>
           <div class="list-actions">
@@ -99,7 +99,7 @@
       <div class="section detail-section">
         <div class="section-head">
           <div>
-            <span class="section-kicker">Detail</span>
+            <span class="section-kicker">详情</span>
             <h2>{{ selected?.title || '内容详情' }}</h2>
           </div>
           <div class="detail-actions">
@@ -137,7 +137,7 @@
           <section class="detail-block">
             <div class="block-head">
               <div>
-                <span class="section-kicker">Media</span>
+                <span class="section-kicker">素材</span>
                 <h3>素材管理</h3>
               </div>
               <div class="upload-actions">
@@ -179,7 +179,7 @@
           <section class="detail-block">
             <div class="block-head">
               <div>
-                <span class="section-kicker">Publish</span>
+                <span class="section-kicker">发布</span>
                 <h3>小红书发布</h3>
               </div>
               <span class="login-badge" :class="{ offline: !loginStatus?.connected }">
@@ -271,7 +271,19 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElAlert } from 'element-plus/es/components/alert/index'
+import { ElCheckbox } from 'element-plus/es/components/checkbox/index'
+import { ElDatePicker } from 'element-plus/es/components/date-picker/index'
+import { ElEmpty } from 'element-plus/es/components/empty/index'
+import { ElMessage } from 'element-plus/es/components/message/index'
+import { ElMessageBox } from 'element-plus/es/components/message-box/index'
+import { ElRadioButton, ElRadioGroup } from 'element-plus/es/components/radio/index'
+import 'element-plus/es/components/alert/style/css'
+import 'element-plus/es/components/checkbox/style/css'
+import 'element-plus/es/components/date-picker/style/css'
+import 'element-plus/es/components/empty/style/css'
+import 'element-plus/es/components/message-box/style/css'
+import 'element-plus/es/components/radio/style/css'
 import { Clock, Delete, DocumentCopy, Edit, FolderDelete, Promotion, Refresh, UploadFilled, VideoPlay } from '@element-plus/icons-vue'
 import ContentCard from '../components/ContentCard.vue'
 import { archiveContent, deleteContentLocal, getContent, getContents, type ContentItem } from '../api/content'
@@ -721,9 +733,9 @@ onMounted(async () => {
 
 .history-hero .page-title {
   margin-top: 6px;
-  font-size: 32px;
+  font-size: var(--fs-h1);
   font-weight: 600;
-  letter-spacing: -0.025em;
+  letter-spacing: 0;
   line-height: 1.15;
 }
 
@@ -772,7 +784,7 @@ onMounted(async () => {
   color: var(--c-text);
   font-size: 18px;
   font-weight: 600;
-  letter-spacing: -0.015em;
+  letter-spacing: 0;
 }
 
 .list-actions,
@@ -794,10 +806,10 @@ onMounted(async () => {
   border: 1px solid var(--c-border);
   border-radius: 999px;
   color: var(--c-text-secondary);
-  background: var(--c-bg);
+  background: var(--c-surface);
   font-size: 11px;
   font-family: var(--font-mono);
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .selection-toolbar {
@@ -883,7 +895,7 @@ onMounted(async () => {
   width: 26px;
   height: 26px;
   border-radius: 4px;
-  background: var(--c-bg);
+  background: var(--c-surface);
   border: 1px solid var(--c-border);
 }
 
@@ -908,7 +920,7 @@ onMounted(async () => {
   padding: 14px;
   border: 1px solid var(--c-border);
   border-radius: 4px;
-  background: var(--c-bg);
+  background: var(--c-surface);
 }
 
 .meta-card {
@@ -938,7 +950,7 @@ onMounted(async () => {
   padding: 16px;
   border: 1px solid var(--c-border);
   border-radius: 4px;
-  background: var(--c-bg);
+  background: var(--c-surface);
   color: var(--c-text);
   font-size: 13.5px;
   line-height: 1.7;
@@ -961,7 +973,7 @@ onMounted(async () => {
   padding: 0 12px;
   border: 1px solid var(--c-border);
   border-radius: 4px;
-  background: var(--c-bg);
+  background: var(--c-surface);
   color: var(--c-text);
   cursor: pointer;
   font-size: 13px;
@@ -989,7 +1001,7 @@ onMounted(async () => {
   padding: 10px;
   border: 1px solid var(--c-border);
   border-radius: 4px;
-  background: var(--c-bg);
+  background: var(--c-surface);
 }
 
 .media-preview {
@@ -1058,7 +1070,7 @@ onMounted(async () => {
   font-size: 11px;
   font-weight: 500;
   font-family: var(--font-mono);
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .login-badge.offline {

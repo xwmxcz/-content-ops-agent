@@ -1,5 +1,5 @@
 /* ============================================================================
-   Content Ops Agent — Linear / Vercel-style design system
+   Content Ops Agent — professional operations console
    --------------------------------------------------------------------------
    Tokens live here. Components override Element Plus via CSS variables only.
    No backdrop-filter, no shadows except focus rings, sharp 1px borders.
@@ -15,37 +15,42 @@
     'Liberation Mono', monospace;
 
   /* Surfaces -------------------------------------------------------------- */
-  --c-bg: #ffffff;
-  --c-bg-soft: #fafafa;        /* very subtle off-white for nested zones */
-  --c-bg-code: #f6f6f7;        /* code/log blocks */
+  --c-bg: #f7f8fb;
+  --c-bg-soft: #f2f5f9;        /* subtle zones and toolbar backgrounds */
+  --c-bg-code: #eef2f7;        /* code/log blocks */
   --c-surface: #ffffff;
+  --c-sidebar: #111827;
+  --c-sidebar-soft: #1f2937;
+  --c-sidebar-border: rgba(255, 255, 255, 0.1);
+  --c-sidebar-text: #f9fafb;
+  --c-sidebar-muted: #9ca3af;
 
   /* Borders --------------------------------------------------------------- */
-  --c-border: #e6e6e6;
-  --c-border-soft: #ededed;
-  --c-border-strong: #1a1a1a;
-  --c-border-focus: #6e56cf;
+  --c-border: #dbe1ea;
+  --c-border-soft: #e8edf3;
+  --c-border-strong: #98a2b3;
+  --c-border-focus: #2563eb;
 
   /* Text ------------------------------------------------------------------ */
-  --c-text: #0a0a0a;
-  --c-text-secondary: #525252;
-  --c-text-tertiary: #8a8a8a;
+  --c-text: #101828;
+  --c-text-secondary: #475467;
+  --c-text-tertiary: #667085;
   --c-text-inverse: #ffffff;
 
-  /* Accent (Linear purple) ----------------------------------------------- */
-  --c-accent: #6e56cf;
-  --c-accent-hover: #5d46b8;
-  --c-accent-active: #4f3aa1;
-  --c-accent-soft: #f3f0fc;
-  --c-accent-ring: rgba(110, 86, 207, 0.32);
+  /* Accent --------------------------------------------------------------- */
+  --c-accent: #2563eb;
+  --c-accent-hover: #1d4ed8;
+  --c-accent-active: #1e40af;
+  --c-accent-soft: #eff6ff;
+  --c-accent-ring: rgba(37, 99, 235, 0.22);
 
   /* Status ---------------------------------------------------------------- */
-  --c-ok: #1a8754;
-  --c-ok-soft: #e8f4ee;
-  --c-fail: #d04545;
-  --c-fail-soft: #fdecec;
-  --c-warn: #c47a16;
-  --c-warn-soft: #fbf2e3;
+  --c-ok: #0f7a4f;
+  --c-ok-soft: #e8f5ef;
+  --c-fail: #c03636;
+  --c-fail-soft: #fdf0f0;
+  --c-warn: #b7791f;
+  --c-warn-soft: #fff6e6;
 
   /* Radii ----------------------------------------------------------------- */
   --r-control: 4px;
@@ -61,52 +66,53 @@
   --s-6: 32px;
 
   /* Font sizes ------------------------------------------------------------ */
-  --fs-h1: 32px;
-  --fs-h2: 18px;
+  --fs-h1: 26px;
+  --fs-h2: 17px;
   --fs-body: 14px;
   --fs-caption: 12px;
 
   /* Element Plus token overrides (subset, scoped to this app) ------------- */
-  --el-color-primary: #6e56cf;
-  --el-color-primary-light-3: #8a74dc;
-  --el-color-primary-light-5: #a692e6;
-  --el-color-primary-light-7: #c5b8ee;
-  --el-color-primary-light-8: #d6cdf3;
-  --el-color-primary-light-9: #f3f0fc;
-  --el-color-primary-dark-2: #5d46b8;
+  --el-color-primary: #2563eb;
+  --el-color-primary-light-3: #60a5fa;
+  --el-color-primary-light-5: #93c5fd;
+  --el-color-primary-light-7: #bfdbfe;
+  --el-color-primary-light-8: #dbeafe;
+  --el-color-primary-light-9: #eff6ff;
+  --el-color-primary-dark-2: #1d4ed8;
 
-  --el-color-success: #1a8754;
-  --el-color-danger: #d04545;
-  --el-color-warning: #c47a16;
-  --el-color-info: #525252;
+  --el-color-success: #0f7a4f;
+  --el-color-danger: #c03636;
+  --el-color-warning: #b7791f;
+  --el-color-info: #475467;
 
-  --el-text-color-primary: #0a0a0a;
-  --el-text-color-regular: #0a0a0a;
-  --el-text-color-secondary: #525252;
-  --el-text-color-placeholder: #8a8a8a;
-  --el-text-color-disabled: #b8b8b8;
+  --el-text-color-primary: #101828;
+  --el-text-color-regular: #101828;
+  --el-text-color-secondary: #475467;
+  --el-text-color-placeholder: #667085;
+  --el-text-color-disabled: #a6b0bf;
 
-  --el-border-color: #e6e6e6;
-  --el-border-color-light: #ededed;
-  --el-border-color-lighter: #ededed;
-  --el-border-color-extra-light: #f5f5f5;
-  --el-border-color-hover: #1a1a1a;
+  --el-border-color: #dbe1ea;
+  --el-border-color-light: #e8edf3;
+  --el-border-color-lighter: #edf2f7;
+  --el-border-color-extra-light: #f3f6fa;
+  --el-border-color-hover: #98a2b3;
 
   --el-fill-color-blank: #ffffff;
-  --el-fill-color: #fafafa;
-  --el-fill-color-light: #f6f6f7;
-  --el-fill-color-lighter: #fafafa;
+  --el-fill-color: #f2f5f9;
+  --el-fill-color-light: #eef2f7;
+  --el-fill-color-lighter: #f7f8fb;
 
   --el-bg-color: #ffffff;
-  --el-bg-color-page: #ffffff;
+  --el-bg-color-page: #f7f8fb;
   --el-bg-color-overlay: #ffffff;
 
   --el-border-radius-base: 4px;
   --el-border-radius-small: 4px;
   --el-border-radius-round: 4px;
 
-  --el-box-shadow: 0 0 0 1px var(--c-border);
-  --el-box-shadow-light: 0 0 0 1px var(--c-border);
+  --el-box-shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+  --el-box-shadow-light: 0 1px 2px rgba(16, 24, 40, 0.06);
+  --shadow-panel: 0 1px 2px rgba(16, 24, 40, 0.04), 0 8px 24px rgba(16, 24, 40, 0.04);
 
   --el-font-family: var(--font-ui);
 
@@ -153,9 +159,9 @@ select {
 /* Page scaffolding -------------------------------------------------------- */
 
 .page {
-  max-width: 1280px;
+  max-width: 1440px;
   margin: 0 auto;
-  padding: var(--s-5);
+  padding: var(--s-5) var(--s-6);
 }
 
 .page-header {
@@ -171,7 +177,7 @@ select {
   color: var(--c-text);
   font-size: var(--fs-h1);
   font-weight: 600;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
   line-height: 1.15;
 }
 
@@ -190,12 +196,12 @@ select {
   background: var(--c-surface);
   border: 1px solid var(--c-border);
   border-radius: var(--r-card);
-  box-shadow: none;
+  box-shadow: var(--shadow-panel);
   backdrop-filter: none;
 }
 
 .section {
-  padding: var(--s-5);
+  padding: 20px;
 }
 
 .grid-2 {
@@ -241,7 +247,7 @@ select {
   font-size: 28px;
   font-weight: 600;
   line-height: 1.1;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
   font-feature-settings: 'tnum';
   font-variant-numeric: tabular-nums;
 }
@@ -302,10 +308,10 @@ select {
   --el-button-border-color: var(--c-border);
   --el-button-text-color: var(--c-text);
   --el-button-hover-bg-color: #ffffff;
-  --el-button-hover-border-color: var(--c-border-strong);
+  --el-button-hover-border-color: var(--c-accent);
   --el-button-hover-text-color: var(--c-text);
   --el-button-active-bg-color: var(--c-bg-soft);
-  --el-button-active-border-color: var(--c-border-strong);
+  --el-button-active-border-color: var(--c-accent-active);
   --el-button-active-text-color: var(--c-text);
 }
 
@@ -401,7 +407,7 @@ select {
 .el-segmented .el-segmented__item.is-selected {
   background: var(--c-surface) !important;
   color: var(--c-text) !important;
-  box-shadow: 0 0 0 1px var(--c-border-strong) !important;
+  box-shadow: 0 0 0 1px var(--c-border), 0 1px 2px rgba(16, 24, 40, 0.06) !important;
 }
 
 /* Tags / pills ---------------------------------------------------------- */

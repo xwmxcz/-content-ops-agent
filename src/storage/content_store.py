@@ -1031,7 +1031,7 @@ class ContentStore:
                 job.status = status
                 if status == "running" and not job.started_at:
                     job.started_at = now
-                if status in {"completed", "failed"}:
+                if status in {"completed", "failed", "cancelled"}:
                     job.completed_at = now
 
             if "payload" in fields:
@@ -1045,6 +1045,32 @@ class ContentStore:
             for key, value in fields.items():
                 if hasattr(job, key):
                     setattr(job, key, value)
+            job.updated_at = now
+            session.commit()
+            return self._job_to_dict(job)
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def start_job(self, job_id: str, attempts: int, progress: int = 5) -> Optional[Dict[str, Any]]:
+        """Mark a queued/failed job as running without reviving a cancelled job."""
+        session = self._get_session()
+        try:
+            job = (
+                session.query(Job)
+                .filter(Job.id == job_id, Job.status.in_(["queued", "failed"]))
+                .first()
+            )
+            if not job:
+                return None
+            now = datetime.now()
+            job.status = "running"
+            job.progress = progress
+            job.attempts = attempts
+            job.started_at = job.started_at or now
+            job.completed_at = None
             job.updated_at = now
             session.commit()
             return self._job_to_dict(job)
@@ -1386,7 +1412,7 @@ class ContentStore:
             for key, value in fields.items():
                 if hasattr(run, key):
                     setattr(run, key, value)
-            if fields.get("status") in {"completed", "failed"} or run.status in {"completed", "failed"}:
+            if fields.get("status") in {"completed", "failed", "cancelled"} or run.status in {"completed", "failed", "cancelled"}:
                 run.completed_at = run.completed_at or datetime.now()
             session.commit()
             return self._agent_run_to_dict(run)

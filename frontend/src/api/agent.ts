@@ -1,4 +1,4 @@
-import { api } from './index'
+import { api, withAuthQuery } from './index'
 
 export interface AgentRunPayload {
   topic: string
@@ -239,7 +239,7 @@ export async function createPipelineRun(payload: PipelineRunPayload) {
 export function pipelineStreamUrl(runId: string) {
   // EventSource ignores axios baseURL, so we read it back from the api instance
   const base = (api.defaults.baseURL || '').replace(/\/$/, '')
-  return `${base}/agent/runs/${runId}/stream`
+  return withAuthQuery(`${base}/agent/runs/${runId}/stream`)
 }
 
 export async function cancelPipelineRun(runId: string) {

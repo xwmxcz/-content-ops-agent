@@ -155,6 +155,19 @@ async def test_planner_fallback_on_invalid_json(store, planner_llm):
     assert all(s.status == "completed" for s in response.plan)
 
 
+def test_plan_coercion_remaps_inputs_after_dropping_steps():
+    plan = DynamicPipeline._coerce_plan([
+        {"index": 1, "agent_id": "strategy", "description": "Plan", "inputs_from": []},
+        {"index": 2, "agent_id": "not_real", "description": "Drop me", "inputs_from": [1]},
+        {"index": 3, "agent_id": "writer", "description": "Draft", "inputs_from": [1, 2]},
+        {"index": 5, "agent_id": "editor", "description": "Polish", "inputs_from": [3, 99]},
+    ])
+
+    assert [step.index for step in plan] == [1, 2, 3]
+    assert [step.agent_id for step in plan] == ["strategy", "writer", "editor"]
+    assert [step.inputs_from for step in plan] == [[], [1], [2]]
+
+
 @pytest.mark.asyncio
 async def test_pipeline_emits_events_in_order(store, planner_llm):
     plan_json = json.dumps([
@@ -260,6 +273,33 @@ async def test_sse_stream_replays_persisted_events(store, planner_llm):
     mid = events[len(events) // 2]["seq"]
     tail = store.list_run_events(response.run_id, after_seq=mid)
     assert all(e["seq"] > mid for e in tail)
+
+
+def test_sse_stream_resumes_from_last_event_id(store, planner_llm):
+    plan_json = json.dumps([
+        {"index": 1, "agent_id": "writer", "description": "Draft", "instruction": "go", "inputs_from": []},
+    ])
+    planner_llm.queue(plan_json, "null")
+    pipeline, _ = _make_pipeline(store, planner_llm, scripted={"writer": "W"})
+    response = asyncio.run(pipeline.run(_request()))
+    events = store.list_run_events(response.run_id)
+    first_seq = events[0]["seq"]
+
+    from src.api.dependencies import get_store as real_get_store
+
+    app.dependency_overrides[real_get_store] = lambda: store
+    try:
+        with TestClient(app) as client:
+            stream = client.get(
+                f"/api/agent/runs/{response.run_id}/stream",
+                headers={"Last-Event-ID": str(first_seq)},
+            )
+        assert stream.status_code == 200
+        assert f"id: {first_seq}\n" not in stream.text
+        assert f"id: {first_seq + 1}\n" in stream.text
+        assert "event: run_complete" in stream.text
+    finally:
+        app.dependency_overrides.pop(real_get_store, None)
 
 
 @pytest.mark.asyncio

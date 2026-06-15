@@ -38,6 +38,13 @@ class Config:
     # Chat Agent
     CHAT_PLAN_ENABLED = os.getenv("CHAT_PLAN_ENABLED", "true").lower() == "true"
 
+    # Authentication
+    AUTH_ENABLED = os.getenv("AUTH_ENABLED", "false").lower() == "true"
+    AUTH_USERNAME = os.getenv("AUTH_USERNAME", "admin")
+    AUTH_PASSWORD = os.getenv("AUTH_PASSWORD", "")
+    AUTH_SECRET_KEY = os.getenv("AUTH_SECRET_KEY", "")
+    AUTH_TOKEN_EXPIRE_MINUTES = int(os.getenv("AUTH_TOKEN_EXPIRE_MINUTES", "1440"))
+
     # Database
     DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/content_ops.db")
     DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "10"))
@@ -55,6 +62,11 @@ class Config:
     MEDIA_STORAGE_ROOT = os.getenv("MEDIA_STORAGE_ROOT", "data/media")
     MEDIA_MAX_IMAGE_COUNT = int(os.getenv("MEDIA_MAX_IMAGE_COUNT", "9"))
     MEDIA_MAX_VIDEO_SIZE_MB = int(os.getenv("MEDIA_MAX_VIDEO_SIZE_MB", "512"))
+    WEB_SEARCH_PROVIDER = os.getenv("WEB_SEARCH_PROVIDER", "auto").lower()
+    SERPER_API_KEY = os.getenv("SERPER_API_KEY", "")
+    TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
+    BRAVE_SEARCH_API_KEY = os.getenv("BRAVE_SEARCH_API_KEY", "")
+    SEARXNG_BASE_URL = os.getenv("SEARXNG_BASE_URL", "")
     XHS_MCP_ENABLED = os.getenv("XHS_MCP_ENABLED", "true").lower() == "true"
     XHS_MCP_URL = os.getenv("XHS_MCP_URL", "http://127.0.0.1:18060/mcp")
     XHS_MCP_TIMEOUT_SECONDS = float(os.getenv("XHS_MCP_TIMEOUT_SECONDS", "120"))

@@ -4,8 +4,8 @@
       <div class="brand-block">
         <div class="brand-mark">CO</div>
         <div class="brand-copy">
-          <strong>Content Ops</strong>
-          <span>Strategy, drafting and review in one flow.</span>
+          <strong>Content Ops Agent</strong>
+          <span>Content command center</span>
         </div>
       </div>
 
@@ -40,23 +40,25 @@
       </nav>
 
       <div class="sidebar-foot">
-        <span class="foot-kicker">流水线</span>
-        <strong>四阶段内容系统</strong>
-        <p>策略、写作、润色、审核</p>
+        <span class="foot-kicker">运行状态</span>
+        <strong>Workspace Ready</strong>
+        <p>API、内容库、排期流程已连接</p>
       </div>
     </aside>
 
     <div class="shell-main">
       <header class="shell-topbar">
         <div class="topbar-copy">
-          <span class="topbar-kicker">内容运营控制台</span>
+          <span class="topbar-kicker">Workspace</span>
           <strong>{{ currentPage.label }}</strong>
         </div>
         <div class="topbar-pills">
-          <span class="topbar-pill live">流水线就绪</span>
-          <span class="topbar-pill">FastAPI</span>
-          <span class="topbar-pill">Vue 3</span>
-          <span class="topbar-pill">LiteLLM</span>
+          <span class="topbar-pill live">就绪</span>
+          <span class="topbar-pill">Production UI</span>
+          <el-button v-if="canLogout" class="logout-button" text @click="handleLogout">
+            <el-icon><SwitchButton /></el-icon>
+            退出
+          </el-button>
         </div>
       </header>
 
@@ -88,9 +90,11 @@ import {
   Collection,
   House,
   MagicStick,
+  SwitchButton,
   Tickets,
   TrendCharts
 } from '@element-plus/icons-vue'
+import { hasAuthToken, logout } from '../api/auth'
 
 interface NavItem {
   to: string
@@ -121,15 +125,21 @@ const currentPage = computed(() => {
   return navItems.find(item => isActive(item.to, item.exact)) ?? workspaceNav[0]
 })
 
+const canLogout = computed(() => hasAuthToken())
+
 function isActive(path: string, exact = false) {
   return exact ? route.path === path : route.path === path || route.path.startsWith(`${path}/`)
+}
+
+function handleLogout() {
+  logout()
 }
 </script>
 
 <style scoped>
 .shell {
   display: grid;
-  grid-template-columns: 232px minmax(0, 1fr);
+  grid-template-columns: 248px minmax(0, 1fr);
   min-height: 100vh;
   background: var(--c-bg);
 }
@@ -139,17 +149,17 @@ function isActive(path: string, exact = false) {
   flex-direction: column;
   gap: 24px;
   padding: 20px 16px;
-  color: var(--c-text);
-  background: var(--c-bg);
-  border-right: 1px solid var(--c-border);
+  color: var(--c-sidebar-text);
+  background: var(--c-sidebar);
+  border-right: 1px solid var(--c-sidebar-border);
 }
 
 .brand-block {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 4px 8px 16px;
-  border-bottom: 1px solid var(--c-border);
+  padding: 4px 8px 18px;
+  border-bottom: 1px solid var(--c-sidebar-border);
 }
 
 .brand-mark {
@@ -161,8 +171,8 @@ function isActive(path: string, exact = false) {
   color: #ffffff;
   font-weight: 600;
   font-size: 12px;
-  letter-spacing: -0.02em;
-  background: var(--c-accent);
+  letter-spacing: 0;
+  background: linear-gradient(135deg, #2563eb, #38bdf8);
 }
 
 .brand-copy {
@@ -171,23 +181,23 @@ function isActive(path: string, exact = false) {
 
 .brand-copy strong {
   display: block;
-  color: var(--c-text);
+  color: var(--c-sidebar-text);
   font-size: 13px;
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .brand-copy span {
   display: block;
   margin-top: 2px;
-  color: var(--c-text-tertiary);
+  color: var(--c-sidebar-muted);
   font-size: 11px;
   line-height: 1.4;
 }
 
 .sidebar-foot strong {
   display: block;
-  color: var(--c-text);
+  color: var(--c-sidebar-text);
   font-size: 12px;
   font-weight: 500;
 }
@@ -195,7 +205,7 @@ function isActive(path: string, exact = false) {
 .sidebar-foot p {
   display: block;
   margin: 4px 0 0;
-  color: var(--c-text-tertiary);
+  color: var(--c-sidebar-muted);
   font-size: 11px;
   line-height: 1.5;
 }
@@ -218,7 +228,7 @@ function isActive(path: string, exact = false) {
   font-weight: 500;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: var(--c-text-tertiary);
+  color: var(--c-sidebar-muted);
   margin-bottom: 4px;
 }
 
@@ -229,10 +239,11 @@ function isActive(path: string, exact = false) {
   min-height: 30px;
   padding: 0 8px;
   border-radius: 4px;
-  color: var(--c-text-secondary);
+  color: #d1d5db;
   text-decoration: none;
   font-size: 13px;
   font-weight: 500;
+  position: relative;
   transition:
     background-color 80ms ease,
     color 80ms ease;
@@ -240,39 +251,50 @@ function isActive(path: string, exact = false) {
 
 .nav-link :deep(.el-icon) {
   font-size: 15px;
-  color: var(--c-text-tertiary);
+  color: var(--c-sidebar-muted);
 }
 
 .nav-link:hover {
-  background: var(--c-bg-soft);
-  color: var(--c-text);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--c-sidebar-text);
 }
 
 .nav-link:hover :deep(.el-icon) {
-  color: var(--c-text-secondary);
+  color: var(--c-sidebar-text);
 }
 
 .nav-link.active {
-  color: var(--c-accent);
-  background: var(--c-accent-soft);
+  color: #ffffff;
+  background: rgba(37, 99, 235, 0.26);
 }
 
 .nav-link.active :deep(.el-icon) {
   color: var(--c-accent);
 }
 
+.nav-link.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 2px;
+  border-radius: 999px;
+  background: var(--c-accent);
+}
+
 .sidebar-foot {
   margin-top: auto;
   padding: 12px;
-  border: 1px solid var(--c-border);
+  border: 1px solid var(--c-sidebar-border);
   border-radius: 6px;
-  background: var(--c-bg-soft);
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .foot-kicker {
   padding: 0;
   margin-bottom: 6px;
-  color: var(--c-text-tertiary);
+  color: var(--c-sidebar-muted);
 }
 
 .shell-main {
@@ -288,8 +310,9 @@ function isActive(path: string, exact = false) {
   gap: 16px;
   padding: 14px 32px;
   border-bottom: 1px solid var(--c-border);
-  background: var(--c-bg);
-  min-height: 56px;
+  background: #ffffff;
+  min-height: 60px;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
 }
 
 .topbar-copy {
@@ -303,7 +326,7 @@ function isActive(path: string, exact = false) {
   color: var(--c-text);
   font-size: 14px;
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .topbar-kicker {
@@ -327,11 +350,11 @@ function isActive(path: string, exact = false) {
   border: 1px solid var(--c-border);
   border-radius: 999px;
   color: var(--c-text-secondary);
-  background: var(--c-bg);
+  background: var(--c-surface);
   font-size: 11px;
   font-weight: 500;
   font-family: var(--font-mono);
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .topbar-pill.live {
@@ -352,6 +375,15 @@ function isActive(path: string, exact = false) {
   border-radius: 50%;
   background: var(--c-ok);
   transform: translateY(-50%);
+}
+
+.logout-button {
+  margin-left: 2px;
+  color: var(--c-text-secondary);
+}
+
+.logout-button :deep(.el-icon) {
+  margin-right: 4px;
 }
 
 .mobile-nav {
@@ -395,7 +427,7 @@ function isActive(path: string, exact = false) {
     border: 1px solid var(--c-border);
     border-radius: 999px;
     color: var(--c-text-secondary);
-    background: var(--c-bg);
+    background: var(--c-surface);
     text-decoration: none;
     font-size: 12px;
     font-weight: 500;
