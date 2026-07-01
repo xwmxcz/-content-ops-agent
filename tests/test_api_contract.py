@@ -53,6 +53,7 @@ class FakeChatFactory:
         self.flaky_target = "view_content"
         self.flaky_max_attempts = 3
         self.plan_response = None  # str returned when temperature == PLANNER_TEMPERATURE (0.3)
+        self.intent_response = None  # str returned when temperature == INTENT_TEMPERATURE (0.1)
 
     def __call__(self, provider, model, temperature, max_tokens):
         return FakeChatModel(self, provider, model, temperature, max_tokens)
@@ -82,6 +83,18 @@ class FakeChatModel:
                 "tools": self.tools,
             }
         )
+        if self.factory.intent_response is not None and self.temperature == 0.1:
+            return AIMessage(content=self.factory.intent_response)
+        if self.temperature == 0.1:
+            last_human = next((m.content for m in reversed(messages) if isinstance(m, HumanMessage)), "")
+            text = str(last_human).lower()
+            if "recent" in text or "之前写过" in str(last_human) or "content 99999" in text:
+                return AIMessage(content='{"name":"content_search","confidence":0.92,"slots":{},"clarification":null}')
+            if "calendar week" in text or "schedule" in text:
+                return AIMessage(content='{"name":"schedule_propose","confidence":0.92,"slots":{},"clarification":null}')
+            if "practical" in text:
+                return AIMessage(content='{"name":"content_refine","confidence":0.9,"slots":{},"clarification":null}')
+            return AIMessage(content='{"name":"unknown","confidence":0.8,"slots":{},"clarification":null}')
         if self.factory.plan_response is not None and self.temperature == 0.3:
             return AIMessage(content=self.factory.plan_response)
         if self.factory.flaky_mode:
@@ -220,7 +233,7 @@ def test_agent_chat_persists_thread_messages_and_model(client, store, fake_chat_
     assert second_response.status_code == 200
     assert second_response.json()["provider"] == "deepseek"
     second_call_messages = next(
-        c["messages"] for c in reversed(fake_chat_factory.calls) if c["provider"] == "deepseek" and c["temperature"] != 0.3
+        c["messages"] for c in reversed(fake_chat_factory.calls) if c["provider"] == "deepseek" and c["temperature"] == 0.7
     )
     assert any(isinstance(message, HumanMessage) and message.content == "Plan a content week" for message in second_call_messages)
     assert any(isinstance(message, AIMessage) and message.content == "Agent reply" for message in second_call_messages)
@@ -311,11 +324,15 @@ def test_chat_agent_retries_failed_tool(client, store, fake_chat_factory, monkey
 
     real_build_tools = chat_agent_mod.ChatAgentService._build_tools
 
-    def build_tools_with_flaky(self, provider, model, temperature, max_tokens):
-        tools = real_build_tools(self, provider, model, temperature, max_tokens)
+    def build_tools_with_flaky(self, provider, model, temperature, max_tokens, allowed_tools=None):
+        tools = real_build_tools(self, provider, model, temperature, max_tokens, allowed_tools=allowed_tools)
         from langchain_core.tools import StructuredTool
         replaced = [t for t in tools if t.name != "view_content"]
         replaced.append(StructuredTool.from_function(func=flaky_view_content, name="view_content"))
+        if allowed_tools is None:
+            return replaced
+        allowed = set(allowed_tools)
+        return [tool for tool in replaced if tool.name in allowed]
         return replaced
 
     monkeypatch.setattr(chat_agent_mod.ChatAgentService, "_build_tools", build_tools_with_flaky)
@@ -419,6 +436,142 @@ def test_chat_persists_plan_across_thread_reload(client, fake_chat_factory):
     messages = messages_response.json()
     assistant = next(m for m in messages if m["role"] == "assistant")
     assert assistant["plan"] == expected_plan
+
+
+def test_chat_returns_and_persists_intent(client):
+    response = client.post(
+        "/api/agent/chat",
+        json={
+            "message": "Show recent items",
+            "thread_id": "thread-intent",
+            "provider": "siliconflow",
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["intent"]["name"] == "content_search"
+
+    messages_response = client.get("/api/agent/threads/thread-intent/messages")
+    assert messages_response.status_code == 200
+    assistant = next(m for m in messages_response.json() if m["role"] == "assistant")
+    assert assistant["intent"]["name"] == "content_search"
+
+
+def test_schedule_propose_intent_blocks_commit_tool(client, fake_chat_factory):
+    fake_chat_factory.tool_mode = True
+    fake_chat_factory.tool_call_spec = {
+        "name": "commit_publishing_schedule",
+        "args": {"plan": [{"content_id": 1, "platform": "xiaohongshu", "scheduled_date": "2026-06-20"}]},
+    }
+
+    response = client.post(
+        "/api/agent/chat",
+        json={
+            "message": "帮我排下周发布计划",
+            "thread_id": "thread-schedule-propose",
+            "provider": "siliconflow",
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["intent"]["name"] == "schedule_propose"
+    assert "commit_publishing_schedule" not in payload["intent"]["allowed_tools"]
+    assert payload["tool_events"][0]["status"] == "failed"
+    assert "Unknown tool: commit_publishing_schedule" in payload["tool_events"][0]["output"]
+
+
+def test_schedule_commit_intent_reuses_prior_proposal(client, store):
+    store.upsert_agent_thread("thread-schedule-commit", title="schedule", provider="siliconflow", model="Qwen/Qwen2.5-7B-Instruct")
+    store.save_agent_message(
+        thread_id="thread-schedule-commit",
+        role="assistant",
+        content="这是上一步生成的发布计划，请确认。",
+        provider="siliconflow",
+        model="Qwen/Qwen2.5-7B-Instruct",
+        intent={
+            "name": "schedule_propose",
+            "confidence": 0.95,
+            "slots": {},
+            "requires_confirmation": False,
+            "allowed_tools": ["list_recent_contents", "search_history", "view_calendar", "propose_publishing_schedule"],
+            "route_surface": "chat",
+            "route_reason": None,
+            "clarification": None,
+        },
+        tool_events=[
+            {
+                "name": "propose_publishing_schedule",
+                "args": {},
+                "output": '{"plan":[{"content_id":1,"platform":"xiaohongshu","scheduled_date":"2026-06-20"}],"committed":false}',
+                "status": "completed",
+                "attempt": 1,
+                "duration_ms": 10,
+            }
+        ],
+    )
+
+    response = client.post(
+        "/api/agent/chat",
+        json={
+            "message": "好的，开始排吧",
+            "thread_id": "thread-schedule-commit",
+            "provider": "siliconflow",
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["intent"]["name"] == "schedule_commit"
+    assert payload["intent"]["allowed_tools"] == ["commit_publishing_schedule"]
+    assert payload["intent"]["slots"]["proposal_plan"][0]["content_id"] == 1
+
+
+def test_research_heavy_create_returns_studio_suggestion(client, fake_chat_factory):
+    fake_chat_factory.tool_mode = True
+    fake_chat_factory.tool_call_spec = {"name": "create_content", "args": {"topic": "x", "content_type": "xiaohongshu"}}
+
+    response = client.post(
+        "/api/agent/chat",
+        json={
+            "message": "写一篇 2026 最新模型横评，带事实核查",
+            "thread_id": "thread-studio-intent",
+            "provider": "siliconflow",
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["intent"]["name"] == "content_create"
+    assert payload["intent"]["route_surface"] == "studio"
+    assert payload["tool_events"] == []
+    assert payload["plan"] == []
+
+
+def test_ambiguous_request_returns_clarify_without_tools(client, fake_chat_factory):
+    fake_chat_factory.tool_mode = True
+    fake_chat_factory.tool_call_spec = {"name": "refine_content", "args": {"content_id": 1, "instruction": "polish it"}}
+
+    response = client.post(
+        "/api/agent/chat",
+        json={
+            "message": "帮我处理一下这篇",
+            "thread_id": "thread-clarify-intent",
+            "provider": "siliconflow",
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["intent"]["name"] == "clarify"
+    assert payload["tool_events"] == []
+    assert payload["plan"] == []
 
 
 def test_agent_thread_endpoints(client):

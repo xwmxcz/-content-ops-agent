@@ -15,7 +15,9 @@
           <el-icon><Refresh /></el-icon>
           <span>重置</span>
         </button>
-        <el-button type="primary" size="large" :icon="VideoPlay" @click="run">运行</el-button>
+        <el-button type="primary" size="large" :icon="VideoPlay" :disabled="!dynamicSourcesValid" @click="run">
+          运行
+        </el-button>
       </template>
       <template v-else>
         <div class="run-progress">
@@ -126,6 +128,15 @@
               </div>
             </div>
           </div>
+          <p class="research-note">这些开关是硬约束: 关闭后，本轮不会调用对应来源工具。</p>
+          <el-alert
+            v-if="activeSourceCount === 0"
+            type="warning"
+            title="至少保留一个研究来源，Pipeline 才能开始运行。"
+            show-icon
+            :closable="false"
+            class="surface-alert"
+          />
           <div class="field-block">
             <span>研究侧重 (可选)</span>
             <el-input
@@ -284,7 +295,7 @@
 <!-- SCRIPT_PLACEHOLDER -->
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElAlert } from 'element-plus/es/components/alert/index'
 import { ElDialog } from 'element-plus/es/components/dialog/index'
@@ -571,6 +582,10 @@ const activeSourceCount = computed(() =>
   Number(research.use_web_search) + Number(research.use_history_search)
 )
 
+const dynamicSourcesValid = computed(() =>
+  mode.value !== 'dynamic' || activeSourceCount.value > 0
+)
+
 const RESEARCH_AGENTS = new Set(['researcher', 'fact_checker'])
 
 function isResearchStep(agentId: string): boolean {
@@ -762,6 +777,10 @@ async function run() {
     ElMessage.warning('请输入内容主题')
     return
   }
+  if (!dynamicSourcesValid.value) {
+    ElMessage.warning('至少保留一个研究来源')
+    return
+  }
   resetWorkspace()
   running.value = true
   if (mode.value === 'dynamic') {
@@ -912,6 +931,18 @@ function optimizeInChat() {
     : `帮我优化 #${savedContentId.value} 这篇内容：先调用 view_content 看一下当前版本，然后给出 2-3 条具体的改进方向，等我确认后再调 refine_content。`
   router.push({ path: '/chat', query: { seed } })
 }
+
+onMounted(() => {
+  const topic = typeof route.query.topic === 'string' ? route.query.topic.trim() : ''
+  const researchFocus = typeof route.query.research_focus === 'string' ? route.query.research_focus.trim() : ''
+  if (topic) form.topic = topic
+  if (researchFocus) research.research_focus = researchFocus
+  if (topic || researchFocus) {
+    const nextQuery: Record<string, string> = {}
+    if (typeof route.query.mode === 'string' && route.query.mode) nextQuery.mode = route.query.mode
+    void router.replace({ query: nextQuery })
+  }
+})
 
 onBeforeUnmount(() => {
   closeStream()
@@ -1581,6 +1612,13 @@ onBeforeUnmount(() => {
   display: grid;
   gap: 8px;
   margin-bottom: 14px;
+}
+
+.research-note {
+  margin: -2px 0 14px;
+  color: var(--c-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .research-toggle {

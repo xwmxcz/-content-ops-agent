@@ -9,6 +9,7 @@ import {
   type AgentMessage,
   type AgentSearchHit,
   type AgentThread,
+  type ChatIntent,
   type ChatPayload,
   type ChatResponse,
   type ChatToolEvent,
@@ -21,6 +22,7 @@ export type UiMessage = Partial<AgentMessage> & {
   role: 'user' | 'assistant'
   content: string
   pending?: boolean
+  intent?: ChatIntent | null
   tool_events?: ChatToolEvent[]
   plan?: PlanStep[]
 }
@@ -175,6 +177,7 @@ export const useChatStore = defineStore('chat', {
           content: result.response,
           provider: result.provider,
           model: result.model,
+          intent: result.intent,
           tool_events: result.tool_events,
           plan: result.plan,
           status: 'completed'

@@ -134,7 +134,7 @@
           </div>
 
           <article
-            v-for="message in chat.messages"
+            v-for="(message, messageIndex) in chat.messages"
             :key="message.local_id || message.id"
             class="message-row"
             :class="message.role"
@@ -145,6 +145,29 @@
                 <small v-if="message.model">{{ message.provider }} / {{ message.model }}</small>
                 <small v-else-if="message.pending">发送中</small>
               </div>
+
+              <section v-if="message.role === 'assistant' && message.intent" class="intent-board">
+                <div class="intent-head">
+                  <span class="intent-chip" :class="`intent-${message.intent.name}`">
+                    {{ intentLabel(message.intent.name) }}
+                  </span>
+                  <small>置信度 {{ intentConfidence(message.intent.confidence) }}</small>
+                  <small v-if="message.intent.requires_confirmation">需确认</small>
+                </div>
+                <div
+                  v-if="message.intent.route_surface === 'studio'"
+                  class="studio-suggestion"
+                >
+                  <span>这类请求更适合在 Studio 的研究型 Pipeline 中运行。</span>
+                  <el-button
+                    type="primary"
+                    size="small"
+                    @click="openInStudio(messageIndex, message.intent)"
+                  >
+                    在 Studio 中打开
+                  </el-button>
+                </div>
+              </section>
 
               <section v-if="message.plan?.length" class="plan-board">
                 <div class="plan-head">Agent 计划</div>
@@ -256,7 +279,7 @@ import {
 } from '@element-plus/icons-vue'
 import ModelSelector from '../components/ModelSelector.vue'
 import { useChatStore } from '../stores/chat'
-import type { AgentThread, ChatToolEvent, PlanStep } from '../api/agent'
+import type { AgentThread, ChatIntent, ChatIntentName, ChatToolEvent, PlanStep } from '../api/agent'
 
 const tools = [
   'create_content',
@@ -464,6 +487,52 @@ function summarizeEvent(event: ChatToolEvent) {
   }
   const text = (event.output || '').replace(/\s+/g, ' ').trim()
   return text.length > 80 ? `${text.slice(0, 80)}…` : text
+}
+
+function intentLabel(name: ChatIntentName) {
+  const labels: Record<ChatIntentName, string> = {
+    content_create: '新建内容',
+    content_refine: '内容改写',
+    title_generate: '标题生成',
+    seo_optimize: 'SEO 优化',
+    content_search: '内容检索',
+    topic_strategy: '选题策略',
+    performance_review: '效果复盘',
+    calendar_view: '查看日历',
+    schedule_propose: '排期提案',
+    schedule_commit: '确认排期',
+    memory_update: '记忆更新',
+    smalltalk: '闲聊',
+    clarify: '需要澄清',
+    unknown: '未分类'
+  }
+  return labels[name] || name
+}
+
+function intentConfidence(value: number | undefined) {
+  const ratio = typeof value === 'number' ? value : 0
+  return `${Math.round(ratio * 100)}%`
+}
+
+function studioTopicFor(index: number) {
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const message = chat.messages[cursor]
+    if (message?.role === 'user' && message.content?.trim()) return message.content.trim()
+  }
+  return input.value.trim()
+}
+
+function openInStudio(index: number, intent: ChatIntent) {
+  const topic = studioTopicFor(index)
+  const researchFocus = typeof intent.slots?.research_focus === 'string' ? intent.slots.research_focus : ''
+  void router.push({
+    path: '/',
+    query: {
+      mode: 'dynamic',
+      topic,
+      research_focus: researchFocus || undefined
+    }
+  })
 }
 
 function planMarker(status: PlanStep['status']) {
@@ -946,6 +1015,46 @@ onMounted(async () => {
   word-break: break-word;
 }
 
+.intent-board {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.intent-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: var(--c-text-secondary);
+  font-size: 12px;
+}
+
+.intent-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--c-accent) 10%, white);
+  color: var(--c-accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.studio-suggestion {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--c-accent) 24%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--c-accent) 6%, white);
+  color: var(--c-text-secondary);
+  font-size: 13px;
+}
+
 .tool-events {
   display: grid;
   gap: 6px;
@@ -1329,6 +1438,11 @@ onMounted(async () => {
 
   .message-bubble {
     width: 100%;
+  }
+
+  .studio-suggestion {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .composer-actions {

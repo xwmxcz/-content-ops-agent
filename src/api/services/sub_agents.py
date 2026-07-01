@@ -179,11 +179,12 @@ class SubAgentRunner:
         max_tokens: int = 2048,
         token_sink: TokenSink | None = None,
         tool_sink: ToolSink | None = None,
+        allowed_tools: tuple[str, ...] | None = None,
     ) -> tuple[str, int, int, int, float]:
         effective_max_tokens = spec.max_tokens or max_tokens
         if spec.tools:
             text, p_tok, c_tok = await self._run_with_tools(
-                spec, user_prompt, provider, model, effective_max_tokens, tool_sink
+                spec, user_prompt, provider, model, effective_max_tokens, tool_sink, allowed_tools
             )
         else:
             text, p_tok, c_tok = await self._run_plain(
@@ -244,8 +245,14 @@ class SubAgentRunner:
         model: str,
         max_tokens: int,
         tool_sink: ToolSink | None = None,
+        allowed_tools: tuple[str, ...] | None = None,
     ) -> tuple[str, int, int]:
-        tools = self._build_whitelisted_tools(spec.tools)
+        if allowed_tools is None:
+            effective_allowed = spec.tools
+        else:
+            allowed_tool_set = set(allowed_tools)
+            effective_allowed = tuple(name for name in spec.tools if name in allowed_tool_set)
+        tools = self._build_whitelisted_tools(effective_allowed)
         tools_by_name = {t.name: t for t in tools}
         base_chat_model = self.model_factory(provider, model, spec.temperature, max_tokens)
         chat_model = base_chat_model.bind_tools(tools) if hasattr(base_chat_model, "bind_tools") else base_chat_model
