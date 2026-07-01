@@ -64,6 +64,11 @@ async def create_pipeline_run(
     from src.api.services.content_service import resolve_provider
     from src.utils import config
 
+    try:
+        DynamicPipeline._validate_research_sources(request)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
     provider = resolve_provider(request.provider)
     model = request.model or config.get_model(provider)
 

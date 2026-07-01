@@ -12,11 +12,12 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_core.tools import StructuredTool
 
 from src.agent.context_engine import ContextEngine
-from src.api.schemas.agent import ChatRequest, ChatResponse, ChatToolEvent, PlanStep
+from src.api.schemas.agent import ChatIntent, ChatRequest, ChatResponse, ChatToolEvent, PlanStep
 from src.api.schemas.content import GenerateRequest, RefineRequest, SeoRequest, TitleRequest
 from src.api.services.publish_service import create_publish_service
 from src.api.services import content_service
 from src.api.services.content_service import resolve_provider
+from src.api.services.intent_recognizer import PLAN_EXEMPT_INTENTS, IntentRecognizer
 from src.llm.litellm_client import LLMConfigurationError, LiteLLMClient
 from src.models import ContentStyle, ContentType
 from src.storage import ContentStore
@@ -47,8 +48,7 @@ PLANNER_SYSTEM_PROMPT = (
     "You are a planner. Given the user's request and the available tools, "
     "output a JSON array of steps.\n"
     'Schema: [{"index": 1, "description": "...", "tool_hint": "tool_name_or_null"}].\n'
-    "Rules: at most 5 steps; output JSON only, no prose, no markdown fence.\n"
-    f"Available tools: {', '.join(AVAILABLE_TOOL_NAMES)}."
+    "Rules: at most 5 steps; output JSON only, no prose, no markdown fence."
 )
 
 
@@ -157,6 +157,11 @@ def _build_system_prompt(memory_snapshot: dict[str, str] | None = None) -> str:
 ModelFactory = Callable[[str, str, float, int], Any]
 
 
+def _build_planner_system_prompt(available_tools: list[str]) -> str:
+    names = available_tools or AVAILABLE_TOOL_NAMES
+    return f"{PLANNER_SYSTEM_PROMPT}\nAvailable tools: {', '.join(names)}."
+
+
 class ChatAgentExecutionError(RuntimeError):
     """Raised when the chat Agent cannot complete a request."""
 
@@ -169,12 +174,14 @@ class ChatAgentService:
         model_factory: ModelFactory | None = None,
         file_memory: FileMemory | None = None,
         context_engine: ContextEngine | None = None,
+        intent_recognizer: IntentRecognizer | None = None,
     ):
         self.store = store
         self.llm = llm or LiteLLMClient()
         self.model_factory = model_factory or self._create_chat_model
         self.file_memory = file_memory
         self.context_engine = context_engine
+        self.intent_recognizer = intent_recognizer or IntentRecognizer(self.model_factory)
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         provider = resolve_provider(request.provider)
@@ -195,6 +202,40 @@ class ChatAgentService:
             model=model,
         )
 
+        try:
+            intent = await self.intent_recognizer.recognize(
+                message=request.message,
+                history=history,
+                provider=provider,
+                model=model,
+            )
+        except Exception:
+            intent = ChatIntent(name="unknown", confidence=0.0)
+
+        if intent.name == "clarify":
+            response = intent.clarification or self._clarification_fallback(request.message)
+            return self._persist_chat_response(
+                thread_id=thread_id,
+                provider=provider,
+                model=model,
+                response=response,
+                intent=intent,
+                tool_events=[],
+                plan=[],
+            )
+
+        if intent.route_surface == "studio":
+            response = self._build_studio_suggestion(request.message, intent)
+            return self._persist_chat_response(
+                thread_id=thread_id,
+                provider=provider,
+                model=model,
+                response=response,
+                intent=intent,
+                tool_events=[],
+                plan=[],
+            )
+
         plan: list[PlanStep] = []
         if config.CHAT_PLAN_ENABLED:
             try:
@@ -203,6 +244,7 @@ class ChatAgentService:
                     history=history,
                     provider=provider,
                     model=model,
+                    intent=intent,
                 )
             except Exception:
                 plan = []
@@ -217,6 +259,7 @@ class ChatAgentService:
                 max_tokens=request.max_tokens,
                 plan=plan,
                 thread_id=thread_id,
+                intent=intent,
             )
         except LLMConfigurationError:
             raise
@@ -228,25 +271,17 @@ class ChatAgentService:
                 content=failure,
                 provider=provider,
                 model=model,
+                intent=intent.model_dump(),
                 status="failed",
             )
             raise ChatAgentExecutionError(failure) from exc
 
-        message_id = self.store.save_agent_message(
+        return self._persist_chat_response(
             thread_id=thread_id,
-            role="assistant",
-            content=response,
             provider=provider,
             model=model,
-            tool_events=[event.model_dump() for event in tool_events],
-            plan=[step.model_dump() for step in plan] if plan else None,
-        )
-        return ChatResponse(
-            message_id=message_id,
-            thread_id=thread_id,
             response=response,
-            provider=provider,
-            model=model,
+            intent=intent,
             tool_events=tool_events,
             plan=plan,
         )
@@ -257,9 +292,14 @@ class ChatAgentService:
         history: list[dict[str, Any]],
         provider: str,
         model: str,
+        intent: ChatIntent,
     ) -> list[PlanStep]:
+        if intent.name in PLAN_EXEMPT_INTENTS or intent.route_surface == "studio" or not intent.allowed_tools:
+            return []
+
         chat_model = self.model_factory(provider, model, PLANNER_TEMPERATURE, PLANNER_MAX_TOKENS)
-        messages: list[BaseMessage] = [SystemMessage(content=PLANNER_SYSTEM_PROMPT)]
+        messages: list[BaseMessage] = [SystemMessage(content=_build_planner_system_prompt(intent.allowed_tools))]
+        messages.append(SystemMessage(content=self._build_intent_prompt_block(intent)))
         messages.extend(self._history_to_messages(history))
         messages.append(HumanMessage(content=message))
         ai_message = await chat_model.ainvoke(messages)
@@ -288,7 +328,7 @@ class ChatAgentService:
                 )
             except Exception:
                 continue
-        return [s for s in steps if s.description]
+        return [s for s in steps if s.description and ((not s.tool_hint) or s.tool_hint in intent.allowed_tools)]
 
     async def _run_agent(
         self,
@@ -300,16 +340,25 @@ class ChatAgentService:
         max_tokens: int,
         plan: list[PlanStep] | None = None,
         thread_id: str | None = None,
+        intent: ChatIntent | None = None,
     ) -> tuple[str, list[ChatToolEvent], list[PlanStep]]:
         plan = plan or []
-        tools = self._build_tools(provider, model, temperature, max_tokens)
+        tools = self._build_tools(
+            provider,
+            model,
+            temperature,
+            max_tokens,
+            allowed_tools=intent.allowed_tools if intent else None,
+        )
         tools_by_name = {tool.name: tool for tool in tools}
         chat_model = self.model_factory(provider, model, temperature, max_tokens)
-        if hasattr(chat_model, "bind_tools"):
+        if tools and hasattr(chat_model, "bind_tools"):
             chat_model = chat_model.bind_tools(tools)
 
         frozen = self._get_frozen_system_prompt(thread_id)
         messages: list[BaseMessage] = [SystemMessage(content=frozen)]
+        if intent is not None:
+            messages.append(SystemMessage(content=self._build_intent_prompt_block(intent)))
         if plan:
             numbered = "\n".join(
                 f"  {step.index}. {step.description}"
@@ -459,6 +508,7 @@ class ChatAgentService:
         model: str,
         temperature: float,
         max_tokens: int,
+        allowed_tools: list[str] | None = None,
     ) -> list[StructuredTool]:
         async def create_content(
             topic: str,
@@ -879,7 +929,7 @@ class ChatAgentService:
             results = self.store.search_agent_messages(query, limit=limit, thread_id=thread_id)
             return json.dumps({"messages": results, "count": len(results)}, ensure_ascii=False)
 
-        return [
+        tools = [
             StructuredTool.from_function(coroutine=create_content, name="create_content"),
             StructuredTool.from_function(coroutine=refine_content, name="refine_content"),
             StructuredTool.from_function(coroutine=generate_title_options, name="generate_title_options"),
@@ -902,6 +952,80 @@ class ChatAgentService:
             StructuredTool.from_function(func=memory_remove, name="memory_remove"),
             StructuredTool.from_function(func=session_search, name="session_search"),
         ]
+        if allowed_tools is None:
+            return tools
+        allowed = set(allowed_tools)
+        return [tool for tool in tools if tool.name in allowed]
+
+    def _persist_chat_response(
+        self,
+        *,
+        thread_id: str,
+        provider: str,
+        model: str,
+        response: str,
+        intent: ChatIntent,
+        tool_events: list[ChatToolEvent],
+        plan: list[PlanStep],
+    ) -> ChatResponse:
+        message_id = self.store.save_agent_message(
+            thread_id=thread_id,
+            role="assistant",
+            content=response,
+            provider=provider,
+            model=model,
+            intent=intent.model_dump(),
+            tool_events=[event.model_dump() for event in tool_events],
+            plan=[step.model_dump() for step in plan] if plan else None,
+        )
+        return ChatResponse(
+            message_id=message_id,
+            thread_id=thread_id,
+            response=response,
+            provider=provider,
+            model=model,
+            intent=intent,
+            tool_events=tool_events,
+            plan=plan,
+        )
+
+    @staticmethod
+    def _build_intent_prompt_block(intent: ChatIntent) -> str:
+        slots = json.dumps(intent.slots or {}, ensure_ascii=False)
+        return (
+            "Recognized intent for this turn:\n"
+            f"- name: {intent.name}\n"
+            f"- confidence: {intent.confidence:.2f}\n"
+            f"- allowed_tools: {', '.join(intent.allowed_tools) if intent.allowed_tools else '(none)'}\n"
+            f"- requires_confirmation: {'yes' if intent.requires_confirmation else 'no'}\n"
+            f"- route_surface: {intent.route_surface}\n"
+            f"- route_reason: {intent.route_reason or '(none)'}\n"
+            f"- slots: {slots}\n"
+            "Stay within this intent unless the user explicitly changes direction."
+        )
+
+    @staticmethod
+    def _clarification_fallback(message: str) -> str:
+        if re.search(r"[\u4e00-\u9fff]", message or ""):
+            return "我还不确定你要我具体做哪件事。请告诉我是想改写内容、生成标题、做 SEO 优化，还是安排发布。"
+        return "I’m not sure what you want me to do yet. Tell me whether you want a rewrite, title ideas, SEO help, or publishing support."
+
+    @staticmethod
+    def _build_studio_suggestion(message: str, intent: ChatIntent) -> str:
+        focus = intent.slots.get("research_focus")
+        if re.search(r"[\u4e00-\u9fff]", message or ""):
+            if focus:
+                return f"这个请求更适合在 Studio 的研究型 Pipeline 里执行。我建议切过去，让 researcher 和 fact-checker 先处理，再出稿。研究重点建议：{focus}。"
+            return "这个请求更适合在 Studio 的研究型 Pipeline 里执行。我建议切过去，让 researcher 和 fact-checker 先处理，再出稿。"
+        if focus:
+            return (
+                "This request is a better fit for the Studio research pipeline. "
+                f"I recommend switching there so researcher and fact-checker steps can run first. Suggested focus: {focus}."
+            )
+        return (
+            "This request is a better fit for the Studio research pipeline. "
+            "I recommend switching there so researcher and fact-checker steps can run first."
+        )
 
     def _get_frozen_system_prompt(self, thread_id: str | None) -> str:
         """Return the cached system prompt for `thread_id`, building it once.

@@ -55,12 +55,14 @@ class CapturingChatFactory:
         return CapturingChatModel(self)
 
     def agent_runs(self) -> list[list[BaseMessage]]:
-        """Drop planner calls — they use the static PLANNER_SYSTEM_PROMPT."""
+        """Drop planner/intent calls and keep only main agent turns."""
         out = []
         for messages in self.captured_runs:
             if not messages or not isinstance(messages[0], SystemMessage):
                 continue
             if messages[0].content.startswith("You are a planner."):
+                continue
+            if messages[0].content.startswith("You are an intent recognizer"):
                 continue
             out.append(messages)
         return out

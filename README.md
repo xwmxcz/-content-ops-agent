@@ -78,14 +78,57 @@ before side-effecting actions unless the user explicitly asked for the action.
 
 ## Quick Start With Docker
 
-Use Docker when you want the whole stack running in one command.
+Use Docker when you want the whole stack running in one command. Docker mode is
+the recommended path for trying the full product because it starts the frontend,
+API, worker, PostgreSQL, and Redis together.
 
-```bash
-cp .env.docker.example .env
-docker compose up --build
+1. Create your local `.env` file:
+
+```powershell
+# Windows PowerShell
+Copy-Item .env.docker.example .env
 ```
 
-Open:
+```bash
+# macOS / Linux
+cp .env.docker.example .env
+```
+
+2. Edit `.env` and fill at least one LLM provider key:
+
+```env
+LLM_PROVIDER=deepseek
+DEEPSEEK_API_KEY=your_deepseek_key_here
+```
+
+Optional but recommended:
+
+```env
+# Stable researcher / fact-checker web search
+SERPER_API_KEY=
+TAVILY_API_KEY=
+BRAVE_SEARCH_API_KEY=
+
+# Login gate
+AUTH_ENABLED=true
+AUTH_USERNAME=admin
+AUTH_PASSWORD=change_me
+AUTH_SECRET_KEY=replace_with_a_long_random_secret
+```
+
+3. Start the full stack:
+
+```bash
+docker compose up -d --build
+```
+
+4. Check service status:
+
+```bash
+docker compose ps
+```
+
+5. Open:
 
 - Frontend: `http://localhost:8088`
 - API: `http://localhost:8000`
@@ -107,6 +150,19 @@ docker compose ps
 docker compose logs -f api
 docker compose logs -f worker
 docker compose down
+```
+
+After editing `.env`, recreate the affected containers so they read the new
+environment values:
+
+```bash
+docker compose up -d --force-recreate api worker
+```
+
+If frontend or Nginx config changed, rebuild the frontend too:
+
+```bash
+docker compose up -d --build frontend
 ```
 
 ## Required Configuration

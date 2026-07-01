@@ -49,6 +49,8 @@ from src.utils import config
 
 MAX_STEPS = 8
 MAX_REVISIONS = 2
+WORKSPACE_RESEARCH_TOOLS = ("search_history", "view_content", "list_recent_contents")
+WEB_RESEARCH_TOOLS = ("web_search",)
 
 PLANNER_SYSTEM_PROMPT = (
     "You are the Pipeline Planner for a RESEARCH-ORIENTED content pipeline. "
@@ -109,10 +111,12 @@ class DynamicPipeline:
         self.emit_async = emit_async
 
     async def run(self, request: PipelineRunRequest, run_id: str | None = None) -> PipelineRunResponse:
+        self._validate_research_sources(request)
         provider = resolve_provider(request.provider)
         litellm_model = config.get_litellm_model(provider, request.model)
         run_id = run_id or f"run_{uuid.uuid4().hex[:12]}"
         thread_id = request.thread_id or run_id
+        research_tools = self._allowed_research_tools(request)
 
         if not self.store.get_run(run_id):
             self.store.create_run(
@@ -130,11 +134,11 @@ class DynamicPipeline:
         except Exception as exc:
             import sys
             print(f"[planner] fallback to default plan: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
-            plan = self._default_plan()
+            plan = self._default_plan(request)
         if not plan:
             import sys
             print("[planner] empty plan returned → fallback to default", file=sys.stderr, flush=True)
-            plan = self._default_plan()
+            plan = self._default_plan(request)
         await self._emit(run_id, "plan_ready", {"plan": [s.model_dump() for s in plan]})
 
         outputs: dict[int, str] = {}
@@ -167,7 +171,7 @@ class DynamicPipeline:
             })
 
             spec = SUB_AGENTS.get(step.agent_id)
-            user_prompt = self._build_step_prompt(step, plan, outputs, request)
+            user_prompt = self._build_step_prompt(step, plan, outputs, request, research_tools)
             started = time.perf_counter()
             success = True
             step_tool_events: list[dict[str, Any]] = []
@@ -199,6 +203,7 @@ class DynamicPipeline:
                     max_tokens=request.max_tokens,
                     token_sink=token_sink,
                     tool_sink=tool_sink,
+                    allowed_tools=research_tools if step.agent_id in ("researcher", "fact_checker") else None,
                 )
                 duration = int((time.perf_counter() - started) * 1000)
                 cost = estimate_cost(litellm_model, p_tok, c_tok)
@@ -359,11 +364,7 @@ class DynamicPipeline:
         model: str | None,
     ) -> list[PipelinePlanStep]:
         keywords = ", ".join(request.keywords or []) or "none"
-        available_tools: list[str] = ["search_history", "view_content", "list_recent_contents"]
-        if request.use_web_search:
-            available_tools.append("web_search")
-        if not request.use_history_search:
-            available_tools = [t for t in available_tools if t != "search_history"]
+        available_tools = list(self._allowed_research_tools(request))
         focus = request.research_focus.strip() if request.research_focus else "(not specified)"
         user_prompt = (
             f"Topic: {request.topic}\n"
@@ -384,6 +385,21 @@ class DynamicPipeline:
             max_tokens=1024,
         )
         return self._parse_plan(raw)
+
+    @staticmethod
+    def _validate_research_sources(request: PipelineRunRequest) -> None:
+        if request.use_web_search or request.use_history_search:
+            return
+        raise ValueError("At least one research source must be enabled for the dynamic pipeline.")
+
+    @staticmethod
+    def _allowed_research_tools(request: PipelineRunRequest) -> tuple[str, ...]:
+        tools: list[str] = []
+        if request.use_history_search:
+            tools.extend(WORKSPACE_RESEARCH_TOOLS)
+        if request.use_web_search:
+            tools.extend(WEB_RESEARCH_TOOLS)
+        return tuple(tools)
 
     async def _maybe_revise_plan(
         self,
@@ -525,15 +541,16 @@ class DynamicPipeline:
             )]
         return steps[:MAX_STEPS]
 
-    @staticmethod
-    def _default_plan() -> list[PipelinePlanStep]:
+    def _default_plan(self, request: PipelineRunRequest) -> list[PipelinePlanStep]:
         # Dynamic pipeline is positioned as the RESEARCH-oriented track. The default
         # fallback plan should reflect that: the user picked dynamic precisely because
         # they expect researcher / fact_checker to be involved.
+        research_instruction = self._default_research_instruction(request)
+        fact_check_instruction = self._default_fact_check_instruction(request)
         return [
             PipelinePlanStep(index=1, agent_id="researcher",
-                             description="Gather context from saved content and the public web",
-                             instruction="Research the topic. Use search_history first, then web_search if it adds external context. Summarize findings as 5-8 bullet points.",
+                             description="Gather context from the enabled research sources",
+                             instruction=research_instruction,
                              inputs_from=[]),
             PipelinePlanStep(index=2, agent_id="strategy",
                              description="Plan audience, angle, and structure grounded in research",
@@ -545,7 +562,7 @@ class DynamicPipeline:
                              inputs_from=[1, 2]),
             PipelinePlanStep(index=4, agent_id="fact_checker",
                              description="Verify factual claims in the draft",
-                             instruction="Identify concrete claims (numbers, dates, names). Verify each via search_history or web_search. Flag anything unverified.",
+                             instruction=fact_check_instruction,
                              inputs_from=[3]),
             PipelinePlanStep(index=5, agent_id="editor",
                              description="Polish the draft and incorporate fact-check findings",
@@ -555,12 +572,13 @@ class DynamicPipeline:
 
     # -- step prompt builder ----------------------------------------------
 
-    @staticmethod
     def _build_step_prompt(
+        self,
         step: PipelinePlanStep,
         plan: list[PipelinePlanStep],
         outputs: dict[int, str],
         request: PipelineRunRequest,
+        research_tools: tuple[str, ...],
     ) -> str:
         keywords = ", ".join(request.keywords or []) or "none"
         ctx = (
@@ -580,12 +598,56 @@ class DynamicPipeline:
             ctx += "\n" + "\n\n".join(prior_blocks) + "\n"
         instruction = step.instruction or step.description
         if step.agent_id in ("researcher", "fact_checker"):
-            instruction += (
+            instruction += self._research_step_suffix(research_tools)
+        return f"{ctx}\n\nYour task: {instruction}\n"
+
+    @staticmethod
+    def _default_research_instruction(request: PipelineRunRequest) -> str:
+        if request.use_history_search and request.use_web_search:
+            return (
+                "Research the topic. Use search_history first, then web_search if it adds external context. "
+                "Summarize findings as 5-8 bullet points."
+            )
+        if request.use_history_search:
+            return (
+                "Research the topic using only the internal content library tools "
+                "(search_history, view_content, list_recent_contents). Summarize findings as 5-8 bullet points."
+            )
+        return (
+            "Research the topic using only web_search. Summarize findings as 5-8 bullet points."
+        )
+
+    @staticmethod
+    def _default_fact_check_instruction(request: PipelineRunRequest) -> str:
+        if request.use_history_search and request.use_web_search:
+            return "Identify concrete claims (numbers, dates, names). Verify each via search_history or web_search. Flag anything unverified."
+        if request.use_history_search:
+            return "Identify concrete claims (numbers, dates, names). Verify each via the internal content library tools only. Flag anything unverified."
+        return "Identify concrete claims (numbers, dates, names). Verify each via web_search only. Flag anything unverified."
+
+    @staticmethod
+    def _research_step_suffix(research_tools: tuple[str, ...]) -> str:
+        tools_label = ", ".join(research_tools) or "(none)"
+        if "web_search" in research_tools and any(tool in research_tools for tool in WORKSPACE_RESEARCH_TOOLS):
+            return (
+                f"\nAvailable research tools in this run: {tools_label}."
                 "\nWhen using web_search, include the topic's specific qualifiers in every query "
                 "(location, product/object, platform, audience, scenario, year). If a query is too "
                 "generic or returns irrelevant results, retry with the original topic words included."
             )
-        return f"{ctx}\n\nYour task: {instruction}\n"
+        if "web_search" in research_tools:
+            return (
+                f"\nAvailable research tools in this run: {tools_label}."
+                "\nDo not call search_history, view_content, or list_recent_contents in this run; "
+                "the internal content library is disabled."
+                "\nWhen using web_search, include the topic's specific qualifiers in every query "
+                "(location, product/object, platform, audience, scenario, year)."
+            )
+        return (
+            f"\nAvailable research tools in this run: {tools_label}."
+            "\nDo not call web_search in this run; public web search is disabled. "
+            "Rely only on the internal content library tools that are available."
+        )
 
     @staticmethod
     def _select_final_output(plan: list[PipelinePlanStep], outputs: dict[int, str]) -> str:

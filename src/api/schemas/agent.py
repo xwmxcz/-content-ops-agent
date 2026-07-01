@@ -14,6 +14,35 @@ class ChatRequest(BaseModel):
     max_tokens: int = Field(2048, ge=128, le=8192)
 
 
+ChatIntentName = Literal[
+    "content_create",
+    "content_refine",
+    "title_generate",
+    "seo_optimize",
+    "content_search",
+    "topic_strategy",
+    "performance_review",
+    "calendar_view",
+    "schedule_propose",
+    "schedule_commit",
+    "memory_update",
+    "smalltalk",
+    "clarify",
+    "unknown",
+]
+
+
+class ChatIntent(BaseModel):
+    name: ChatIntentName
+    confidence: float = Field(0.0, ge=0.0, le=1.0)
+    slots: dict[str, Any] = Field(default_factory=dict)
+    requires_confirmation: bool = False
+    allowed_tools: list[str] = Field(default_factory=list)
+    route_surface: Literal["chat", "studio", "publish", "none"] = "chat"
+    route_reason: Optional[str] = None
+    clarification: Optional[str] = None
+
+
 class PlanStep(BaseModel):
     index: int
     description: str
@@ -38,6 +67,7 @@ class ChatResponse(BaseModel):
     response: str
     provider: str
     model: str
+    intent: Optional[ChatIntent] = None
     tool_events: list[ChatToolEvent] = Field(default_factory=list)
     plan: list[PlanStep] = Field(default_factory=list)
 
@@ -84,6 +114,7 @@ class AgentMessageResponse(BaseModel):
     content: str
     provider: Optional[str] = None
     model: Optional[str] = None
+    intent: Optional[ChatIntent] = None
     tool_events: list[ChatToolEvent] = Field(default_factory=list)
     plan: list[PlanStep] = Field(default_factory=list)
     status: str

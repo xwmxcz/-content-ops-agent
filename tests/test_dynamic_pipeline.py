@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -63,12 +64,12 @@ class FakeRunner:
         self.store = store
         self.llm = llm
         self.scripted = scripted or {}
-        self.calls: list[tuple[str, str]] = []  # (agent_id, prompt)
+        self.calls: list[tuple[str, str, tuple[str, ...] | None]] = []  # (agent_id, prompt, allowed_tools)
         self.token_emissions: list[tuple[int, str]] = []  # (step_index?, delta) — index unknown here, but sink knows it
 
     async def run(self, spec: SubAgentSpec, user_prompt: str, provider: str, model: str,
-                  max_tokens: int = 2048, token_sink=None, tool_sink=None):
-        self.calls.append((spec.id, user_prompt))
+                  max_tokens: int = 2048, token_sink=None, tool_sink=None, allowed_tools: tuple[str, ...] | None = None):
+        self.calls.append((spec.id, user_prompt, allowed_tools))
         text = self.scripted.get(spec.id, f"[{spec.id} default output]")
         if token_sink is not None:
             # Emit two tokens so the test for `step_token` event presence passes.
@@ -102,15 +103,17 @@ def _make_pipeline(store, planner_llm, scripted=None):
     return DynamicPipeline(store=store, llm=planner_llm, runner=runner), runner
 
 
-def _request(topic="周末徒步路线推荐"):
-    return PipelineRunRequest(
-        topic=topic,
-        content_type=ContentType.XIAOHONGSHU,
-        style=ContentStyle.PROFESSIONAL,
-        keywords=["徒步", "户外"],
-        provider="siliconflow",
-        model="Qwen/Qwen2.5-7B-Instruct",
-    )
+def _request(topic="周末徒步路线推荐", **overrides: Any):
+    payload = {
+        "topic": topic,
+        "content_type": ContentType.XIAOHONGSHU,
+        "style": ContentStyle.PROFESSIONAL,
+        "keywords": ["徒步", "户外"],
+        "provider": "siliconflow",
+        "model": "Qwen/Qwen2.5-7B-Instruct",
+    }
+    payload.update(overrides)
+    return PipelineRunRequest(**payload)
 
 
 # ---------- tests -------------------------------------------------------------
@@ -153,6 +156,41 @@ async def test_planner_fallback_on_invalid_json(store, planner_llm):
         "researcher", "strategy", "writer", "fact_checker", "editor",
     ]
     assert all(s.status == "completed" for s in response.plan)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_rejects_when_all_research_sources_are_disabled(store, planner_llm):
+    pipeline, _ = _make_pipeline(store, planner_llm)
+
+    with pytest.raises(ValueError, match="At least one research source must be enabled"):
+        await pipeline.run(_request(use_web_search=False, use_history_search=False))
+
+
+@pytest.mark.asyncio
+async def test_pipeline_hard_limits_research_sources_in_prompts_and_runner(store, planner_llm):
+    planner_llm.queue("not-json", "null")
+    pipeline, runner = _make_pipeline(
+        store,
+        planner_llm,
+        scripted={
+            "researcher": "R",
+            "strategy": "S",
+            "writer": "W",
+            "fact_checker": "F",
+            "editor": "E",
+        },
+    )
+
+    await pipeline.run(_request(use_web_search=False, use_history_search=True))
+
+    planner_prompt = planner_llm.calls[0]["user_prompt"]
+    assert "Available tools to researcher/fact_checker: search_history, view_content, list_recent_contents" in planner_prompt
+    assert "Available tools to researcher/fact_checker: search_history, view_content, list_recent_contents, web_search" not in planner_prompt
+
+    research_calls = [call for call in runner.calls if call[0] in {"researcher", "fact_checker"}]
+    assert research_calls
+    assert all(call[2] == ("search_history", "view_content", "list_recent_contents") for call in research_calls)
+    assert any("Do not call web_search in this run; public web search is disabled." in call[1] for call in research_calls)
 
 
 def test_plan_coercion_remaps_inputs_after_dropping_steps():
@@ -373,3 +411,36 @@ def test_delete_run_cancels_and_emits_event(store):
         assert resp3.status_code == 404
     finally:
         app.dependency_overrides.pop(real_get_store, None)
+
+
+def test_create_pipeline_run_rejects_when_all_research_sources_are_disabled(store):
+    from src.api.dependencies import get_litellm_client as real_get_litellm_client
+    from src.api.dependencies import get_store as real_get_store
+
+    app.dependency_overrides[real_get_store] = lambda: store
+    app.dependency_overrides[real_get_litellm_client] = lambda: object()
+    client = TestClient(app)
+    try:
+        resp = client.post(
+            "/api/agent/runs",
+            json={
+                "topic": "写一篇模型横评",
+                "content_type": "blog",
+                "style": "professional",
+                "length": "medium",
+                "keywords": ["模型"],
+                "provider": "siliconflow",
+                "model": "Qwen/Qwen2.5-7B-Instruct",
+                "temperature": 0.7,
+                "max_tokens": 2048,
+                "save_final": True,
+                "use_web_search": False,
+                "use_history_search": False,
+            },
+        )
+
+        assert resp.status_code == 400
+        assert "At least one research source must be enabled" in resp.json()["detail"]
+    finally:
+        app.dependency_overrides.pop(real_get_store, None)
+        app.dependency_overrides.pop(real_get_litellm_client, None)

@@ -148,6 +148,7 @@ class AgentMessage(Base):
     content = Column(Text, nullable=False)
     provider = Column(String(50), nullable=True)
     model = Column(String(200), nullable=True)
+    intent = Column(Text, nullable=True)
     tool_events = Column(Text, nullable=True)
     plan = Column(Text, nullable=True)
     status = Column(String(20), default="completed")
@@ -267,6 +268,9 @@ class ContentStore:
 
     def _ensure_legacy_columns(self) -> None:
         existing = {col["name"] for col in inspect(self.engine).get_columns("agent_messages")}
+        if "intent" not in existing:
+            with self.engine.begin() as connection:
+                connection.execute(text("ALTER TABLE agent_messages ADD COLUMN intent TEXT"))
         if "plan" not in existing:
             with self.engine.begin() as connection:
                 connection.execute(text("ALTER TABLE agent_messages ADD COLUMN plan TEXT"))
@@ -1229,6 +1233,7 @@ class ContentStore:
         content: str,
         provider: str | None = None,
         model: str | None = None,
+        intent: dict | None = None,
         tool_events: list[dict] | None = None,
         plan: list[dict] | None = None,
         status: str = "completed",
@@ -1257,6 +1262,7 @@ class ContentStore:
                 content=content,
                 provider=provider,
                 model=model,
+                intent=json.dumps(intent, ensure_ascii=False) if intent else None,
                 tool_events=json.dumps(tool_events or [], ensure_ascii=False),
                 plan=json.dumps(plan, ensure_ascii=False) if plan else None,
                 status=status,
@@ -1527,6 +1533,7 @@ class ContentStore:
             "content": message.content,
             "provider": message.provider,
             "model": message.model,
+            "intent": json.loads(message.intent) if message.intent else None,
             "tool_events": json.loads(message.tool_events) if message.tool_events else [],
             "plan": json.loads(message.plan) if message.plan else [],
             "status": message.status,

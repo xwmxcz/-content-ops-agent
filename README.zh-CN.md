@@ -74,14 +74,56 @@ graph LR
 
 ## Docker 快速启动
 
-想直接跑完整项目，优先使用 Docker。
+想直接跑完整项目，优先使用 Docker。Docker 模式会一起启动前端、API、worker、
+PostgreSQL 和 Redis，是体验完整产品最省事的方式。
 
-```bash
-cp .env.docker.example .env
-docker compose up --build
+1. 创建本地 `.env` 文件：
+
+```powershell
+# Windows PowerShell
+Copy-Item .env.docker.example .env
 ```
 
-打开：
+```bash
+# macOS / Linux
+cp .env.docker.example .env
+```
+
+2. 编辑 `.env`，至少填写一个 LLM provider key：
+
+```env
+LLM_PROVIDER=deepseek
+DEEPSEEK_API_KEY=your_deepseek_key_here
+```
+
+可选但推荐：
+
+```env
+# 稳定的 researcher / fact-checker 网页搜索
+SERPER_API_KEY=
+TAVILY_API_KEY=
+BRAVE_SEARCH_API_KEY=
+
+# 登录保护
+AUTH_ENABLED=true
+AUTH_USERNAME=admin
+AUTH_PASSWORD=change_me
+AUTH_SECRET_KEY=replace_with_a_long_random_secret
+```
+
+3. 启动完整栈：
+
+```bash
+docker compose up -d --build
+```
+
+4. 检查服务状态：
+
+```bash
+docker compose ps
+```
+
+5. 打开：
 
 - 前端：`http://localhost:8088`
 - API：`http://localhost:8000`
@@ -103,6 +145,18 @@ docker compose ps
 docker compose logs -f api
 docker compose logs -f worker
 docker compose down
+```
+
+修改 `.env` 后，需要重建/重启相关容器，让新环境变量生效：
+
+```bash
+docker compose up -d --force-recreate api worker
+```
+
+如果改了前端或 Nginx 配置，也重建前端：
+
+```bash
+docker compose up -d --build frontend
 ```
 
 ## 必要配置

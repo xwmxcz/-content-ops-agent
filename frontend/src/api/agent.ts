@@ -62,6 +62,33 @@ export interface PlanStep {
   status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped'
 }
 
+export type ChatIntentName =
+  | 'content_create'
+  | 'content_refine'
+  | 'title_generate'
+  | 'seo_optimize'
+  | 'content_search'
+  | 'topic_strategy'
+  | 'performance_review'
+  | 'calendar_view'
+  | 'schedule_propose'
+  | 'schedule_commit'
+  | 'memory_update'
+  | 'smalltalk'
+  | 'clarify'
+  | 'unknown'
+
+export interface ChatIntent {
+  name: ChatIntentName
+  confidence: number
+  slots: Record<string, unknown>
+  requires_confirmation: boolean
+  allowed_tools: string[]
+  route_surface: 'chat' | 'studio' | 'publish' | 'none'
+  route_reason?: string | null
+  clarification?: string | null
+}
+
 export interface ChatPayload {
   message: string
   thread_id?: string
@@ -77,6 +104,7 @@ export interface ChatResponse {
   response: string
   provider: string
   model: string
+  intent?: ChatIntent | null
   tool_events: ChatToolEvent[]
   plan: PlanStep[]
 }
@@ -101,6 +129,7 @@ export interface AgentMessage {
   content: string
   provider?: string
   model?: string
+  intent?: ChatIntent | null
   tool_events: ChatToolEvent[]
   plan: PlanStep[]
   status: string

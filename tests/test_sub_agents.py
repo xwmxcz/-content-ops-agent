@@ -110,6 +110,29 @@ class EmptyToolThenPseudoToolCallModel(EmptyToolThenSynthesisModel):
         return AIMessage(content="<tool_call>web_search<arg_key>query</arg_key></tool_call>")
 
 
+class DisallowedToolModel:
+    def __init__(self):
+        self.calls = 0
+
+    def bind_tools(self, tools):
+        return self
+
+    async def ainvoke(self, messages):
+        self.calls += 1
+        if self.calls == 1:
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "web_search",
+                        "args": {"query": "河北徒步", "limit": 5},
+                        "id": "call_web_search",
+                    },
+                ],
+            )
+        return AIMessage(content="研究完成，但外部检索在本轮不可用。")
+
+
 @pytest.mark.asyncio
 async def test_tool_agent_synthesizes_summary_when_tools_return_empty_and_model_has_no_text(store):
     model = EmptyToolThenSynthesisModel()
@@ -197,3 +220,32 @@ async def test_tool_agent_keeps_model_summary_when_present(store):
     )
 
     assert text == "调研总结：工具没有找到历史素材，但可以从目的地类型和出行半径切入。"
+
+
+@pytest.mark.asyncio
+async def test_tool_agent_blocks_disallowed_tool_calls_under_override(store):
+    model = DisallowedToolModel()
+    runner = SubAgentRunner(store=store, model_factory=lambda *args: model)
+    tool_events = []
+
+    async def sink(event_type, payload):
+        if event_type == "tool_call_result":
+            tool_events.append(payload)
+
+    text, _, _, _, _ = await runner.run(
+        SUB_AGENTS["researcher"],
+        user_prompt="Gather information about popular weekend hiking destinations in Hebei province",
+        provider="deepseek",
+        model="deepseek-v4-flash",
+        tool_sink=sink,
+        allowed_tools=("search_history",),
+    )
+
+    assert text == "研究完成，但外部检索在本轮不可用。"
+    assert len(tool_events) == 1
+    assert tool_events[0]["name"] == "web_search"
+    assert tool_events[0]["args"] == {"query": "河北徒步", "limit": 5}
+    assert tool_events[0]["status"] == "failed"
+    assert tool_events[0]["error"] == "Tool `web_search` is not available to researcher."
+    assert tool_events[0]["preview"] == ""
+    assert tool_events[0]["duration_ms"] >= 0
