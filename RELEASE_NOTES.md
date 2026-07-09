@@ -2,27 +2,38 @@
 
 ## Highlights
 
-- Added job-backed workflows for content generation, agent runs, refinement, title generation, and SEO analysis.
-- Added two runtime modes: local SQLite with FastAPI background tasks, and PostgreSQL + Redis with RQ workers.
-- Added `worker.py`, `docker-compose.yml`, `DEPLOYMENT.md`, and ready-to-use `.env.sqlite` / `.env.postgres-rq` templates.
-- Updated the frontend Studio, Refine, and Chat pages to use the new job APIs.
-- Fixed model selection state sync so the Studio header and page-level summaries reflect the selected provider/model correctly.
-- Expanded persistence to track job state in the database.
+- **Dynamic Studio pipeline** — plan-then-execute content workflow where a planner LLM emits a 3–6 step plan drawn from researcher, strategist, writer, editor, reviewer, and fact-checker sub-agents, with every transition streamed over SSE. Falls back to the canonical 4-step pipeline on any planner failure.
+- **Persistent Chat Agent** — LangChain tool-calling assistant with thread history, content/planning/memory tools, and session search. Write tools require confirmation before side-effecting actions.
+- **Hermes-style long-term memory** — four-layer file memory (`MEMORY.md` / `USER.md` with hard char budgets, frozen per-session snapshots, a memory curator for deleted threads, and a context compressor for long threads). Replaces the earlier vector-backed store.
+- **Multi-provider LLM routing** — Claude, SiliconFlow, DeepSeek, Moonshot, and NewAPI via a single LiteLLM path, with provider-prefix rewriting and OpenAI-compatible base URLs.
+- **Multi-provider web research** — Serper, Tavily, Brave, SearXNG, DuckDuckGo, and Bing fallback, exposed to research sub-agents as read-only tools.
+- **Two runtime modes** — local SQLite with FastAPI `BackgroundTasks`, or PostgreSQL + Redis with RQ workers, switched entirely by env vars.
+- **Single-admin auth gate** — optional login gate (`AUTH_ENABLED`) protecting the API and frontend.
+- **One-command Docker stack** — frontend, API, worker, PostgreSQL, and Redis via Compose.
+
+## Frontend
+
+- Vue 3 + Element Plus + Pinia workspace covering Studio, Refine, Chat, Content Library, Calendar (60-day queue), Stats, and a Memory editor with live char budgets.
+- Studio/Refine submit jobs and poll `GET /api/jobs/{job_id}`; the dynamic pipeline surfaces step progress over SSE.
 
 ## Documentation
 
-- Refreshed `README.md` and `README.zh-CN.md` to match the current architecture and startup flows.
-- Added screenshot assets for the Studio, Refine, and Chat workspaces.
-- Added frontend proxy configuration reference via `frontend/.env.example`.
+- `README.md` and `README.zh-CN.md` describe the current architecture, agent surfaces, memory system, and both startup flows.
+- `DEPLOYMENT.md` covers Docker and host-based deployment notes.
+- `.env.example`, `.env.sqlite`, `.env.postgres-rq`, `.env.docker.example`, and `frontend/.env.example` document all runtime configuration.
 
 ## Verification
 
-- `conda run -n only python -m pytest tests -q`
-- `conda run -n only python -m compileall src tests examples`
+- `python -m pytest tests -q` — 133 passing on a clean checkout.
+- `python -m compileall src tests examples`
 - `cd frontend && npm run build`
 
 ## Notes
 
-- Use `.env.sqlite` for local development and demo runs.
+- Use `.env.sqlite` for local development and demo runs; do not start `python worker.py` in SQLite mode.
 - Use `.env.postgres-rq` plus `docker compose up -d postgres redis` for higher-concurrency runs.
-- In SQLite mode, do not start `python worker.py`.
+- The Xiaohongshu publishing path is a local MCP-backed demonstration and should be hardened before production use.
+
+## Project Boundary
+
+This is a demo-ready prototype, not a hardened multi-tenant SaaS. Team accounts, RBAC, billing, tenant isolation, and managed cloud deployment are intentionally out of scope.
