@@ -10,4 +10,5 @@ if __name__ == "__main__":
         host=config.API_HOST,
         port=config.API_PORT,
         reload=config.API_RELOAD,
+        log_level=config.LOG_LEVEL.lower(),
     )

@@ -7,7 +7,7 @@
 - **Hermes-style long-term memory** — four-layer file memory (`MEMORY.md` / `USER.md` with hard char budgets, frozen per-session snapshots, a memory curator for deleted threads, and a context compressor for long threads). Replaces the earlier vector-backed store.
 - **Multi-provider LLM routing** — Claude, SiliconFlow, DeepSeek, Moonshot, and NewAPI via a single LiteLLM path, with provider-prefix rewriting and OpenAI-compatible base URLs.
 - **Multi-provider web research** — Serper, Tavily, Brave, SearXNG, DuckDuckGo, and Bing fallback, exposed to research sub-agents as read-only tools.
-- **Two runtime modes** — local SQLite with FastAPI `BackgroundTasks`, or PostgreSQL + Redis with RQ workers, switched entirely by env vars.
+- **Two job-queue modes** — in-process FastAPI `BackgroundTasks` or Redis + RQ workers on top of PostgreSQL, switched entirely by env vars.
 - **Single-admin auth gate** — optional login gate (`AUTH_ENABLED`) protecting the API and frontend.
 - **One-command Docker stack** — frontend, API, worker, PostgreSQL, and Redis via Compose.
 
@@ -20,7 +20,7 @@
 
 - `README.md` and `README.zh-CN.md` describe the current architecture, agent surfaces, memory system, and both startup flows.
 - `DEPLOYMENT.md` covers Docker and host-based deployment notes.
-- `.env.example`, `.env.sqlite`, `.env.postgres-rq`, `.env.docker.example`, and `frontend/.env.example` document all runtime configuration.
+- `.env.example`, `.env.postgres-rq`, `.env.docker.example`, and `frontend/.env.example` document all runtime configuration.
 
 ## Verification
 
@@ -30,7 +30,7 @@
 
 ## Notes
 
-- Use `.env.sqlite` for local development and demo runs; do not start `python worker.py` in SQLite mode.
+- Use `JOB_QUEUE_MODE=background` (the default) for local development and demo runs; no Redis or `python worker.py` needed.
 - Use `.env.postgres-rq` plus `docker compose up -d postgres redis` for higher-concurrency runs.
 - The Xiaohongshu publishing path is a local MCP-backed demonstration and should be hardened before production use.
 

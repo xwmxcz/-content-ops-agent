@@ -7,7 +7,6 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 
 from src.api.schemas.agent import ChatRequest
 from src.api.services.chat_agent import ChatAgentService, _FROZEN_PROMPTS
-from src.storage import ContentStore
 from src.storage.file_memory import AGENT, FileMemory, USER
 
 
@@ -73,11 +72,6 @@ def _clear_frozen_cache():
     _FROZEN_PROMPTS.clear()
     yield
     _FROZEN_PROMPTS.clear()
-
-
-@pytest.fixture
-def store():
-    return ContentStore(database_url="sqlite:///:memory:")
 
 
 @pytest.fixture

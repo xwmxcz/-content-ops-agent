@@ -37,8 +37,12 @@ async def main() -> int:
     model = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
     spec = SUB_AGENTS["researcher"]
 
-    # Use an in-memory SQLite store so we don't touch the real data dir.
-    store = ContentStore(database_url="sqlite:///:memory:")
+    # Use a scratch PostgreSQL store so we don't touch the real data dir.
+    test_db_url = os.environ.get("TEST_DATABASE_URL")
+    if not test_db_url:
+        print("[skip] TEST_DATABASE_URL not set (need a scratch PostgreSQL database)")
+        return 0
+    store = ContentStore(database_url=test_db_url)
     runner = SubAgentRunner(store=store)
 
     tool_events: list[tuple[str, dict]] = []

@@ -45,7 +45,7 @@ graph LR
   Agent --> Memory[File Memory + Context Compressor]
   Memory --> Files[(MEMORY.md / USER.md)]
   Jobs --> Queue[BackgroundTasks or RQ]
-  Queue --> DB[(SQLite or PostgreSQL)]
+  Queue --> DB[(PostgreSQL)]
   Queue --> Redis[(Redis for RQ mode)]
 ```
 
@@ -176,10 +176,9 @@ Copy one env template to `.env`, then fill in the keys you need.
 | Login gate | Set `AUTH_ENABLED=true`, `AUTH_USERNAME`, `AUTH_PASSWORD`, and a strong `AUTH_SECRET_KEY`. |
 | Xiaohongshu publishing demo | Keep or adjust `XHS_MCP_URL` to point at your local MCP server. |
 
-Docker reads `.env` automatically. For host-based development, use one of:
-
-- `.env.sqlite` for SQLite + FastAPI `BackgroundTasks`
-- `.env.postgres-rq` for PostgreSQL + Redis + RQ
+Docker reads `.env` automatically. For host-based development, copy
+`.env.postgres-rq` and adjust `JOB_QUEUE_MODE` (`background` for in-process
+jobs, `rq` for a separate worker).
 
 ## Local Development
 
@@ -211,19 +210,23 @@ npm install
 cd ..
 ```
 
-### SQLite Mode
+### Database
 
-SQLite mode is the easiest host-based development path.
+PostgreSQL is required (SQLite is no longer supported). Start it with Docker:
 
 ```bash
-# Windows PowerShell
-Copy-Item .env.sqlite .env
-
-# macOS / Linux
-cp .env.sqlite .env
+docker compose up -d postgres
 ```
 
-Then start the backend:
+The default `DATABASE_URL` targets this instance.
+
+### Default Mode: In-Process Jobs
+
+The simplest host-based path. Jobs run inside the API process through FastAPI
+`BackgroundTasks`, so no Redis or worker is needed. This is the default
+`JOB_QUEUE_MODE=background`.
+
+Start the backend:
 
 ```bash
 python server.py
@@ -236,13 +239,7 @@ cd frontend
 npm run dev
 ```
 
-Notes:
-
-- SQLite data lives at `data/content_ops.db`.
-- Do not start `python worker.py` in SQLite mode.
-- Jobs run through FastAPI background tasks.
-
-### PostgreSQL + Redis Mode
+### RQ Worker Mode
 
 Use this when you want the API process and long-running jobs separated.
 
@@ -340,7 +337,7 @@ Included:
 
 - Single-admin login gate
 - Local Docker deployment
-- SQLite or PostgreSQL storage
+- PostgreSQL storage
 - Redis/RQ worker mode
 - Multi-provider LLM routing
 - Agent tool calls and tool traces

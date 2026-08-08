@@ -23,12 +23,12 @@ x-app-env: &app-env
   AUTH_PASSWORD: ${AUTH_PASSWORD:-}
   AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-}
   AUTH_TOKEN_EXPIRE_MINUTES: ${AUTH_TOKEN_EXPIRE_MINUTES:-1440}
-  DATABASE_URL: postgresql+psycopg://content_ops:content_ops@postgres:5432/content_ops
+  DATABASE_URL: postgresql+psycopg://content_ops:${POSTGRES_PASSWORD:-content_ops}@postgres:5432/content_ops
   DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
   DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-20}
   DB_POOL_TIMEOUT_SECONDS: ${DB_POOL_TIMEOUT_SECONDS:-30}
   JOB_QUEUE_MODE: rq
-  REDIS_URL: redis://redis:6379/0
+  REDIS_URL: redis://:${REDIS_PASSWORD:-content_ops}@redis:6379/0
   JOB_QUEUE_NAME: ${JOB_QUEUE_NAME:-content_ops}
   JOB_TIMEOUT_SECONDS: ${JOB_TIMEOUT_SECONDS:-300}
   MAX_PROVIDER_INFLIGHT_JOBS: ${MAX_PROVIDER_INFLIGHT_JOBS:-8}
@@ -67,6 +67,8 @@ services:
       context: .
       dockerfile: Dockerfile
       target: api
+    command: ["gunicorn", "-c", "gunicorn.conf.py", "src.api.main:app"]
+    restart: unless-stopped
     environment:
       <<: *app-env
     ports:
@@ -93,6 +95,7 @@ services:
       dockerfile: Dockerfile
       target: api
     command: ["python", "worker.py"]
+    restart: unless-stopped
     environment:
       <<: *app-env
     volumes:
@@ -110,6 +113,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: frontend
+    restart: unless-stopped
     ports:
       - "${FRONTEND_PORT:-8088}:80"
     depends_on:
@@ -118,12 +122,14 @@ services:
 
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
+    command: ["postgres", "-c", "max_connections=${POSTGRES_MAX_CONNECTIONS:-200}"]
     environment:
       POSTGRES_DB: content_ops
       POSTGRES_USER: content_ops
-      POSTGRES_PASSWORD: content_ops
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-content_ops}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -134,10 +140,12 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-content_ops}"]
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"${REDIS_PASSWORD:-content_ops}\" --no-auth-warning ping | grep -q PONG"]
       interval: 10s
       timeout: 5s
       retries: 5

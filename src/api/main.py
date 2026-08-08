@@ -1,4 +1,6 @@
 """FastAPI app for the modern Content Ops Agent backend."""
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -7,10 +9,22 @@ from src.api.security import AuthMiddleware
 from src.utils import config
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Build the DB schema once at startup. Per-task ContentStore instances in the
+    # job runner and pipeline worker then run with initialize_schema=False, so the
+    # create_all / ALTER DDL no longer executes on every job.
+    from src.api.dependencies import get_store
+
+    get_store()
+    yield
+
+
 app = FastAPI(
     title="Content Ops Agent API",
     version="0.1.0",
     description="REST API for content generation, refinement, scheduling, and analytics.",
+    lifespan=lifespan,
 )
 
 app.add_middleware(AuthMiddleware)

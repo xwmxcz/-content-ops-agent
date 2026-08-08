@@ -254,7 +254,6 @@ SPECS: list[dict[str, Any]] = [
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Seed demo data for the Content Ops prototype.")
     parser.add_argument("--database-url", default=None)
-    parser.add_argument("--db-path", default=None)
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducible metrics.")
     return parser.parse_args()
 
@@ -262,8 +261,6 @@ def parse_args() -> argparse.Namespace:
 def build_store(args: argparse.Namespace) -> ContentStore:
     if args.database_url:
         return ContentStore(database_url=args.database_url)
-    if args.db_path:
-        return ContentStore(db_path=args.db_path)
     return ContentStore(database_url=config.DATABASE_URL)
 
 

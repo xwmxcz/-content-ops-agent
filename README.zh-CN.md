@@ -43,7 +43,7 @@ graph LR
   Agent --> Memory[File Memory + Context Compressor]
   Memory --> Files[(MEMORY.md / USER.md)]
   Jobs --> Queue[BackgroundTasks or RQ]
-  Queue --> DB[(SQLite or PostgreSQL)]
+  Queue --> DB[(PostgreSQL)]
   Queue --> Redis[(Redis for RQ mode)]
 ```
 
@@ -170,10 +170,8 @@ docker compose up -d --build frontend
 | 登录保护 | 设置 `AUTH_ENABLED=true`，并填写 `AUTH_USERNAME`、`AUTH_PASSWORD` 和强随机 `AUTH_SECRET_KEY`。 |
 | 小红书发布演示 | 保持或修改 `XHS_MCP_URL`，指向本机 MCP 服务。 |
 
-Docker 会自动读取根目录 `.env`。如果是宿主机开发，可使用：
-
-- `.env.sqlite`：SQLite + FastAPI `BackgroundTasks`
-- `.env.postgres-rq`：PostgreSQL + Redis + RQ
+Docker 会自动读取根目录 `.env`。如果是宿主机开发，复制 `.env.postgres-rq`，
+并按需调整 `JOB_QUEUE_MODE`（`background` 为进程内任务，`rq` 为独立 worker）。
 
 ## 本地开发
 
@@ -205,17 +203,20 @@ npm install
 cd ..
 ```
 
-### SQLite 模式
+### 数据库
 
-SQLite 是最简单的宿主机开发模式。
+必须使用 PostgreSQL（已不再支持 SQLite）。用 Docker 启动：
 
 ```bash
-# Windows PowerShell
-Copy-Item .env.sqlite .env
-
-# macOS / Linux
-cp .env.sqlite .env
+docker compose up -d postgres
 ```
+
+默认的 `DATABASE_URL` 已指向该实例。
+
+### 默认模式：进程内任务
+
+最简单的宿主机开发路径。任务在 API 进程内通过 FastAPI `BackgroundTasks`
+执行，无需 Redis 或 worker。这是默认的 `JOB_QUEUE_MODE=background`。
 
 启动后端：
 
@@ -230,13 +231,7 @@ cd frontend
 npm run dev
 ```
 
-说明：
-
-- SQLite 数据默认保存在 `data/content_ops.db`
-- SQLite 模式下不要启动 `python worker.py`
-- 任务通过 FastAPI background tasks 执行
-
-### PostgreSQL + Redis 模式
+### RQ Worker 模式
 
 如果希望 API 进程和长任务分离，使用这个模式。
 
@@ -331,7 +326,7 @@ docker compose ps
 
 - 单管理员登录保护
 - 本地 Docker 部署
-- SQLite 或 PostgreSQL 存储
+- PostgreSQL 存储
 - Redis/RQ worker 模式
 - 多 provider LLM 路由
 - Agent 工具调用和工具轨迹

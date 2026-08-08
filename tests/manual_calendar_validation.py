@@ -17,11 +17,13 @@ from src.storage.content_store import Content  # noqa: E402
 
 
 def main() -> int:
-    # Use a file-based SQLite to avoid in-memory multi-connection issues
-    import tempfile
-    db_file = Path(tempfile.mktemp(suffix=".db"))
+    import os
+    test_db_url = os.environ.get("TEST_DATABASE_URL")
+    if not test_db_url:
+        print("[skip] TEST_DATABASE_URL not set (need a scratch PostgreSQL database)")
+        return 0
+    store = ContentStore(database_url=test_db_url)
     try:
-        store = ContentStore(database_url=f"sqlite:///{db_file.as_posix()}")
 
         # Seed a test content item
         session = store.SessionLocal()
@@ -96,8 +98,7 @@ def main() -> int:
         return 0
 
     finally:
-        if db_file.exists():
-            db_file.unlink()
+        store.engine.dispose()
 
 
 if __name__ == "__main__":
