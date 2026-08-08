@@ -12,7 +12,7 @@ def enable_auth(monkeypatch):
     monkeypatch.setattr(config, "AUTH_TOKEN_EXPIRE_MINUTES", 30)
 
 
-def test_auth_disabled_does_not_protect_api(monkeypatch):
+def test_auth_disabled_does_not_protect_api(store, monkeypatch):
     monkeypatch.setattr(config, "AUTH_ENABLED", False)
 
     with TestClient(app) as client:
@@ -28,7 +28,7 @@ def test_auth_disabled_does_not_protect_api(monkeypatch):
     }
 
 
-def test_auth_enabled_rejects_missing_token(monkeypatch):
+def test_auth_enabled_rejects_missing_token(store, monkeypatch):
     enable_auth(monkeypatch)
 
     with TestClient(app) as client:
@@ -39,7 +39,7 @@ def test_auth_enabled_rejects_missing_token(monkeypatch):
     assert health_response.status_code == 200
 
 
-def test_login_issues_token_that_authorizes_api_requests(monkeypatch):
+def test_login_issues_token_that_authorizes_api_requests(store, monkeypatch):
     enable_auth(monkeypatch)
 
     with TestClient(app) as client:
@@ -64,7 +64,7 @@ def test_login_issues_token_that_authorizes_api_requests(monkeypatch):
     assert status_response.json()["username"] == "admin"
 
 
-def test_query_token_authorizes_eventsource_style_requests(monkeypatch):
+def test_query_token_authorizes_eventsource_style_requests(store, monkeypatch):
     enable_auth(monkeypatch)
 
     with TestClient(app) as client:
@@ -78,7 +78,7 @@ def test_query_token_authorizes_eventsource_style_requests(monkeypatch):
     assert protected_response.status_code == 404
 
 
-def test_login_rejects_bad_password(monkeypatch):
+def test_login_rejects_bad_password(store, monkeypatch):
     enable_auth(monkeypatch)
 
     with TestClient(app) as client:
