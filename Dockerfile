@@ -16,9 +16,17 @@ RUN python -m pip install --upgrade pip \
 
 COPY src ./src
 COPY examples ./examples
-COPY server.py worker.py ./
+COPY server.py worker.py gunicorn.conf.py ./
 
-RUN mkdir -p /app/data/media /app/data/memory
+# Run as an unprivileged user. chown the whole /app tree (including the data dir
+# below) so the named volume mounted at /app/data inherits app:app ownership on
+# first creation and the process can write media/memory files.
+RUN mkdir -p /app/data/media /app/data/memory \
+    && groupadd --system app \
+    && useradd --system --gid app --home-dir /app --shell /usr/sbin/nologin app \
+    && chown -R app:app /app
+
+USER app
 
 EXPOSE 8000
 

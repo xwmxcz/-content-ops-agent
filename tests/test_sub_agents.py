@@ -1,20 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from langchain_core.messages import AIMessage
 
 from src.api.services.sub_agents import SUB_AGENTS, SubAgentRunner
-from src.storage import ContentStore
-
-
-@pytest.fixture
-def store(tmp_path: Path):
-    db_path = tmp_path / "sub_agents.db"
-    s = ContentStore(db_path=str(db_path))
-    yield s
-    s.engine.dispose()
 
 
 class EmptyToolThenNoTextModel:

@@ -2,10 +2,10 @@
 import json
 from datetime import datetime, date, timedelta
 from typing import Optional, List, Dict, Any
-from pathlib import Path
 
 from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, create_engine, func, inspect, or_, text
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
 
@@ -231,118 +231,80 @@ Index("ix_agent_run_events_run_seq", AgentRunEvent.run_id, AgentRunEvent.seq)
 class ContentStore:
     """内容存储管理类"""
 
-    def __init__(self, db_path: str = "data/content_ops.db", database_url: str | None = None):
+    def __init__(
+        self,
+        database_url: str | None = None,
+        initialize_schema: bool = True,
+    ):
+        # `initialize_schema=False` skips create_all + legacy-column ALTERs. Job
+        # runners and pipeline workers spin up a fresh ContentStore per task
+        # (fork-safe), so re-running DDL every time was pure overhead and, with
+        # multiple workers, a concurrent-DDL race. The schema is built once per
+        # process at startup instead (see main.py lifespan and worker.py).
+        # Defaults to True so tests and first-run setups still work.
+        from src.utils import config
+
         if database_url is None:
-            db_file = Path(db_path)
-            db_file.parent.mkdir(parents=True, exist_ok=True)
-            database_url = f"sqlite:///{db_file.as_posix()}"
-            url = make_url(database_url)
-        else:
-            url = make_url(database_url)
-            if url.drivername.startswith("sqlite") and url.database and url.database != ":memory:":
-                Path(url.database).parent.mkdir(parents=True, exist_ok=True)
+            database_url = config.DATABASE_URL
 
-        if url.drivername.startswith("sqlite"):
-            connect_args = {"check_same_thread": False, "timeout": 30}
-            engine_kwargs = {"connect_args": connect_args}
-        else:
-            from src.utils import config
+        url = make_url(database_url)
+        if url.get_backend_name() == "sqlite":
+            raise ValueError(
+                "SQLite is not supported. Set DATABASE_URL to a PostgreSQL DSN, "
+                "e.g. postgresql+psycopg://user:password@host:5432/dbname"
+            )
 
-            engine_kwargs = {
-                "pool_size": config.DB_POOL_SIZE,
-                "max_overflow": config.DB_MAX_OVERFLOW,
-                "pool_timeout": config.DB_POOL_TIMEOUT_SECONDS,
-                "pool_pre_ping": True,
-            }
         self.database_url = database_url
-        self.engine = create_engine(database_url, echo=False, **engine_kwargs)
-        if url.drivername.startswith("sqlite"):
-            with self.engine.connect() as connection:
-                connection.execute(text("PRAGMA journal_mode=WAL"))
-                connection.execute(text("PRAGMA busy_timeout=30000"))
-        Base.metadata.create_all(self.engine)
-        self._ensure_legacy_columns()
-        if url.drivername.startswith("sqlite"):
-            self._ensure_fts5()
+        self.engine = create_engine(
+            database_url,
+            echo=False,
+            pool_size=config.DB_POOL_SIZE,
+            max_overflow=config.DB_MAX_OVERFLOW,
+            pool_timeout=config.DB_POOL_TIMEOUT_SECONDS,
+            pool_pre_ping=True,
+        )
+        if initialize_schema:
+            Base.metadata.create_all(self.engine)
+            self._ensure_legacy_columns()
         self.SessionLocal = sessionmaker(bind=self.engine)
 
     def _ensure_legacy_columns(self) -> None:
-        existing = {col["name"] for col in inspect(self.engine).get_columns("agent_messages")}
-        if "intent" not in existing:
-            with self.engine.begin() as connection:
-                connection.execute(text("ALTER TABLE agent_messages ADD COLUMN intent TEXT"))
-        if "plan" not in existing:
-            with self.engine.begin() as connection:
-                connection.execute(text("ALTER TABLE agent_messages ADD COLUMN plan TEXT"))
+        # Additive migrations for databases created before these columns existed.
+        # On a fresh DB `create_all` already builds every column, so the inspect
+        # check inside _safe_add_columns short-circuits and nothing runs here.
+        self._safe_add_columns("agent_messages", [
+            ("intent", "ALTER TABLE agent_messages ADD COLUMN intent TEXT"),
+            ("plan", "ALTER TABLE agent_messages ADD COLUMN plan TEXT"),
+        ])
+        self._safe_add_columns("agent_threads", [
+            ("pinned", "ALTER TABLE agent_threads ADD COLUMN pinned BOOLEAN NOT NULL DEFAULT false"),
+            ("archived", "ALTER TABLE agent_threads ADD COLUMN archived BOOLEAN NOT NULL DEFAULT false"),
+            ("title_pinned", "ALTER TABLE agent_threads ADD COLUMN title_pinned BOOLEAN NOT NULL DEFAULT false"),
+        ])
+        self._safe_add_columns("jobs", [
+            ("token_usage", "ALTER TABLE jobs ADD COLUMN token_usage INTEGER DEFAULT 0"),
+            ("cost_estimate", "ALTER TABLE jobs ADD COLUMN cost_estimate FLOAT DEFAULT 0"),
+        ])
 
-        thread_cols = {col["name"] for col in inspect(self.engine).get_columns("agent_threads")}
-        with self.engine.begin() as connection:
-            if "pinned" not in thread_cols:
-                connection.execute(text(
-                    "ALTER TABLE agent_threads ADD COLUMN pinned BOOLEAN NOT NULL DEFAULT 0"
-                ))
-            if "archived" not in thread_cols:
-                connection.execute(text(
-                    "ALTER TABLE agent_threads ADD COLUMN archived BOOLEAN NOT NULL DEFAULT 0"
-                ))
-            if "title_pinned" not in thread_cols:
-                connection.execute(text(
-                    "ALTER TABLE agent_threads ADD COLUMN title_pinned BOOLEAN NOT NULL DEFAULT 0"
-                ))
-
-        job_cols = {col["name"] for col in inspect(self.engine).get_columns("jobs")}
-        with self.engine.begin() as connection:
-            if "token_usage" not in job_cols:
-                connection.execute(text("ALTER TABLE jobs ADD COLUMN token_usage INTEGER DEFAULT 0"))
-            if "cost_estimate" not in job_cols:
-                connection.execute(text("ALTER TABLE jobs ADD COLUMN cost_estimate FLOAT DEFAULT 0"))
-
-    def _ensure_fts5(self) -> None:
-        """Create the FTS5 virtual table + triggers for agent_messages search.
-
-        Uses the trigram tokenizer so substring matching on Chinese works without
-        a CJK-aware analyzer. Requires SQLite >= 3.34, which ships with Python
-        >= 3.10 on every supported platform.
-
-        On a fresh DB the virtual table is created empty; on an existing DB it
-        is backfilled from `agent_messages` once, then kept in sync via triggers.
-        """
-        if "agent_messages_fts" in inspect(self.engine).get_table_names():
-            return
-        try:
-            with self.engine.begin() as connection:
-                connection.execute(text(
-                    "CREATE VIRTUAL TABLE IF NOT EXISTS agent_messages_fts USING fts5("
-                    "content, role UNINDEXED, thread_id UNINDEXED, "
-                    "tokenize='trigram'"
-                    ")"
-                ))
-                connection.execute(text(
-                    "INSERT INTO agent_messages_fts(rowid, content, role, thread_id) "
-                    "SELECT id, content, role, thread_id FROM agent_messages"
-                ))
-                connection.execute(text(
-                    "CREATE TRIGGER IF NOT EXISTS agent_messages_ai AFTER INSERT ON agent_messages BEGIN "
-                    "INSERT INTO agent_messages_fts(rowid, content, role, thread_id) "
-                    "VALUES (new.id, new.content, new.role, new.thread_id); "
-                    "END"
-                ))
-                connection.execute(text(
-                    "CREATE TRIGGER IF NOT EXISTS agent_messages_ad AFTER DELETE ON agent_messages BEGIN "
-                    "DELETE FROM agent_messages_fts WHERE rowid = old.id; "
-                    "END"
-                ))
-                connection.execute(text(
-                    "CREATE TRIGGER IF NOT EXISTS agent_messages_au AFTER UPDATE ON agent_messages BEGIN "
-                    "DELETE FROM agent_messages_fts WHERE rowid = old.id; "
-                    "INSERT INTO agent_messages_fts(rowid, content, role, thread_id) "
-                    "VALUES (new.id, new.content, new.role, new.thread_id); "
-                    "END"
-                ))
-        except Exception:
-            # FTS5 is optional — if the SQLite build doesn't ship it, fall back
-            # to the ilike path silently. Search will still work via `search_agent_messages`.
-            pass
+    def _safe_add_columns(self, table: str, columns: list[tuple[str, str]]) -> None:
+        existing = {col["name"] for col in inspect(self.engine).get_columns(table)}
+        for name, ddl in columns:
+            if name in existing:
+                continue
+            try:
+                with self.engine.begin() as connection:
+                    connection.execute(text(ddl))
+            except SQLAlchemyError as exc:
+                # Multiple processes (e.g. several gunicorn workers all running
+                # the startup schema build at once) can race here: each inspects
+                # the pre-migration table and each issues the ALTER. The losers
+                # get a "duplicate column" / "already exists" error, which is safe
+                # to swallow since the column now exists. Anything else is a real
+                # failure and re-raises.
+                message = str(exc).lower()
+                if "duplicate column" in message or "already exists" in message:
+                    continue
+                raise
 
     def _get_session(self) -> Session:
         return self.SessionLocal()
@@ -1304,52 +1266,12 @@ class ContentStore:
         limit: int = 10,
         thread_id: str | None = None,
     ) -> List[Dict[str, Any]]:
-        """Full-text search over agent_messages content.
-
-        On SQLite, uses the FTS5 trigram virtual table (CJK-safe substring
-        search). On any other backend (or if FTS5 wasn't created), falls back
-        to `ilike` over `content`.
-        """
+        """Substring search over agent_messages content using ILIKE."""
         query = (query or "").strip()
         if not query:
             return []
         session = self._get_session()
         try:
-            if self.engine.url.drivername.startswith("sqlite"):
-                has_fts = "agent_messages_fts" in inspect(self.engine).get_table_names()
-            else:
-                has_fts = False
-            # Trigram tokenizer needs at least 3 chars to form a single trigram;
-            # shorter queries (very common for 2-char Chinese words like "微博")
-            # return zero rows from FTS5. Fall back to ilike in that case.
-            use_fts = has_fts and len(query) >= 3
-            if use_fts:
-                sql = (
-                    "SELECT m.id, m.thread_id, m.role, m.content, m.provider, m.model, "
-                    "m.status, m.created_at "
-                    "FROM agent_messages_fts f "
-                    "JOIN agent_messages m ON m.id = f.rowid "
-                    "WHERE agent_messages_fts MATCH :q"
-                )
-                params: Dict[str, Any] = {"q": query, "limit": limit}
-                if thread_id:
-                    sql += " AND m.thread_id = :tid"
-                    params["tid"] = thread_id
-                sql += " ORDER BY rank LIMIT :limit"
-                rows = session.execute(text(sql), params).all()
-                return [
-                    {
-                        "id": r[0],
-                        "thread_id": r[1],
-                        "role": r[2],
-                        "content": r[3],
-                        "provider": r[4],
-                        "model": r[5],
-                        "status": r[6],
-                        "created_at": r[7].isoformat() if hasattr(r[7], "isoformat") else r[7],
-                    }
-                    for r in rows
-                ]
             q = session.query(AgentMessage).filter(AgentMessage.content.ilike(f"%{query}%"))
             if thread_id:
                 q = q.filter(AgentMessage.thread_id == thread_id)

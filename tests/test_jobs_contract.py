@@ -1,12 +1,10 @@
 import asyncio
-from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from src.api.dependencies import get_store
 from src.api.main import app
 from src.jobs.runner import run_job_async
-from src.storage import ContentStore
 
 
 class FakeLLMClient:
@@ -23,11 +21,7 @@ class FakeLLMClient:
         return "【标题】\n测试标题\n\n【正文】\n测试正文\n\n【标签】\nAI 效率"
 
 
-def test_content_generation_job_completes(monkeypatch):
-    db_path = Path("data/test_jobs_contract.db")
-    if db_path.exists():
-        db_path.unlink()
-    store = ContentStore(db_path=str(db_path))
+def test_content_generation_job_completes(store, monkeypatch):
     app.dependency_overrides[get_store] = lambda: store
     monkeypatch.setattr("src.jobs.runner.create_litellm_client", lambda: FakeLLMClient())
 
@@ -53,16 +47,9 @@ def test_content_generation_job_completes(monkeypatch):
             assert payload["result"]["content"]["content"] == "测试正文"
     finally:
         app.dependency_overrides.clear()
-        store.engine.dispose()
-        if db_path.exists():
-            db_path.unlink()
 
 
-def test_agent_run_job_completes(monkeypatch):
-    db_path = Path("data/test_jobs_agent_contract.db")
-    if db_path.exists():
-        db_path.unlink()
-    store = ContentStore(db_path=str(db_path))
+def test_agent_run_job_completes(store, monkeypatch):
     app.dependency_overrides[get_store] = lambda: store
     monkeypatch.setattr("src.jobs.runner.create_litellm_client", lambda: FakeLLMClient())
 
@@ -87,16 +74,9 @@ def test_agent_run_job_completes(monkeypatch):
             assert payload["result"]["agent_run"]["final_content"]["content"].startswith("Final post")
     finally:
         app.dependency_overrides.clear()
-        store.engine.dispose()
-        if db_path.exists():
-            db_path.unlink()
 
 
-def test_job_capacity_limit_returns_429(monkeypatch):
-    db_path = Path("data/test_jobs_capacity.db")
-    if db_path.exists():
-        db_path.unlink()
-    store = ContentStore(db_path=str(db_path))
+def test_job_capacity_limit_returns_429(store, monkeypatch):
     app.dependency_overrides[get_store] = lambda: store
     monkeypatch.setattr("src.jobs.queue.config.MAX_PROVIDER_INFLIGHT_JOBS", 0)
 
@@ -115,16 +95,9 @@ def test_job_capacity_limit_returns_429(monkeypatch):
             assert response.headers["retry-after"] == "10"
     finally:
         app.dependency_overrides.clear()
-        store.engine.dispose()
-        if db_path.exists():
-            db_path.unlink()
 
 
-def test_cancel_job_marks_queued_job_cancelled():
-    db_path = Path("data/test_jobs_cancel.db")
-    if db_path.exists():
-        db_path.unlink()
-    store = ContentStore(db_path=str(db_path))
+def test_cancel_job_marks_queued_job_cancelled(store):
     app.dependency_overrides[get_store] = lambda: store
     job = store.create_job(
         job_id="job_cancel_me",
@@ -149,16 +122,9 @@ def test_cancel_job_marks_queued_job_cancelled():
         assert missing.status_code == 404
     finally:
         app.dependency_overrides.clear()
-        store.engine.dispose()
-        if db_path.exists():
-            db_path.unlink()
 
 
-def test_runner_does_not_overwrite_cancelled_job(monkeypatch):
-    db_path = Path("data/test_jobs_cancel_race.db")
-    if db_path.exists():
-        db_path.unlink()
-    store = ContentStore(db_path=str(db_path))
+def test_runner_does_not_overwrite_cancelled_job(store, monkeypatch):
     job = store.create_job(
         job_id="job_cancel_race",
         job_type="content_generation",
@@ -179,24 +145,15 @@ def test_runner_does_not_overwrite_cancelled_job(monkeypatch):
     monkeypatch.setattr("src.jobs.runner.create_litellm_client", lambda: FakeLLMClient())
     monkeypatch.setattr("src.jobs.runner._execute_job", fake_execute_job)
 
-    try:
-        asyncio.run(run_job_async(job["id"], store))
+    asyncio.run(run_job_async(job["id"], store))
 
-        payload = store.get_job(job["id"])
-        assert payload["status"] == "cancelled"
-        assert payload["result"] is None
-        assert payload["error"] == "Cancelled by user"
-    finally:
-        store.engine.dispose()
-        if db_path.exists():
-            db_path.unlink()
+    payload = store.get_job(job["id"])
+    assert payload["status"] == "cancelled"
+    assert payload["result"] is None
+    assert payload["error"] == "Cancelled by user"
 
 
-def test_start_job_does_not_revive_cancelled_job():
-    db_path = Path("data/test_jobs_start_cancelled.db")
-    if db_path.exists():
-        db_path.unlink()
-    store = ContentStore(db_path=str(db_path))
+def test_start_job_does_not_revive_cancelled_job(store):
     job = store.create_job(
         job_id="job_already_cancelled",
         job_type="content_generation",
@@ -205,16 +162,11 @@ def test_start_job_does_not_revive_cancelled_job():
         model="Qwen/Qwen2.5-7B-Instruct",
     )
 
-    try:
-        store.update_job(job["id"], status="cancelled", progress=100, error="Cancelled by user")
+    store.update_job(job["id"], status="cancelled", progress=100, error="Cancelled by user")
 
-        started = store.start_job(job["id"], attempts=1)
-        payload = store.get_job(job["id"])
+    started = store.start_job(job["id"], attempts=1)
+    payload = store.get_job(job["id"])
 
-        assert started is None
-        assert payload["status"] == "cancelled"
-        assert payload["attempts"] == 0
-    finally:
-        store.engine.dispose()
-        if db_path.exists():
-            db_path.unlink()
+    assert started is None
+    assert payload["status"] == "cancelled"
+    assert payload["attempts"] == 0

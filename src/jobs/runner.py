@@ -17,11 +17,42 @@ from src.utils import config
 
 def run_job(job_id: str, database_url: str | None = None) -> None:
     """Run one persisted job. RQ imports this function by dotted path."""
-    store = ContentStore(database_url=database_url or config.DATABASE_URL)
+    store = ContentStore(database_url=database_url or config.DATABASE_URL, initialize_schema=False)
     try:
         asyncio.run(run_job_async(job_id, store))
     finally:
         store.engine.dispose()
+
+
+def run_pipeline_job(run_id: str, request_data: dict[str, Any], database_url: str | None = None) -> None:
+    """Run one dynamic Studio pipeline. RQ imports this function by dotted path.
+
+    `request_data` is a JSON-safe dict (``PipelineRunRequest.model_dump(mode="json")``)
+    so it survives RQ's pickle serialization without carrying live Pydantic/enum
+    objects. The run row and its SSE event stream are keyed by `run_id`, which the
+    caller pre-creates so the SSE endpoint never 404s between enqueue and boot.
+    """
+    store = ContentStore(database_url=database_url or config.DATABASE_URL, initialize_schema=False)
+    try:
+        asyncio.run(_run_pipeline_job_async(run_id, request_data, store))
+    finally:
+        store.engine.dispose()
+
+
+async def _run_pipeline_job_async(run_id: str, request_data: dict[str, Any], store: ContentStore) -> None:
+    from src.api.schemas.agent import PipelineRunRequest
+    from src.api.services.dynamic_pipeline import DynamicPipeline
+
+    try:
+        request = PipelineRunRequest(**request_data)
+        pipeline = DynamicPipeline(store=store, llm=create_litellm_client())
+        await pipeline.run(request, run_id=run_id)
+    except Exception as exc:
+        # The run row was pre-created by the API before enqueue. Any failure here
+        # — bad payload, LLM/config error, unexpected crash — must land as a terminal
+        # run_failed event, otherwise SSE consumers hang until the stream deadline.
+        store.update_run(run_id, status="failed", error=str(exc))
+        store.append_run_event(run_id, "run_failed", {"error": str(exc) or exc.__class__.__name__})
 
 
 async def run_job_async(job_id: str, store: ContentStore) -> None:

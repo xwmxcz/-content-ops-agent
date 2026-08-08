@@ -1,5 +1,4 @@
 import asyncio
-import json
 import time
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, status
@@ -22,6 +21,7 @@ from src.api.services.chat_agent import ChatAgentExecutionError, ChatAgentServic
 from src.api.services.agent_pipeline import PipelineExecutionError, run_agent_pipeline
 from src.api.services.dynamic_pipeline import DynamicPipeline
 from src.agent.memory_curator import MemoryCurator
+from src.jobs.queue import JobQueueError, enqueue_pipeline_run
 from src.llm.litellm_client import LiteLLMClient
 from src.storage import ContentStore
 
@@ -58,8 +58,10 @@ async def create_pipeline_run(
 ) -> PipelineRunHandle:
     """Kick off a dynamic pipeline run; client subscribes to /runs/{id}/stream for events.
 
-    Returns immediately with a run_id. The pipeline runs as a FastAPI BackgroundTask;
-    SSE consumers read events from the agent_run_events table.
+    Returns immediately with a run_id. The pipeline is dispatched via the job queue:
+    FastAPI BackgroundTasks in `background` mode, or Redis/RQ in `rq` mode so the
+    long multi-step LLM workload runs on a worker rather than the API process.
+    SSE consumers read events from the agent_run_events table either way.
     """
     from src.api.services.content_service import resolve_provider
     from src.utils import config
@@ -87,31 +89,25 @@ async def create_pipeline_run(
         thread_id=thread_id,
     )
 
-    background_tasks.add_task(_run_pipeline_background, request, store.database_url, run_id)
+    try:
+        enqueue_pipeline_run(
+            run_id,
+            request.model_dump(mode="json"),
+            store.database_url,
+            background_tasks,
+        )
+    except JobQueueError as exc:
+        # The run row was pre-created; flip it to failed and emit a terminal event
+        # so any SSE consumer that already subscribed sees the failure instead of
+        # hanging until the stream deadline.
+        store.update_run(run_id, status="failed", error=str(exc))
+        store.append_run_event(run_id, "run_failed", {"error": str(exc)})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
 
     return PipelineRunHandle(run_id=run_id, thread_id=thread_id, provider=provider, model=model)
-
-
-def _run_pipeline_background(request: PipelineRunRequest, database_url: str, run_id: str) -> None:
-    """Sync wrapper invoked by BackgroundTasks (which runs sync callables in a threadpool).
-
-    We open our own ContentStore so we don't share the request's session; this matches
-    the pattern used in src/jobs/runner.py.
-    """
-    store = ContentStore(database_url=database_url)
-    try:
-        asyncio.run(_run_pipeline_async(request, store, run_id))
-    finally:
-        store.engine.dispose()
-
-
-async def _run_pipeline_async(request: PipelineRunRequest, store: ContentStore, run_id: str) -> None:
-    pipeline = DynamicPipeline(store=store, llm=LiteLLMClient())
-    try:
-        await pipeline.run(request, run_id=run_id)
-    except Exception as exc:
-        store.update_run(run_id, status="failed", error=str(exc))
-        store.append_run_event(run_id, "run_failed", {"error": str(exc) or exc.__class__.__name__})
 
 
 @router.get("/runs/{run_id}", response_model=dict)

@@ -18,6 +18,7 @@ from src.utils import config
 
 PUBLIC_API_PATHS = {
     "/api/health",
+    "/api/health/ready",
     "/api/auth/login",
     "/api/auth/status",
 }

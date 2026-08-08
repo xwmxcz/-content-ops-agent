@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -20,7 +19,6 @@ from src.api.schemas.agent import PipelineRunRequest, SubAgentId
 from src.api.services.dynamic_pipeline import DynamicPipeline
 from src.api.services.sub_agents import SubAgentSpec
 from src.models import ContentType, ContentStyle
-from src.storage import ContentStore
 
 
 # ---------- fakes -------------------------------------------------------------
@@ -79,18 +77,6 @@ class FakeRunner:
 
 
 # ---------- fixtures ----------------------------------------------------------
-
-
-@pytest.fixture
-def store():
-    db_path = Path("data/test_dynamic_pipeline.db")
-    if db_path.exists():
-        db_path.unlink()
-    s = ContentStore(db_path=str(db_path))
-    yield s
-    s.engine.dispose()
-    if db_path.exists():
-        db_path.unlink()
 
 
 @pytest.fixture

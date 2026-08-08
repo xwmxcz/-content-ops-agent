@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import BackgroundTasks
 
 from src.api.services.content_service import resolve_provider
-from src.jobs.runner import run_job
+from src.jobs.runner import run_job, run_pipeline_job
 from src.storage import ContentStore
 from src.utils import config
 
@@ -75,6 +75,52 @@ def _enqueue(job_id: str, background_tasks: BackgroundTasks, database_url: str) 
             )
         except Exception as exc:
             raise JobQueueError("Failed to enqueue job") from exc
+        return
+
+    raise JobQueueError(f"Unknown JOB_QUEUE_MODE: {config.JOB_QUEUE_MODE}")
+
+
+def enqueue_pipeline_run(
+    run_id: str,
+    request_data: dict[str, Any],
+    database_url: str,
+    background_tasks: BackgroundTasks | None = None,
+) -> None:
+    """Schedule a dynamic Studio pipeline run using the configured queue mode.
+
+    In `background` mode the pipeline runs inside the API process via FastAPI
+    BackgroundTasks (the in-process/dev path). In `rq` mode it is enqueued to Redis/RQ
+    so the multi-step LLM workload executes on a worker instead of the HTTP
+    process — matching how content/refine/agent jobs already behave. SSE consumers
+    read from `agent_run_events` in both modes, so the streaming contract is
+    unchanged regardless of where the pipeline actually runs.
+    """
+    if config.JOB_QUEUE_MODE == "background":
+        if background_tasks is None:
+            raise JobQueueError("background_tasks is required in background queue mode")
+        background_tasks.add_task(run_pipeline_job, run_id, request_data, database_url)
+        return
+
+    if config.JOB_QUEUE_MODE == "rq":
+        try:
+            from redis import Redis
+            from rq import Queue
+        except ImportError as exc:
+            raise JobQueueError("RQ dependencies are not installed") from exc
+
+        try:
+            queue = Queue(config.JOB_QUEUE_NAME, connection=Redis.from_url(config.REDIS_URL))
+            queue.enqueue(
+                "src.jobs.runner.run_pipeline_job",
+                run_id,
+                request_data,
+                database_url,
+                job_timeout=config.JOB_TIMEOUT_SECONDS,
+                result_ttl=3600,
+                failure_ttl=86400,
+            )
+        except Exception as exc:
+            raise JobQueueError("Failed to enqueue pipeline run") from exc
         return
 
     raise JobQueueError(f"Unknown JOB_QUEUE_MODE: {config.JOB_QUEUE_MODE}")

@@ -111,8 +111,8 @@ Long-term memory (file-based, frozen per session):
 
 Session search:
 - Use `session_search` to recall what was said earlier in this or past
-  threads. It runs full-text search over `agent_messages` and works on Chinese
-  via FTS5 trigram tokenizer. Prefer this over guessing from memory."""
+  threads. It runs a substring search over `agent_messages` and works on
+  Chinese via ILIKE. Prefer this over guessing from memory."""
 
 
 _WEEKDAY_CN = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
@@ -920,10 +920,9 @@ class ChatAgentService:
             }, ensure_ascii=False)
 
         def session_search(query: str, limit: int = 5, thread_id: str | None = None) -> str:
-            """Full-text search over all stored assistant↔user messages.
+            """Substring search over all stored assistant↔user messages.
 
-            Uses SQLite FTS5 with the trigram tokenizer, so Chinese substrings
-            (≥ 3 chars) match. Shorter queries fall back to LIKE.
+            Uses ILIKE, so Chinese substrings match without a CJK analyzer.
             Use to recall what was said in this or past conversation threads.
             """
             results = self.store.search_agent_messages(query, limit=limit, thread_id=thread_id)

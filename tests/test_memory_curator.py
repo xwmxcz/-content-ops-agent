@@ -8,7 +8,6 @@ from fastapi.testclient import TestClient
 from src.agent.memory_curator import MemoryCurator
 from src.api.dependencies import get_file_memory, get_memory_curator, get_store
 from src.api.main import app
-from src.storage import ContentStore
 from src.storage.file_memory import AGENT, FileMemory, USER
 
 
@@ -20,11 +19,6 @@ class StubAuxLLM:
     async def generate_from_prompts(self, **kw):
         self.calls.append(kw)
         return self.response
-
-
-@pytest.fixture
-def store():
-    return ContentStore(database_url="sqlite:///:memory:")
 
 
 @pytest.fixture
@@ -143,13 +137,8 @@ class TestCuratorCurate:
 
 
 class TestThreadDeleteTriggersCurator:
-    def test_delete_thread_invokes_curator_in_background(self, tmp_path):
-        # TestClient runs the route in a worker thread; `:memory:` SQLite would
-        # give that thread its own empty in-memory DB. Use a temp file instead
-        # so create_all on the fixture thread is visible to the request thread.
-        db = tmp_path / "test.db"
+    def test_delete_thread_invokes_curator_in_background(self, store, tmp_path):
         fm = FileMemory(tmp_path / "memory", memory_limit=2200, user_limit=1375)
-        store = ContentStore(database_url=f"sqlite:///{db.as_posix()}")
         store.upsert_agent_thread("t1", title="x", provider="claude", model="m")
         for i in range(4):
             store.save_agent_message(
@@ -177,12 +166,9 @@ class TestThreadDeleteTriggersCurator:
             assert len(aux.calls) == 1
         finally:
             app.dependency_overrides.clear()
-            store.engine.dispose()
 
-    def test_delete_unknown_thread_does_not_call_curator(self, tmp_path):
-        db = tmp_path / "test.db"
+    def test_delete_unknown_thread_does_not_call_curator(self, store, tmp_path):
         fm = FileMemory(tmp_path / "memory")
-        store = ContentStore(database_url=f"sqlite:///{db.as_posix()}")
         aux = StubAuxLLM("[]")
         curator = MemoryCurator(aux, fm)
         app.dependency_overrides[get_store] = lambda: store
@@ -195,4 +181,3 @@ class TestThreadDeleteTriggersCurator:
             assert len(aux.calls) == 0
         finally:
             app.dependency_overrides.clear()
-            store.engine.dispose()

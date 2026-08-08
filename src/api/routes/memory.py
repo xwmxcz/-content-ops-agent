@@ -6,7 +6,7 @@ Endpoints (relative to `/api/memory`):
   PUT  /agent              → overwrite MEMORY.md
   GET  /user               → read USER.md (user profile)
   PUT  /user               → overwrite USER.md
-  POST /search             → FTS5 search over agent_messages
+  POST /search             → ILIKE substring search over agent_messages
   POST /refresh-snapshot   → drop the frozen per-thread system-prompt cache
 
 The path was previously `/api/memories` (CRUD over `agent_memories` rows);
@@ -112,7 +112,7 @@ def write_user_memory(
     return _stats(fm, USER)
 
 
-# ─── Session search (FTS5 over agent_messages) ─────────────────────────────
+# ─── Session search (ILIKE over agent_messages) ─────────────────────────────
 
 
 @router.post("/search", response_model=SessionSearchResponse)

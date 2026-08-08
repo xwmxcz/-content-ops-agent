@@ -16,7 +16,6 @@ from src.api.routes import media as media_routes
 from src.api.routes import models as model_routes
 from src.llm.litellm_client import LLMGenerationError
 from src.models import ContentType, GeneratedContent
-from src.storage import ContentStore
 
 
 class FakeLLMClient:
@@ -155,18 +154,6 @@ def fake_chat_factory():
 @pytest.fixture
 def fake_xhs_mcp():
     return FakeXiaohongshuMcpClient()
-
-
-@pytest.fixture
-def store():
-    db_path = Path("data/test_api_contract.db")
-    if db_path.exists():
-        db_path.unlink()
-    content_store = ContentStore(db_path=str(db_path))
-    yield content_store
-    content_store.engine.dispose()
-    if db_path.exists():
-        db_path.unlink()
 
 
 @pytest.fixture
