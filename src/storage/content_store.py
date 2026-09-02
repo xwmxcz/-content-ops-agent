@@ -10,6 +10,13 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
 
+import logging
+
+from src.utils import metrics
+from src.utils.structured_logging import log_idempotency_event, log_capability_event
+
+logger = logging.getLogger(__name__)
+
 Base = declarative_base()
 
 
@@ -177,6 +184,7 @@ class Job(Base):
     max_retries = Column(Integer, default=5, nullable=False)
     next_retry_at = Column(DateTime, nullable=True)
     error_type = Column(String(20), nullable=True)
+    archived_at = Column(DateTime, nullable=True, index=True)
     token_usage = Column(Integer, default=0)
     cost_estimate = Column(Float, default=0.0)
     created_at = Column(DateTime, default=datetime.now)
@@ -1416,6 +1424,12 @@ class ContentStore:
             )
             session.add(action)
             session.commit()
+            # P2-01: Track proposed capabilities
+            metrics.capability_proposals_total.labels(tool=tool_name).inc()
+            log_capability_event(
+                logger, "proposed", action.id, tool_name,
+                thread_id=thread_id
+            )
             return self._proposed_action_to_dict(action)
         except Exception:
             session.rollback()
@@ -1552,6 +1566,12 @@ class ContentStore:
             if action.expires_at <= now:
                 action.status = "expired"
                 session.commit()
+                # P2-01: Track expired capabilities
+                metrics.capability_expired_total.inc()
+                log_capability_event(
+                    logger, "expired", action_id, tool_name,
+                    expired=True
+                )
                 return None
             if action.tool_name != tool_name or action.args_hash != args_hash(args):
                 # Leave the capability unconsumed: the mismatch is the model
@@ -1562,6 +1582,12 @@ class ContentStore:
             action.consumed_at = now
             action.consuming_message_id = consuming_message_id
             session.commit()
+            # P2-01: Track consumed capabilities
+            metrics.capability_consumed_total.labels(tool=tool_name).inc()
+            log_capability_event(
+                logger, "consumed", action_id, tool_name,
+                consumed=True
+            )
             return self._proposed_action_to_dict(action)
         except Exception:
             session.rollback()
@@ -1690,6 +1716,12 @@ class ContentStore:
             except IntegrityError:
                 session.rollback()
             else:
+                # P2-01: Metrics and logging
+                metrics.idempotency_requests_total.labels(scope=scope, outcome="claimed").inc()
+                log_idempotency_event(
+                    logger, "claimed", scope, key,
+                    record_id=record.id, args_hash=digest
+                )
                 return {
                     "outcome": "claimed",
                     "record_id": record.id,
@@ -1718,10 +1750,24 @@ class ContentStore:
             # - failed: retryable with any args (previous attempt didn't succeed)
             # - completed/in_progress: args must match (can't change a success or in-flight request)
             if existing.status != "failed" and existing.args_hash != digest:
+                # P2-01: Metrics and logging
+                metrics.idempotency_conflicts_total.labels(scope=scope).inc()
+                metrics.idempotency_requests_total.labels(scope=scope, outcome="conflict").inc()
+                log_idempotency_event(
+                    logger, "conflict", scope, key,
+                    record_id=existing.id, args_hash=digest, conflict=True
+                )
                 raise IdempotencyKeyConflict(
                     f"Idempotency key was already used for {scope} with different arguments"
                 )
             if existing.status == "completed":
+                # P2-01: Metrics and logging
+                metrics.idempotency_requests_total.labels(scope=scope, outcome="replay").inc()
+                metrics.idempotency_replay_rate.labels(scope=scope).inc()
+                log_idempotency_event(
+                    logger, "replay", scope, key,
+                    record_id=existing.id, args_hash=existing.args_hash
+                )
                 return {
                     "outcome": "replay",
                     "record_id": existing.id,
@@ -1781,6 +1827,11 @@ class ContentStore:
             record.result_json = json.dumps(result, ensure_ascii=False, default=str)
             record.completed_at = datetime.now()
             session.commit()
+            # P2-01: Log completion
+            log_idempotency_event(
+                logger, "completed", record.scope, record.idempotency_key,
+                record_id=record.id
+            )
             return True
         except Exception:
             session.rollback()
@@ -1810,6 +1861,11 @@ class ContentStore:
             record.status = "failed"
             record.completed_at = datetime.now()
             session.commit()
+            # P2-01: Log failure
+            log_idempotency_event(
+                logger, "failed", record.scope, record.idempotency_key,
+                record_id=record.id
+            )
             return True
         except Exception:
             session.rollback()

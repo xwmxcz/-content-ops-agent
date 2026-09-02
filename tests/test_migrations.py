@@ -39,8 +39,13 @@ def test_alembic_upgrades_empty_postgres_to_current_schema(pg_engine):
             for index in inspector.get_indexes("idempotency_records")
         }
         assert ("scope", "created_at") in ledger_indexes
+        # Job cleanup: archived_at column and index for soft deletion
+        job_columns = {col["name"] for col in inspector.get_columns("jobs")}
+        assert "archived_at" in job_columns
+        job_indexes = {tuple(index.get("column_names") or []) for index in inspector.get_indexes("jobs")}
+        assert ("archived_at",) in job_indexes
         with pg_engine.connect() as connection:
-            assert MigrationContext.configure(connection).get_current_revision() == "0006_job_retry_fields"
+            assert MigrationContext.configure(connection).get_current_revision() == "0007_job_archived_at"
         assert_schema_current(pg_engine)
         # Metadata and the migration head must remain in sync; otherwise a
         # fresh production database can pass revision validation while missing

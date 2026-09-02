@@ -5,7 +5,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.request_context import RequestContextMiddleware
-from src.api.routes import agent, auth, calendar, content, health, jobs, media, memory, models, publish, stats
+from src.api.middleware.metrics_middleware import MetricsMiddleware
+from src.api.routes import agent, auth, calendar, content, health, jobs, media, memory, metrics, models, publish, stats
 from src.api.security import AuthMiddleware, HttpsEnforcementMiddleware
 from src.utils import config
 from src.utils.structured_logging import configure_logging
@@ -35,6 +36,7 @@ app = FastAPI(
 
 app.add_middleware(AuthMiddleware)
 app.add_middleware(RequestContextMiddleware)
+app.add_middleware(MetricsMiddleware)
 app.add_middleware(HttpsEnforcementMiddleware)
 app.add_middleware(
     CORSMiddleware,
@@ -45,6 +47,7 @@ app.add_middleware(
 )
 
 app.include_router(health.router, prefix="/api", tags=["health"])
+app.include_router(metrics.router, prefix="/api", tags=["metrics"])
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(models.router, prefix="/api/models", tags=["models"])
 app.include_router(content.router, prefix="/api/content", tags=["content"])

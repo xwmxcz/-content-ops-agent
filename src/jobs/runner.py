@@ -15,8 +15,8 @@ from src.integrations.mcp_client import McpClientError
 from src.jobs.error_classifier import ErrorClassifier
 from src.llm.litellm_client import LLMConfigurationError, LLMGenerationError, LiteLLMClient
 from src.storage import ContentStore
-from src.utils import config
-from src.utils.structured_logging import log_event
+from src.utils import config, metrics
+from src.utils.structured_logging import log_event, log_job_event
 
 
 logger = logging.getLogger(__name__)
@@ -120,15 +120,17 @@ async def run_job_async(job_id: str, store: ContentStore) -> None:
     ) as exc:
         if _is_cancelled(job_id, store):
             return
-        _handle_job_error(job_id, exc, attempts, max_retries, store)
+        _handle_job_error(job_id, exc, attempts, max_retries, store, job["job_type"])
     except Exception as exc:
         if _is_cancelled(job_id, store):
             return
-        _handle_job_error(job_id, exc, attempts, max_retries, store)
+        _handle_job_error(job_id, exc, attempts, max_retries, store, job["job_type"])
     else:
         if _is_cancelled(job_id, store):
             return
         store.update_job(job_id, status="completed", progress=100, result=result, error=None)
+        # P2-01: Log completion
+        log_job_event(logger, "completed", job_id, job_type=job["job_type"])
         log_event(logger, "job_completed", job_id=job_id, job_type=job["job_type"])
 
 
@@ -156,6 +158,7 @@ def _handle_job_error(
     current_attempt: int,
     max_retries: int,
     store: ContentStore,
+    job_type: str = "unknown",
 ) -> None:
     """Handle job errors with smart retry logic based on error classification."""
     error_message = str(exc).strip() or "Job failed unexpectedly"
@@ -175,6 +178,13 @@ def _handle_job_error(
             error=error_message,
             error_type=error_type,
             next_retry_at=next_retry_at,
+        )
+        
+        # P2-01: Metrics and logging
+        metrics.job_retry_attempts_total.labels(error_type=error_type).inc()
+        log_job_event(
+            logger, "retry_scheduled", job_id, job_type,
+            error_type=error_type, retry_count=current_attempt, next_retry_at=next_retry_at.isoformat()
         )
         
         log_event(
@@ -210,6 +220,15 @@ def _handle_job_error(
             error=error_message,
             error_type=error_type,
             next_retry_at=None,  # Clear any scheduled retry
+        )
+        
+        # P2-01: Metrics and logging
+        if current_attempt >= max_retries:
+            metrics.job_retry_exhausted_total.inc()
+        metrics.job_failures_total.labels(error_type=error_type).inc()
+        log_job_event(
+            logger, "failed_permanently", job_id, job_type,
+            error_type=error_type, retry_count=current_attempt, max_retries=max_retries
         )
         
         log_event(

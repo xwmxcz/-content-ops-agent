@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -13,6 +15,10 @@ from src.utils.idempotency import (
     idempotent_write_async,
     publication_request_id,
 )
+from src.utils import metrics
+from src.utils.structured_logging import log_event
+
+logger = logging.getLogger(__name__)
 
 
 # Sentinel to indicate HTTP route was called without an Idempotency-Key header
@@ -125,6 +131,11 @@ class PublishService:
     ) -> dict[str, Any]:
         request_payload = publication.get("request_payload") or {}
         self.store.update_publication(publication_id, status="running", error_message=None)
+        
+        # P2-01: Track publication request and duration
+        start_time = time.time()
+        platform = publication.get("platform", "xiaohongshu")
+        metrics.publication_requests_total.labels(platform=platform, status="pending").inc()
 
         try:
             tool_response = await self._call_publish_tool(
@@ -152,9 +163,30 @@ class PublishService:
                 self.store.update_content(publication["content_id"], status="scheduled")
                 scheduled_date = datetime.fromisoformat(request_payload["scheduled_at"]).date()
                 self.store.save_calendar_event(publication["content_id"], "xiaohongshu", scheduled_date)
+            
+            # P2-01: Track success
+            duration = time.time() - start_time
+            metrics.publication_requests_total.labels(platform=platform, status=final_status).inc()
+            metrics.publication_duration_seconds.labels(platform=platform).observe(duration)
+            log_event(
+                logger, "publication_completed", level=logging.INFO,
+                publication_id=publication_id, platform=platform,
+                status=final_status, duration_seconds=duration
+            )
+            
             return updated or publication
         except Exception as exc:
             self.store.update_publication(publication_id, status="failed", error_message=str(exc))
+            
+            # P2-01: Track failure
+            duration = time.time() - start_time
+            metrics.publication_requests_total.labels(platform=platform, status="failed").inc()
+            metrics.publication_duration_seconds.labels(platform=platform).observe(duration)
+            log_event(
+                logger, "publication_failed", level=logging.ERROR,
+                publication_id=publication_id, platform=platform,
+                error=str(exc), duration_seconds=duration
+            )
             raise
 
     def _select_media_assets(self, content_id: int, publish_type: str, media_ids: list[int] | None) -> list[dict[str, Any]]:
