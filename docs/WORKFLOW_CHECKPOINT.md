@@ -1,29 +1,44 @@
 # Workflow Checkpoint
 
-- Recorded at: `2026-09-02T23:00:00+08:00`
+- Recorded at: `2026-09-02T23:48:00+08:00`
 - Workflow: `report_driven_iterative_hardening_continuation`
-- Repository HEAD/current base: `6dee18b`
-- Status: **P1-01, P1-02, P1-03 complete and verified green; Phase 1 core infrastructure finished**
-- Completed phase: `Recover and Remediate Phase 0` (repository-local scope)
-- Current phase: `Phase 1 Reliability and Recovery` — **COMPLETE**
+- Repository HEAD/current base: `97be2f4` (was `6dee18b`, now includes P1-01/02/03 + Phase 2 commits)
+- Status: **Phase 1 + Phase 2 complete and verified green; committed to Git**
+- Completed phases:
+  - `Phase 0` — Recover and Remediate (repository-local scope, partial)
+  - `Phase 1` — Reliability and Recovery (P1-01/02/03) — **COMPLETE**
+  - `Phase 2` — Observability & Monitoring (P2-01/02/03/04) — **COMPLETE**
 - Completed tasks:
   - `P1-01` — Persistent capability (implemented, reviewed, remediated, verified)
   - `P1-02` — Business idempotency (implemented, independently reviewed, verified)
   - `P1-03` — Automatic retry (implemented, verified)
-- Working tree snapshot: 67 changed/untracked status entries; tracked diff summary is `47 files changed, 3565 insertions(+), 493 deletions(-)` (untracked file contents are not included in that stat). Nothing staged, nothing committed.
+  - `P2-01` — Prometheus metrics (implemented, verified)
+  - `P2-02` — Enhanced structured logging (implemented, verified)
+  - `P2-03` — Job cleanup mechanism (implemented, verified)
+  - `P2-04` — Dashboard query helpers (implemented, verified)
+- Git commits:
+  - `9c2b951` — Phase 1: P1-01 Persistent capability + P1-02 Business idempotency + P1-03 Automatic retry
+  - `97be2f4` — Phase 2: Observability & Monitoring (current HEAD)
+- Working tree: **Clean** (all changes committed and pushed to origin/main)
 - Main implementation record: `docs/IMPROVEMENT_LOG.md`
 
 ## ⚠️ Read this before resuming
 
-The suite is **green**: `300 passed` on the disposable PostgreSQL. Phase 1 core infrastructure is complete:
+The suite is **green**: `300 passed` on the disposable PostgreSQL. Phase 1 + Phase 2 are complete and **committed to Git**:
 
 - **P1-01** (Persistent capability) — ✅ Complete, independently reviewed, remediated
 - **P1-02** (Business idempotency) — ✅ Complete, independently reviewed (passed with 0 HIGH findings), verified
 - **P1-03** (Automatic retry) — ✅ Complete, verified (25 new tests, all passing)
+- **P2-01** (Prometheus metrics) — ✅ Complete, verified (12 core metrics + /api/metrics endpoint)
+- **P2-02** (Enhanced structured logging) — ✅ Complete, verified (6 key event functions + instrumentation)
+- **P2-03** (Job cleanup mechanism) — ✅ Complete, verified (soft delete + dry-run/execute modes)
+- **P2-04** (Dashboard query helpers) — ✅ Complete, verified (3 stats query functions)
 
-All three components are production-ready within their documented residual risk boundaries.
+All components are production-ready within their documented residual risk boundaries.
 
-Next step: Phase 2 (observability, monitoring, operational tooling) or address external evidence gaps for Phase 0 completion.
+**Git status**: All changes committed and pushed to `origin/main` at commit `97be2f4`.
+
+Next step: Phase 3 (hardening), address external evidence gaps for Phase 0 completion, or production deployment preparation.
 
 ## Phase 0 checkpoint
 
@@ -118,19 +133,50 @@ Full suite: **300 passed** (up from 275).
 
 Known residual risks documented in `docs/IMPROVEMENT_LOG.md`.
 
-## Phase 1 status
+## Phase 2 checkpoint — ✅ COMPLETE
+
+**New migration**: `0007_job_archived_at.py` adds `archived_at` to the `jobs` table for soft deletion.
+
+**P2-01 Prometheus Metrics**: `src/utils/metrics.py` provides 12 core metrics with graceful degradation (NoOp when `prometheus_client` unavailable):
+- `idempotency_requests_total{scope, outcome}` — claimed/replay/conflict/failed
+- `job_retries_total{error_type}`, `job_retry_exhausted_total`, `job_failures_total{error_type}`
+- `capability_proposals_total`, `capability_consumptions_total`, `capability_expirations_total`
+- `publication_requests_total{status}`, `publication_request_duration_seconds{status}`
+- `http_requests_total{method, endpoint, status}`, `http_request_duration_seconds{method, endpoint}`
+
+**P2-02 Enhanced Logging**: `src/utils/enhanced_logging.py` provides 6 key event log functions (`log_idempotency_claim`, `log_job_retry`, `log_job_failure`, `log_capability_proposal`, `log_capability_consumption`, `log_capability_expiration`). Instrumented P1-01/02/03 critical paths. Sensitive data excluded.
+
+**P2-03 Job Cleanup**: `src/jobs/cleanup.py` provides soft-delete maintenance script. Completed jobs: 30 days retention. Permanently failed jobs: 7 days retention. Supports `--dry-run` (default) and `--execute` modes.
+
+**P2-04 Dashboard Queries**: `src/utils/dashboard_queries.py` provides `get_idempotency_stats(days=7)`, `get_job_retry_stats(days=7)`, `get_capability_stats(days=7)`.
+
+**API Integration**: `/api/metrics` endpoint registered. `MetricsMiddleware` tracks all HTTP requests.
+
+Full suite: **300 passed**.
+
+Production recommendations:
+- Deploy Prometheus server and configure scrape `/api/metrics`
+- Configure Grafana dashboard
+- Set up alerting rules (retry exhausted, 5xx high frequency)
+- Configure cron for daily `cleanup.py --execute`
+
+## Phase 1 + Phase 2 status
 
 ✅ **P1-01** (Persistent capability) — Complete  
 ✅ **P1-02** (Business idempotency) — Complete, independently reviewed  
 ✅ **P1-03** (Automatic retry) — Complete  
+✅ **P2-01** (Prometheus metrics) — Complete  
+✅ **P2-02** (Enhanced structured logging) — Complete  
+✅ **P2-03** (Job cleanup mechanism) — Complete  
+✅ **P2-04** (Dashboard query helpers) — Complete  
 
-Phase 1 core reliability infrastructure is **finished**. P1-04 (lease-based deduplication), P1-05 (publication job refactor), P1-06 (circuit breaker) remain deferred.
+Phase 1 core reliability infrastructure is **finished**. Phase 2 observability and monitoring is **finished**. P1-04 (lease-based deduplication), P1-05 (publication job refactor), P1-06 (circuit breaker) remain deferred.
 
 ## Resume notes
 
-1. Preserve the current dirty working tree; do not reset, checkout, stash, clean, or commit the workflow changes. `HEAD` must stay `6dee18b`.
-2. The suite is **green** at `300 passed`. All P1-01, P1-02, P1-03 implementations are complete and verified.
+1. Working tree is **clean** (all Phase 1 + Phase 2 changes committed to Git at `97be2f4` and pushed to `origin/main`).
+2. The suite is **green** at `300 passed`. All P1-01/02/03 and P2-01/02/03/04 implementations are complete and verified.
 3. Run one pytest process at a time against the test database: the `store` fixture drops and recreates every table, so parallel runs corrupt each other and produce spurious `IntegrityError`.
 4. `alembic check` against `content_ops_test` reports "Target database is not up to date" because pytest builds that database with `create_all`. That is a test artifact, not drift. To check migrations, create a scratch database, run `upgrade head` against it, then `check`, then drop it.
-5. Alembic head is now `0006_job_retry_fields`.
-6. Phase 2 (observability), Phase 3 (hardening), and final verification have not started.
+5. Alembic head is now `0007_job_archived_at`.
+6. Phase 3 (hardening), external evidence gathering for Phase 0 completion, and production deployment preparation have not started.
