@@ -29,8 +29,10 @@ export async function login(username: string, password: string) {
 }
 
 export function logout() {
-  clearAuthToken()
-  window.location.assign('/login')
+  void api.post('/auth/logout').finally(() => {
+    clearAuthToken()
+    window.location.assign('/login')
+  })
 }
 
 export function hasAuthToken() {

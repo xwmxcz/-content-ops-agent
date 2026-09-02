@@ -11,6 +11,11 @@ from src.utils import config
 
 bind = f"{config.API_HOST}:{config.API_PORT}"
 
+# Disable Gunicorn/Uvicorn's independent X-Forwarded-* preprocessing. The app
+# middleware validates the immediate peer against TRUSTED_PROXY_CIDRS before
+# accepting X-Forwarded-Proto, avoiding a second, broader trust policy.
+forwarded_allow_ips = ""
+
 # Async workers are required: the SSE streaming endpoints hold a long-lived
 # connection and poll the event table with `await asyncio.sleep`, so a sync
 # worker would block the loop and a single stream would occupy a whole worker.

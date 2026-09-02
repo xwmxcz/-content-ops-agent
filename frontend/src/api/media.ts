@@ -1,4 +1,4 @@
-import { api, withAuthQuery } from './index'
+import { api } from './index'
 
 export interface MediaAsset {
   id: number
@@ -17,7 +17,7 @@ export interface MediaAsset {
 
 export async function getContentMedia(contentId: number) {
   const { data } = await api.get<MediaAsset[]>(`/content/${contentId}/media`)
-  return data.map(withMediaAuth)
+  return data
 }
 
 export async function uploadMedia(contentId: number, mediaType: 'image' | 'video', file: File) {
@@ -29,17 +29,10 @@ export async function uploadMedia(contentId: number, mediaType: 'image' | 'video
   const { data } = await api.post<MediaAsset>('/media/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }
   })
-  return withMediaAuth(data)
+  return data
 }
 
 export async function deleteMedia(mediaId: number) {
   const { data } = await api.delete<{ deleted: boolean }>(`/media/${mediaId}`)
   return data
-}
-
-function withMediaAuth(asset: MediaAsset): MediaAsset {
-  return {
-    ...asset,
-    file_url: withAuthQuery(asset.file_url)
-  }
 }

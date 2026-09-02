@@ -200,7 +200,7 @@
                       attempt {{ event.attempt }}
                     </span>
                     <span class="tool-event-badge" :class="event.status">
-                      {{ event.status === 'completed' ? 'ok' : 'failed' }}
+                      {{ eventStatusLabel(event.status) }}
                     </span>
                     <small class="tool-event-summary">{{ summarizeEvent(event) }}</small>
                   </summary>
@@ -209,8 +209,8 @@
                       <div class="tool-event-label">args</div>
                       <pre>{{ prettyArgs(event.args) }}</pre>
                     </div>
-                    <div v-if="event.status === 'completed'" class="tool-event-section">
-                      <div class="tool-event-label">output</div>
+                    <div v-if="event.status !== 'failed'" class="tool-event-section">
+                      <div class="tool-event-label">{{ event.status === 'proposed' ? 'approval proposal' : 'output' }}</div>
                       <pre>{{ prettyOutput(event.output) || '(empty)' }}</pre>
                     </div>
                     <div v-else class="tool-event-section error">
@@ -481,6 +481,12 @@ function prettyOutput(output: string | undefined) {
   return output
 }
 
+function eventStatusLabel(status: ChatToolEvent['status']) {
+  if (status === 'completed') return 'ok'
+  if (status === 'proposed') return 'confirm'
+  return 'failed'
+}
+
 function summarizeEvent(event: ChatToolEvent) {
   if (event.status === 'failed') {
     return event.error || event.output || 'failed'
@@ -502,6 +508,7 @@ function intentLabel(name: ChatIntentName) {
     schedule_propose: '排期提案',
     schedule_commit: '确认排期',
     memory_update: '记忆更新',
+    action_confirm: '确认操作',
     smalltalk: '闲聊',
     clarify: '需要澄清',
     unknown: '未分类'
@@ -1197,6 +1204,11 @@ onMounted(async () => {
   background: var(--c-fail-soft);
 }
 
+.tool-event.proposed {
+  border-color: var(--c-warn);
+  background: var(--c-warn-soft);
+}
+
 .tool-event > summary {
   display: flex;
   flex-wrap: wrap;
@@ -1254,6 +1266,10 @@ onMounted(async () => {
   color: var(--c-fail);
 }
 
+.tool-event.proposed .tool-event-name {
+  color: var(--c-warn);
+}
+
 .tool-event-badge {
   flex-shrink: 0;
   padding: 1px 6px;
@@ -1285,6 +1301,11 @@ onMounted(async () => {
 .tool-event-badge.failed {
   color: #ffffff;
   background: var(--c-fail);
+}
+
+.tool-event-badge.proposed {
+  color: var(--c-warn);
+  background: var(--c-warn-soft);
 }
 
 .tool-event-summary {

@@ -124,3 +124,41 @@ def enqueue_pipeline_run(
         return
 
     raise JobQueueError(f"Unknown JOB_QUEUE_MODE: {config.JOB_QUEUE_MODE}")
+
+
+def requeue_job_with_delay(job_id: str, delay_seconds: int, database_url: str) -> None:
+    """Requeue a failed job for retry after the specified delay.
+    
+    In background mode, this schedules a delayed task. In RQ mode, it uses RQ's
+    native delayed execution support.
+    """
+    if config.JOB_QUEUE_MODE == "background":
+        # Background mode doesn't support true delayed execution.
+        # The job will be picked up on next run_job call when next_retry_at is checked.
+        # This is acceptable for development/test environments.
+        return
+
+    if config.JOB_QUEUE_MODE == "rq":
+        try:
+            from datetime import timedelta
+            from redis import Redis
+            from rq import Queue
+        except ImportError as exc:
+            raise JobQueueError("RQ dependencies are not installed") from exc
+
+        try:
+            queue = Queue(config.JOB_QUEUE_NAME, connection=Redis.from_url(config.REDIS_URL))
+            queue.enqueue_in(
+                timedelta(seconds=delay_seconds),
+                "src.jobs.runner.run_job",
+                job_id,
+                database_url,
+                job_timeout=config.JOB_TIMEOUT_SECONDS,
+                result_ttl=3600,
+                failure_ttl=86400,
+            )
+        except Exception as exc:
+            raise JobQueueError(f"Failed to requeue job with delay: {exc}") from exc
+        return
+
+    raise JobQueueError(f"Unknown JOB_QUEUE_MODE: {config.JOB_QUEUE_MODE}")

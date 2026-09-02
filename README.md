@@ -6,7 +6,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-API-0f766e)
 ![Vue](https://img.shields.io/badge/Vue_3-Frontend-42b883)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2563eb)
-![Tests](https://img.shields.io/badge/tests-133%20passing-0f7a4f)
+![Tests](https://img.shields.io/badge/tests-PostgreSQL%20integration-0f7a4f)
 
 AI Content Ops Agent is a full-stack content operations prototype built around
 LLM agents, durable content workflows, and a practical Vue workspace. It combines
@@ -101,20 +101,18 @@ LLM_PROVIDER=deepseek
 DEEPSEEK_API_KEY=your_deepseek_key_here
 ```
 
-Optional but recommended:
+Replace every `CHANGE_ME` credential in `.env.docker.example`; Docker uses the fail-closed production profile. Auth, strong independent admin/signing/PostgreSQL/Redis secrets, migration validation, and an explicit HTTPS public origin are required. Stable web-search keys remain optional.
 
 ```env
-# Stable researcher / fact-checker web search
-SERPER_API_KEY=
-TAVILY_API_KEY=
-BRAVE_SEARCH_API_KEY=
-
-# Login gate
 AUTH_ENABLED=true
-AUTH_USERNAME=admin
-AUTH_PASSWORD=change_me
-AUTH_SECRET_KEY=replace_with_a_long_random_secret
+AUTH_PASSWORD=<random 12+ characters>
+AUTH_SECRET_KEY=<random 32+ characters>
+POSTGRES_PASSWORD=<independent random value>
+REDIS_PASSWORD=<independent random value>
+CORS_ORIGINS=https://content.example.com
 ```
+
+Put TLS in front of the frontend before exposing it. See [Phase 0 security and migration operations](docs/PHASE0_SECURITY_AND_MIGRATIONS.md).
 
 3. Start the full stack:
 
@@ -138,8 +136,9 @@ Docker mode starts:
 | Service | Role |
 | --- | --- |
 | `frontend` | Nginx serving the built Vue app and proxying `/api` to the API service. |
-| `api` | FastAPI application. |
-| `worker` | RQ worker for long-running jobs. |
+| `migrate` | One-shot Alembic upgrade; API/worker wait for successful completion. |
+| `api` | FastAPI application; production startup validates config and schema revision. |
+| `worker` | RQ worker for long-running jobs; validates schema revision without running DDL. |
 | `postgres` | PostgreSQL 16 database. |
 | `redis` | Redis for RQ. |
 
@@ -173,7 +172,7 @@ Copy one env template to `.env`, then fill in the keys you need.
 | --- | --- |
 | Live LLM calls | Set at least one provider key, for example `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, `SILICONFLOW_API_KEY`, `MOONSHOT_API_KEY`, or `NEWAPI_API_KEY`. |
 | Stable web research | Set one of `SERPER_API_KEY`, `TAVILY_API_KEY`, or `BRAVE_SEARCH_API_KEY`. Without a key, the app falls back to keyless HTML search that may be blocked. |
-| Login gate | Set `AUTH_ENABLED=true`, `AUTH_USERNAME`, `AUTH_PASSWORD`, and a strong `AUTH_SECRET_KEY`. |
+| Production security | Auth enabled; strong independent admin/signing/PostgreSQL/Redis secrets; `SCHEMA_MANAGEMENT=validate`; exact HTTPS `CORS_ORIGINS`. Unsafe defaults fail startup. |
 | Xiaohongshu publishing demo | Keep or adjust `XHS_MCP_URL` to point at your local MCP server. |
 
 Docker reads `.env` automatically. For host-based development, copy
@@ -218,7 +217,7 @@ PostgreSQL is required (SQLite is no longer supported). Start it with Docker:
 docker compose up -d postgres
 ```
 
-The default `DATABASE_URL` targets this instance.
+The default `DATABASE_URL` targets this instance. Host development must explicitly set `APP_ENV=development` and `SCHEMA_MANAGEMENT=create` via `.env.example` or the environment. Omitting `APP_ENV` now selects fail-closed production; production must use Alembic and `SCHEMA_MANAGEMENT=validate`.
 
 ### Default Mode: In-Process Jobs
 
@@ -308,11 +307,12 @@ budgets, and can refresh frozen snapshots.
 
 ## Verification
 
-Backend:
+Backend (the test fixture drops/recreates tables, so use a disposable PostgreSQL database only):
 
 ```bash
+export TEST_DATABASE_URL='postgresql+psycopg://user:password@localhost:5432/content_ops_test'
 python -m pytest tests -q
-python -m compileall src tests examples
+python -m compileall src tests migrations examples
 ```
 
 Frontend:
@@ -322,12 +322,16 @@ cd frontend
 npm run build
 ```
 
-Docker:
+Migrations and Docker production validation:
 
 ```bash
+alembic upgrade head
+alembic current
 docker compose up -d --build
 docker compose ps
 ```
+
+Existing pre-Alembic databases must be backed up and verified before `alembic stamp 0001_baseline`; see the Phase 0 operations guide.
 
 ## Project Boundary
 

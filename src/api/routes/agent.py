@@ -4,7 +4,7 @@ import time
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
-from src.api.dependencies import get_chat_agent_service, get_litellm_client, get_memory_curator, get_store
+from src.api.dependencies import get_chat_agent_service, get_litellm_client, get_store
 from src.api.schemas.agent import (
     AgentMessageResponse,
     AgentRunRequest,
@@ -16,14 +16,17 @@ from src.api.schemas.agent import (
     ChatResponse,
     PipelineRunHandle,
     PipelineRunRequest,
+    ProposedActionCreate,
+    ProposedActionResponse,
 )
 from src.api.services.chat_agent import ChatAgentExecutionError, ChatAgentService
 from src.api.services.agent_pipeline import PipelineExecutionError, run_agent_pipeline
 from src.api.services.dynamic_pipeline import DynamicPipeline
-from src.agent.memory_curator import MemoryCurator
+from src.api.services.tool_policy import SIDE_EFFECT_TOOLS
 from src.jobs.queue import JobQueueError, enqueue_pipeline_run
 from src.llm.litellm_client import LiteLLMClient
 from src.storage import ContentStore
+from src.utils import config
 
 
 router = APIRouter()
@@ -100,8 +103,14 @@ async def create_pipeline_run(
         # The run row was pre-created; flip it to failed and emit a terminal event
         # so any SSE consumer that already subscribed sees the failure instead of
         # hanging until the stream deadline.
-        store.update_run(run_id, status="failed", error=str(exc))
-        store.append_run_event(run_id, "run_failed", {"error": str(exc)})
+        store.transition_run_and_append_event(
+            run_id,
+            expected_statuses={"running"},
+            new_status="failed",
+            event_type="run_failed",
+            payload={"error": str(exc)},
+            error=str(exc),
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
@@ -178,8 +187,20 @@ def cancel_pipeline_run(run_id: str, store: ContentStore = Depends(get_store)) -
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Run {run_id} was not found")
     if run["status"] in {"completed", "failed", "cancelled"}:
         return {"run_id": run_id, "status": run["status"], "cancelled": False}
-    store.update_run(run_id, status="cancelled")
-    store.append_run_event(run_id, "run_cancelled", {"run_id": run_id})
+    transitioned = store.transition_run_and_append_event(
+        run_id,
+        expected_statuses={"running"},
+        new_status="cancelled",
+        event_type="run_cancelled",
+        payload={"run_id": run_id},
+    )
+    if transitioned is None:
+        current = store.get_run(run_id)
+        return {
+            "run_id": run_id,
+            "status": current["status"] if current else "unknown",
+            "cancelled": False,
+        }
     return {"run_id": run_id, "status": "cancelled", "cancelled": True}
 
 
@@ -194,6 +215,102 @@ async def chat(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except ChatAgentExecutionError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+
+@router.post(
+    "/actions",
+    response_model=ProposedActionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def propose_action(
+    request: ProposedActionCreate,
+    store: ContentStore = Depends(get_store),
+) -> dict:
+    """Record a write proposal without executing it.
+
+    A proposal is not permission. It becomes executable only after a separate
+    confirm call issues the one-time capability, and only for these exact
+    arguments.
+    """
+    if request.tool_name not in SIDE_EFFECT_TOOLS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Tool {request.tool_name} is not a registered write action",
+        )
+    if not store.get_agent_thread(request.thread_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Thread {request.thread_id} was not found",
+        )
+    return store.create_proposed_action(
+        thread_id=request.thread_id,
+        tool_name=request.tool_name,
+        args=request.args,
+        impact_summary=request.impact_summary
+        or f"Execute write tool {request.tool_name}",
+        ttl_seconds=config.ACTION_CAPABILITY_TTL_SECONDS,
+        requester=config.AUTH_USERNAME if config.AUTH_ENABLED else None,
+    )
+
+
+@router.get("/threads/{thread_id}/actions", response_model=list[ProposedActionResponse])
+def list_thread_actions(
+    thread_id: str,
+    store: ContentStore = Depends(get_store),
+    limit: int = Query(20, ge=1, le=100),
+) -> list[dict]:
+    if not store.get_agent_thread(thread_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Thread {thread_id} was not found",
+        )
+    store.expire_proposed_actions(thread_id=thread_id)
+    return store.list_proposed_actions(thread_id, limit=limit)
+
+
+@router.post("/actions/{action_id}/confirm", response_model=ProposedActionResponse)
+def confirm_action(
+    action_id: str,
+    store: ContentStore = Depends(get_store),
+) -> dict:
+    """Issue the one-time capability for a pending proposal.
+
+    Concurrent confirmations of the same proposal serialize in the store, so only
+    the first receives 200; the rest see 409 and no second capability exists.
+    """
+    confirmed = store.confirm_proposed_action(action_id)
+    if confirmed:
+        return confirmed
+    existing = store.get_proposed_action(action_id)
+    if not existing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Action {action_id} was not found",
+        )
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=f"Action {action_id} is {existing['status']} and cannot be confirmed",
+    )
+
+
+@router.post("/actions/{action_id}/cancel", response_model=ProposedActionResponse)
+def cancel_action(
+    action_id: str,
+    store: ContentStore = Depends(get_store),
+) -> dict:
+    cancelled = store.cancel_proposed_action(action_id)
+    if cancelled:
+        return cancelled
+    existing = store.get_proposed_action(action_id)
+    if not existing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Action {action_id} was not found",
+        )
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=f"Action {action_id} is {existing['status']} and cannot be cancelled",
+    )
 
 
 @router.get("/threads", response_model=list[AgentThreadResponse])
@@ -266,43 +383,16 @@ def update_thread(
 @router.delete("/threads/{thread_id}", response_model=dict)
 def delete_thread(
     thread_id: str,
-    background: BackgroundTasks,
     store: ContentStore = Depends(get_store),
-    curator: MemoryCurator | None = Depends(get_memory_curator),
 ) -> dict:
     if not store.get_agent_thread(thread_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Thread {thread_id} was not found")
-    # Capture transcript BEFORE delete cascades the messages away. Pick provider/model
-    # from the most recent assistant message so the curator runs on the same backend
-    # the user was talking to.
-    messages = store.list_agent_messages(thread_id, limit=500) if curator else []
-    provider = None
-    model = None
-    if curator:
-        for m in reversed(messages):
-            if m.get("role") == "assistant" and m.get("provider"):
-                provider = m["provider"]
-                model = m.get("model")
-                break
+    # Deleted transcripts are untrusted and there is no longer a user-visible
+    # confirmation surface after deletion. Never send them to an auto-applying
+    # curator or mutate persistent memory from this route.
     if not store.delete_agent_thread(thread_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Thread {thread_id} was not found")
-    if curator and messages:
-        background.add_task(_run_memory_curator, curator, messages, provider, model)
     return {"deleted": True}
-
-
-async def _run_memory_curator(
-    curator: MemoryCurator,
-    messages: list[dict],
-    provider: str | None,
-    model: str | None,
-) -> None:
-    try:
-        await curator.curate(messages, provider=provider, model=model)
-    except Exception:
-        # curate() already logs failures; swallow here so BackgroundTasks doesn't
-        # raise into Starlette's exception handler after the response is sent.
-        pass
 
 
 @router.get("/stream")

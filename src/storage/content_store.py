@@ -2,8 +2,9 @@
 import json
 from datetime import datetime, date, timedelta
 from typing import Optional, List, Dict, Any
+from uuid import uuid4
 
-from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, create_engine, func, inspect, or_, text
+from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, create_engine, func, inspect, or_, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
@@ -173,6 +174,9 @@ class Job(Base):
     model = Column(String(200), nullable=True)
     progress = Column(Integer, default=0)
     attempts = Column(Integer, default=0)
+    max_retries = Column(Integer, default=5, nullable=False)
+    next_retry_at = Column(DateTime, nullable=True)
+    error_type = Column(String(20), nullable=True)
     token_usage = Column(Integer, default=0)
     cost_estimate = Column(Float, default=0.0)
     created_at = Column(DateTime, default=datetime.now)
@@ -205,6 +209,7 @@ class AgentRun(Base):
     saved_content_id = Column(Integer, nullable=True)
     status = Column(String(20), default="running")
     error = Column(Text, nullable=True)
+    next_event_seq = Column(Integer, nullable=False, default=1, server_default=text("1"))
     created_at = Column(DateTime, default=datetime.now)
     completed_at = Column(DateTime, nullable=True)
 
@@ -216,6 +221,9 @@ class AgentRunEvent(Base):
     """Append-only event log for a pipeline run; SSE bridge reads this table."""
 
     __tablename__ = "agent_run_events"
+    __table_args__ = (
+        UniqueConstraint("run_id", "seq", name="uq_agent_run_events_run_seq"),
+    )
 
     id = Column(Integer, primary_key=True)
     run_id = Column(String(80), ForeignKey("agent_runs.id"), nullable=False)
@@ -226,6 +234,80 @@ class AgentRunEvent(Base):
 
 
 Index("ix_agent_run_events_run_seq", AgentRunEvent.run_id, AgentRunEvent.seq)
+
+
+class ProposedAction(Base):
+    """Durable one-time capability for a model-proposed write.
+
+    A write tool is never authorized by model text. The executor persists the
+    exact proposed call here, a later standalone user confirmation moves the row
+    to ``confirmed``, and the executor atomically moves it to ``consumed`` before
+    invoking the tool. ``args_hash`` makes the confirmed arguments tamper-evident
+    across requests, and the status transition is the once-only guarantee.
+    """
+
+    __tablename__ = "proposed_actions"
+
+    id = Column(String(80), primary_key=True)
+    thread_id = Column(String(80), ForeignKey("agent_threads.id"), nullable=False)
+    requester = Column(String(120), nullable=True)
+    tool_name = Column(String(80), nullable=False)
+    args_json = Column(Text, nullable=False)
+    args_hash = Column(String(64), nullable=False)
+    impact_summary = Column(Text, nullable=False)
+    status = Column(String(20), nullable=False, default="proposed")
+    proposing_message_id = Column(Integer, nullable=True)
+    consuming_message_id = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    confirmed_at = Column(DateTime, nullable=True)
+    consumed_at = Column(DateTime, nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+
+
+Index("ix_proposed_actions_thread_created", ProposedAction.thread_id, ProposedAction.created_at)
+Index("ix_proposed_actions_status_expires", ProposedAction.status, ProposedAction.expires_at)
+
+
+PROPOSED_ACTION_STATUSES = ("proposed", "confirmed", "consumed", "cancelled", "expired")
+
+
+class IdempotencyRecord(Base):
+    """Durable ledger making a keyed write replayable instead of repeatable.
+
+    One logical request can span several statements and tables: a refine is an
+    insert plus an update, a schedule commit is N calendar rows. Uniqueness
+    therefore lives here rather than on the business columns of those tables. A
+    unique constraint on, say, ``calendar_events(content_id, platform,
+    scheduled_date)`` would reject legitimate repeats (an intentional same-day
+    repost, a retry of a failed publish job) and turn recoverable errors into
+    ``IntegrityError``.
+
+    ``scope`` is part of the unique key so the same key value used for a content
+    create and a calendar commit does not collide. ``result_json`` is what lets a
+    retry return the *same* result rather than doing the work again.
+    """
+
+    __tablename__ = "idempotency_records"
+    __table_args__ = (
+        UniqueConstraint("scope", "idempotency_key", name="uq_idempotency_records_scope_key"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    scope = Column(String(60), nullable=False)
+    idempotency_key = Column(String(160), nullable=False)
+    args_hash = Column(String(64), nullable=False)
+    status = Column(String(20), nullable=False, default="in_progress")
+    result_json = Column(Text, nullable=True)
+    external_request_id = Column(String(120), nullable=True)
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+
+
+Index("ix_idempotency_records_scope_created", IdempotencyRecord.scope, IdempotencyRecord.created_at)
+
+
+IDEMPOTENCY_RECORD_STATUSES = ("in_progress", "completed", "failed")
 
 
 class ContentStore:
@@ -1287,6 +1369,9 @@ class ContentStore:
             if not thread:
                 return False
             session.query(AgentMessage).filter(AgentMessage.thread_id == thread_id).delete()
+            # proposed_actions.thread_id is a NO ACTION foreign key, so its rows must
+            # be cleared here or deleting a thread that ever proposed a write fails.
+            session.query(ProposedAction).filter(ProposedAction.thread_id == thread_id).delete()
             session.delete(thread)
             session.commit()
             return True
@@ -1295,6 +1380,478 @@ class ContentStore:
             raise
         finally:
             session.close()
+
+    # --- Proposed actions (one-time write capabilities) --------------------
+
+    def create_proposed_action(
+        self,
+        *,
+        thread_id: str,
+        tool_name: str,
+        args: dict[str, Any],
+        impact_summary: str,
+        ttl_seconds: int,
+        requester: str | None = None,
+        proposing_message_id: int | None = None,
+        action_id: str | None = None,
+    ) -> Dict[str, Any]:
+        """Persist an unconfirmed proposal and return its durable action id."""
+        from src.utils.canonical import args_hash, canonical_json
+
+        session = self._get_session()
+        try:
+            now = datetime.now()
+            action = ProposedAction(
+                id=action_id or f"act_{uuid4().hex[:20]}",
+                thread_id=thread_id,
+                requester=requester,
+                tool_name=tool_name,
+                args_json=canonical_json(args),
+                args_hash=args_hash(args),
+                impact_summary=impact_summary,
+                status="proposed",
+                proposing_message_id=proposing_message_id,
+                created_at=now,
+                expires_at=now + timedelta(seconds=max(1, int(ttl_seconds))),
+            )
+            session.add(action)
+            session.commit()
+            return self._proposed_action_to_dict(action)
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def get_proposed_action(self, action_id: str) -> Optional[Dict[str, Any]]:
+        session = self._get_session()
+        try:
+            action = (
+                session.query(ProposedAction)
+                .filter(ProposedAction.id == action_id)
+                .first()
+            )
+            return self._proposed_action_to_dict(action) if action else None
+        finally:
+            session.close()
+
+    def list_proposed_actions(
+        self,
+        thread_id: str,
+        *,
+        statuses: tuple[str, ...] | set[str] | None = None,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        session = self._get_session()
+        try:
+            query = session.query(ProposedAction).filter(ProposedAction.thread_id == thread_id)
+            if statuses:
+                query = query.filter(ProposedAction.status.in_(tuple(statuses)))
+            rows = (
+                query.order_by(ProposedAction.created_at.desc(), ProposedAction.id.desc())
+                .limit(limit)
+                .all()
+            )
+            return [self._proposed_action_to_dict(row) for row in rows]
+        finally:
+            session.close()
+
+    def latest_pending_proposed_action(
+        self,
+        thread_id: str,
+        *,
+        tool_name: str | None = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Most recent unexpired ``proposed`` row for a thread.
+
+        Expiry is evaluated against the stored ``expires_at`` using the same
+        application clock that wrote it, not against the recognized transcript,
+        so an idle thread resumed after the TTL has no capability to confirm and
+        fails closed.
+        """
+        session = self._get_session()
+        try:
+            query = (
+                session.query(ProposedAction)
+                .filter(
+                    ProposedAction.thread_id == thread_id,
+                    ProposedAction.status == "proposed",
+                    ProposedAction.expires_at > datetime.now(),
+                )
+            )
+            if tool_name:
+                query = query.filter(ProposedAction.tool_name == tool_name)
+            action = query.order_by(
+                ProposedAction.created_at.desc(), ProposedAction.id.desc()
+            ).first()
+            return self._proposed_action_to_dict(action) if action else None
+        finally:
+            session.close()
+
+    def confirm_proposed_action(self, action_id: str) -> Optional[Dict[str, Any]]:
+        """Move exactly one ``proposed`` row to ``confirmed``.
+
+        Two concurrent confirmations of the same proposal serialize on the row
+        lock; the loser observes a non-``proposed`` status and returns ``None``,
+        so a double-clicked confirm issues one capability, not two.
+        """
+        session = self._get_session()
+        try:
+            action = (
+                session.query(ProposedAction)
+                .filter(ProposedAction.id == action_id, ProposedAction.status == "proposed")
+                .with_for_update()
+                .first()
+            )
+            if not action:
+                return None
+            now = datetime.now()
+            if action.expires_at <= now:
+                action.status = "expired"
+                session.commit()
+                return None
+            action.status = "confirmed"
+            action.confirmed_at = now
+            session.commit()
+            return self._proposed_action_to_dict(action)
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def consume_proposed_action(
+        self,
+        action_id: str,
+        *,
+        tool_name: str,
+        args: dict[str, Any],
+        consuming_message_id: int | None = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Atomically claim a confirmed capability for one tool invocation.
+
+        The row lock plus the ``status == 'confirmed'`` predicate make this the
+        once-only gate: replay, a second executor loop iteration, and two racing
+        requests all lose the race and receive ``None``. The stored hash is
+        re-checked here so arguments tampered with after confirmation cannot be
+        executed even though the capability itself is valid.
+        """
+        from src.utils.canonical import args_hash
+
+        session = self._get_session()
+        try:
+            action = (
+                session.query(ProposedAction)
+                .filter(ProposedAction.id == action_id, ProposedAction.status == "confirmed")
+                .with_for_update()
+                .first()
+            )
+            if not action:
+                return None
+            now = datetime.now()
+            if action.expires_at <= now:
+                action.status = "expired"
+                session.commit()
+                return None
+            if action.tool_name != tool_name or action.args_hash != args_hash(args):
+                # Leave the capability unconsumed: the mismatch is the model
+                # substituting a different call, not the user's approved action.
+                session.rollback()
+                return None
+            action.status = "consumed"
+            action.consumed_at = now
+            action.consuming_message_id = consuming_message_id
+            session.commit()
+            return self._proposed_action_to_dict(action)
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def cancel_proposed_action(self, action_id: str) -> Optional[Dict[str, Any]]:
+        """Cancel a proposal or an unused confirmation; consumed rows are final."""
+        session = self._get_session()
+        try:
+            action = (
+                session.query(ProposedAction)
+                .filter(
+                    ProposedAction.id == action_id,
+                    ProposedAction.status.in_(("proposed", "confirmed")),
+                )
+                .with_for_update()
+                .first()
+            )
+            if not action:
+                return None
+            action.status = "cancelled"
+            action.cancelled_at = datetime.now()
+            session.commit()
+            return self._proposed_action_to_dict(action)
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def expire_proposed_actions(self, *, thread_id: str | None = None) -> int:
+        """Mark overdue pending rows expired. Returns the number updated."""
+        session = self._get_session()
+        try:
+            query = session.query(ProposedAction).filter(
+                ProposedAction.status.in_(("proposed", "confirmed")),
+                ProposedAction.expires_at <= datetime.now(),
+            )
+            if thread_id:
+                query = query.filter(ProposedAction.thread_id == thread_id)
+            updated = query.update(
+                {ProposedAction.status: "expired"}, synchronize_session=False
+            )
+            session.commit()
+            return int(updated or 0)
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    @staticmethod
+    def _proposed_action_to_dict(action: ProposedAction) -> Dict[str, Any]:
+        try:
+            args = json.loads(action.args_json)
+        except (TypeError, ValueError):
+            args = {}
+        return {
+            "id": action.id,
+            "thread_id": action.thread_id,
+            "requester": action.requester,
+            "tool_name": action.tool_name,
+            "args": args if isinstance(args, dict) else {},
+            "args_hash": action.args_hash,
+            "impact_summary": action.impact_summary,
+            "status": action.status,
+            "proposing_message_id": action.proposing_message_id,
+            "consuming_message_id": action.consuming_message_id,
+            "created_at": action.created_at.isoformat() if action.created_at else None,
+            "expires_at": action.expires_at.isoformat() if action.expires_at else None,
+            "confirmed_at": action.confirmed_at.isoformat() if action.confirmed_at else None,
+            "consumed_at": action.consumed_at.isoformat() if action.consumed_at else None,
+            "cancelled_at": action.cancelled_at.isoformat() if action.cancelled_at else None,
+        }
+
+    # --- Idempotency ledger (P1-02) ---------------------------------------
+
+    def claim_idempotency_key(
+        self,
+        *,
+        scope: str,
+        key: str,
+        args: Dict[str, Any],
+        external_request_id: str | None = None,
+    ) -> Dict[str, Any]:
+        """Claim ``(scope, key)`` for one attempt, or report the prior outcome.
+
+        The claim is an INSERT guarded by the unique constraint, so two racing
+        requests cannot both win: PostgreSQL rejects the loser, which then reads
+        the existing row and reacts to its status. An application-level
+        "SELECT then INSERT if absent" would leave a window where both callers see
+        no row and both write.
+
+        Returns a dict with ``outcome``:
+
+        - ``claimed``: caller owns this attempt and must do the work, then call
+          :meth:`complete_idempotency_key`.
+        - ``replay``: the work already completed; ``result`` holds the original
+          result and the caller must not write again.
+
+        Raises :class:`DuplicateRequestInFlight` when another attempt holds the
+        key, and :class:`IdempotencyKeyConflict` when the key is reused with
+        different arguments.
+        """
+        from sqlalchemy.exc import IntegrityError
+
+        from src.utils.canonical import args_hash
+        from src.utils.idempotency import DuplicateRequestInFlight, IdempotencyKeyConflict
+
+        digest = args_hash(args)
+        session = self._get_session()
+        try:
+            record = IdempotencyRecord(
+                scope=scope,
+                idempotency_key=key,
+                args_hash=digest,
+                status="in_progress",
+                external_request_id=external_request_id,
+                created_at=datetime.now(),
+            )
+            session.add(record)
+            try:
+                session.commit()
+            except IntegrityError:
+                session.rollback()
+            else:
+                return {
+                    "outcome": "claimed",
+                    "record_id": record.id,
+                    "scope": scope,
+                    "key": key,
+                    "external_request_id": record.external_request_id,
+                }
+
+            # Lost the insert race, or this is a retry. Lock the surviving row so
+            # a concurrent completion cannot change status under this read.
+            existing = (
+                session.query(IdempotencyRecord)
+                .filter(
+                    IdempotencyRecord.scope == scope,
+                    IdempotencyRecord.idempotency_key == key,
+                )
+                .with_for_update()
+                .first()
+            )
+            if existing is None:
+                # The row was deleted between the failed insert and this read.
+                raise DuplicateRequestInFlight(
+                    f"Idempotency key for {scope} could not be claimed; retry the request"
+                )
+            # Check args compatibility based on current status:
+            # - failed: retryable with any args (previous attempt didn't succeed)
+            # - completed/in_progress: args must match (can't change a success or in-flight request)
+            if existing.status != "failed" and existing.args_hash != digest:
+                raise IdempotencyKeyConflict(
+                    f"Idempotency key was already used for {scope} with different arguments"
+                )
+            if existing.status == "completed":
+                return {
+                    "outcome": "replay",
+                    "record_id": existing.id,
+                    "scope": scope,
+                    "key": key,
+                    "result": self._idempotency_result(existing),
+                    "external_request_id": existing.external_request_id,
+                }
+            if existing.status == "failed":
+                # A failed attempt is retryable: reclaim the same row rather than
+                # inserting a second one, which the unique constraint forbids.
+                # Update args_hash to reflect the new attempt's arguments.
+                existing.status = "in_progress"
+                existing.args_hash = digest
+                existing.result_json = None
+                existing.completed_at = None
+                if external_request_id is not None:
+                    existing.external_request_id = external_request_id
+                session.commit()
+                return {
+                    "outcome": "claimed",
+                    "record_id": existing.id,
+                    "scope": scope,
+                    "key": key,
+                    "external_request_id": existing.external_request_id,
+                }
+            raise DuplicateRequestInFlight(
+                f"Another request is already processing this {scope} key"
+            )
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def complete_idempotency_key(
+        self,
+        record_id: int,
+        *,
+        result: Any,
+    ) -> bool:
+        """Record the result of a claimed attempt so retries can replay it."""
+        session = self._get_session()
+        try:
+            record = (
+                session.query(IdempotencyRecord)
+                .filter(
+                    IdempotencyRecord.id == record_id,
+                    IdempotencyRecord.status == "in_progress",
+                )
+                .with_for_update()
+                .first()
+            )
+            if not record:
+                return False
+            record.status = "completed"
+            record.result_json = json.dumps(result, ensure_ascii=False, default=str)
+            record.completed_at = datetime.now()
+            session.commit()
+            return True
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def fail_idempotency_key(self, record_id: int) -> bool:
+        """Release a claimed attempt that raised, leaving the key retryable.
+
+        Without this a transient provider error would burn the key permanently and
+        the user could never retry that request.
+        """
+        session = self._get_session()
+        try:
+            record = (
+                session.query(IdempotencyRecord)
+                .filter(
+                    IdempotencyRecord.id == record_id,
+                    IdempotencyRecord.status == "in_progress",
+                )
+                .with_for_update()
+                .first()
+            )
+            if not record:
+                return False
+            record.status = "failed"
+            record.completed_at = datetime.now()
+            session.commit()
+            return True
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def get_idempotency_record(self, *, scope: str, key: str) -> Optional[Dict[str, Any]]:
+        session = self._get_session()
+        try:
+            record = (
+                session.query(IdempotencyRecord)
+                .filter(
+                    IdempotencyRecord.scope == scope,
+                    IdempotencyRecord.idempotency_key == key,
+                )
+                .first()
+            )
+            if not record:
+                return None
+            return {
+                "id": record.id,
+                "scope": record.scope,
+                "key": record.idempotency_key,
+                "args_hash": record.args_hash,
+                "status": record.status,
+                "result": self._idempotency_result(record),
+                "external_request_id": record.external_request_id,
+                "created_at": record.created_at.isoformat() if record.created_at else None,
+                "completed_at": record.completed_at.isoformat() if record.completed_at else None,
+            }
+        finally:
+            session.close()
+
+    @staticmethod
+    def _idempotency_result(record: IdempotencyRecord) -> Any:
+        if record.result_json is None:
+            return None
+        try:
+            return json.loads(record.result_json)
+        except (TypeError, ValueError):
+            return None
 
     # --- Pipeline run records ---------------------------------------------
 
@@ -1330,6 +1887,10 @@ class ContentStore:
             session.close()
 
     def update_run(self, run_id: str, **fields) -> Optional[Dict[str, Any]]:
+        if fields.get("status") in {"completed", "failed", "cancelled"}:
+            raise ValueError(
+                "Terminal run states must use transition_run_and_append_event()"
+            )
         session = self._get_session()
         try:
             run = session.query(AgentRun).filter(AgentRun.id == run_id).first()
@@ -1369,23 +1930,151 @@ class ContentStore:
         finally:
             session.close()
 
-    def append_run_event(self, run_id: str, event_type: str, payload: dict[str, Any]) -> int:
+    def append_run_event(self, run_id: str, event_type: str, payload: dict[str, Any]) -> Optional[int]:
+        """Append a non-terminal event while the run is still active.
+
+        The run-row lock serializes this check with terminal CAS transitions. If
+        cancellation/completion/failure already won, the event is discarded so
+        the terminal event remains the durable end of the stream.
+        """
         session = self._get_session()
         try:
-            last_seq = (
-                session.query(func.max(AgentRunEvent.seq))
-                .filter(AgentRunEvent.run_id == run_id)
-                .scalar()
-            ) or 0
-            event = AgentRunEvent(
+            run = (
+                session.query(AgentRun)
+                .filter(AgentRun.id == run_id)
+                .with_for_update()
+                .first()
+            )
+            if not run:
+                raise LookupError(f"Run {run_id} was not found")
+            if run.status != "running":
+                session.rollback()
+                return None
+            seq = int(run.next_event_seq or 1)
+            run.next_event_seq = seq + 1
+            session.add(AgentRunEvent(
                 run_id=run_id,
-                seq=last_seq + 1,
+                seq=seq,
                 event_type=event_type,
                 payload=json.dumps(payload, ensure_ascii=False),
-            )
-            session.add(event)
+            ))
             session.commit()
-            return event.seq
+            return seq
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def complete_run_with_content(
+        self,
+        run_id: str,
+        *,
+        payload: dict[str, Any],
+        content_fields: dict[str, Any] | None,
+        plan: list[dict[str, Any]],
+        revision_count: int,
+        total_prompt_tokens: int,
+        total_completion_tokens: int,
+        total_cost: float,
+    ) -> Optional[Dict[str, Any]]:
+        """Atomically persist final content, complete the run, and append its event.
+
+        Cancellation and completion serialize on the run row. If cancellation
+        already won, no ``agent_final`` content row is inserted.
+        """
+        session = self._get_session()
+        try:
+            run = (
+                session.query(AgentRun)
+                .filter(AgentRun.id == run_id, AgentRun.status == "running")
+                .with_for_update()
+                .first()
+            )
+            if not run:
+                return None
+
+            saved_content_id: int | None = None
+            if content_fields:
+                content = Content(**content_fields)
+                session.add(content)
+                session.flush()
+                saved_content_id = content.id
+
+            event_payload = json.loads(json.dumps(payload, ensure_ascii=False))
+            event_payload["saved_content_id"] = saved_content_id
+            run.plan_json = json.dumps(plan, ensure_ascii=False)
+            run.revision_count = revision_count
+            run.total_prompt_tokens = total_prompt_tokens
+            run.total_completion_tokens = total_completion_tokens
+            run.total_cost = total_cost
+            run.saved_content_id = saved_content_id
+            run.status = "completed"
+            run.completed_at = run.completed_at or datetime.now()
+            seq = int(run.next_event_seq or 1)
+            run.next_event_seq = seq + 1
+            session.add(AgentRunEvent(
+                run_id=run_id,
+                seq=seq,
+                event_type="run_complete",
+                payload=json.dumps(event_payload, ensure_ascii=False),
+            ))
+            session.commit()
+            result = self._agent_run_to_dict(run)
+            result["event_seq"] = seq
+            return result
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def transition_run_and_append_event(
+        self,
+        run_id: str,
+        *,
+        expected_statuses: set[str] | tuple[str, ...],
+        new_status: str,
+        event_type: str,
+        payload: dict[str, Any],
+        **fields: Any,
+    ) -> Optional[Dict[str, Any]]:
+        """Compare-and-set a run state and append its event in one transaction.
+
+        Returns ``None`` when another actor already moved the run out of an
+        expected state. This is the only supported path for terminal run state
+        changes, preventing duplicate terminal events during cancel/fail races.
+        """
+        session = self._get_session()
+        try:
+            run = (
+                session.query(AgentRun)
+                .filter(AgentRun.id == run_id, AgentRun.status.in_(tuple(expected_statuses)))
+                .with_for_update()
+                .first()
+            )
+            if not run:
+                return None
+            if "plan" in fields:
+                run.plan_json = json.dumps(fields.pop("plan"), ensure_ascii=False)
+            for key, value in fields.items():
+                if hasattr(run, key):
+                    setattr(run, key, value)
+            run.status = new_status
+            if new_status in {"completed", "failed", "cancelled"}:
+                run.completed_at = run.completed_at or datetime.now()
+            seq = int(run.next_event_seq or 1)
+            run.next_event_seq = seq + 1
+            session.add(AgentRunEvent(
+                run_id=run_id,
+                seq=seq,
+                event_type=event_type,
+                payload=json.dumps(payload, ensure_ascii=False),
+            ))
+            session.commit()
+            result = self._agent_run_to_dict(run)
+            result["event_seq"] = seq
+            return result
         except Exception:
             session.rollback()
             raise
@@ -1437,6 +2126,7 @@ class ContentStore:
             "saved_content_id": run.saved_content_id,
             "status": run.status,
             "error": run.error,
+            "next_event_seq": run.next_event_seq or 1,
             "created_at": run.created_at.isoformat() if run.created_at else None,
             "completed_at": run.completed_at.isoformat() if run.completed_at else None,
         }
@@ -1551,6 +2241,9 @@ class ContentStore:
             "model": job.model,
             "progress": job.progress or 0,
             "attempts": job.attempts or 0,
+            "max_retries": job.max_retries or 5,
+            "next_retry_at": job.next_retry_at.isoformat() if job.next_retry_at else None,
+            "error_type": job.error_type,
             "created_at": job.created_at.isoformat() if job.created_at else None,
             "updated_at": job.updated_at.isoformat() if job.updated_at else None,
             "started_at": job.started_at.isoformat() if job.started_at else None,

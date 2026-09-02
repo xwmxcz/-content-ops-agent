@@ -8,6 +8,15 @@ from typing import Any
 from src.integrations.mcp_client import McpClientError, XiaohongshuMcpClient
 from src.storage import ContentStore
 from src.utils import config
+from src.utils.idempotency import (
+    SCOPE_PUBLICATION_EXECUTE,
+    idempotent_write_async,
+    publication_request_id,
+)
+
+
+# Sentinel to indicate HTTP route was called without an Idempotency-Key header
+_NO_IDEMPOTENCY_KEY = object()
 
 
 class PublicationValidationError(ValueError):
@@ -42,6 +51,7 @@ class PublishService:
         visibility: str = "public",
         is_original: bool = False,
         status: str = "queued",
+        idempotency_key: str | None | object = None,
     ) -> dict[str, Any]:
         content = self.store.get_content(content_id)
         if not content:
@@ -61,6 +71,14 @@ class PublishService:
             "is_original": is_original,
             "media_ids": [asset["id"] for asset in media_assets],
         }
+        # Store the HTTP-level idempotency key if provided.
+        # Use a sentinel to distinguish "no key header" from "not called via HTTP".
+        if idempotency_key is _NO_IDEMPOTENCY_KEY:
+            # HTTP route without Idempotency-Key header: skip execute idempotency
+            request_payload["_skip_execute_idempotency"] = True
+        elif idempotency_key is not None:
+            # HTTP route with Idempotency-Key header: store it
+            request_payload["_http_idempotency_key"] = idempotency_key
         if publish_type == "image_post":
             request_payload["images"] = [asset["file_path"] for asset in media_assets]
         else:
@@ -83,10 +101,37 @@ class PublishService:
             raise LookupError(f"Publication {publication_id} was not found")
 
         request_payload = publication.get("request_payload") or {}
+        # Only skip idempotency if explicitly marked (HTTP route without header)
+        skip_idempotency = request_payload.get("_skip_execute_idempotency", False)
+
+        # The key is the publication row, not the job attempt: a requeued job, a
+        # worker restart, and a manual retry are all the same logical publication,
+        # and publishing twice to a real platform is not reversible.
+        # However, if the original HTTP request had no Idempotency-Key header,
+        # we skip idempotency tracking at the execute layer as well.
+        return await idempotent_write_async(
+            self.store,
+            scope=SCOPE_PUBLICATION_EXECUTE,
+            key=None if skip_idempotency else publication_request_id(publication_id),
+            args={"publication_id": int(publication_id)},
+            external_request_id=publication_request_id(publication_id),
+            write=lambda: self._execute_publication_once(publication_id, publication),
+        )
+
+    async def _execute_publication_once(
+        self,
+        publication_id: int,
+        publication: dict[str, Any],
+    ) -> dict[str, Any]:
+        request_payload = publication.get("request_payload") or {}
         self.store.update_publication(publication_id, status="running", error_message=None)
 
         try:
-            tool_response = await self._call_publish_tool(publication["publish_type"], request_payload)
+            tool_response = await self._call_publish_tool(
+                publication["publish_type"],
+                request_payload,
+                external_request_id=publication_request_id(publication_id),
+            )
             response_data = tool_response.get("data")
             response_payload = response_data if isinstance(response_data, dict) else {"text": tool_response.get("text", "")}
             final_status = "scheduled" if request_payload.get("scheduled_at") else "completed"
@@ -128,7 +173,13 @@ class PublishService:
             raise PublicationValidationError("Video posts require exactly one uploaded video")
         return assets
 
-    async def _call_publish_tool(self, publish_type: str, request_payload: dict[str, Any]) -> dict[str, Any]:
+    async def _call_publish_tool(
+        self,
+        publish_type: str,
+        request_payload: dict[str, Any],
+        *,
+        external_request_id: str | None = None,
+    ) -> dict[str, Any]:
         tool_args = {
             "title": request_payload["title"],
             "content": request_payload["content"],
@@ -137,6 +188,11 @@ class PublishService:
             "visibility": request_payload.get("visibility", "public"),
             "is_original": request_payload.get("is_original", False),
         }
+        if external_request_id:
+            # Sent so the platform can reject a duplicate it has already accepted.
+            # Whether it honors the token is the provider's contract, not ours:
+            # this side guarantees the token is stable across retries, nothing more.
+            tool_args["request_id"] = external_request_id
         if publish_type == "image_post":
             tool_args["images"] = request_payload["images"]
             return await self.mcp_client.publish_content(tool_args)

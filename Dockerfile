@@ -2,7 +2,9 @@ FROM python:3.11-slim AS api
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    APP_ENV=production \
+    SCHEMA_MANAGEMENT=validate
 
 WORKDIR /app
 
@@ -15,8 +17,9 @@ RUN python -m pip install --upgrade pip \
     && python -m pip install -r requirements.txt
 
 COPY src ./src
+COPY migrations ./migrations
 COPY examples ./examples
-COPY server.py worker.py gunicorn.conf.py ./
+COPY alembic.ini server.py worker.py gunicorn.conf.py ./
 
 # Run as an unprivileged user. chown the whole /app tree (including the data dir
 # below) so the named volume mounted at /app/data inherits app:app ownership on

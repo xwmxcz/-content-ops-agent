@@ -1,4 +1,4 @@
-import { api, withAuthQuery } from './index'
+import { api } from './index'
 
 export interface AgentRunPayload {
   topic: string
@@ -48,7 +48,7 @@ export interface ChatToolEvent {
   name: string
   args: Record<string, unknown>
   output: string
-  status: 'completed' | 'failed'
+  status: 'completed' | 'failed' | 'proposed'
   error?: string
   plan_step_index?: number | null
   attempt?: number
@@ -74,6 +74,7 @@ export type ChatIntentName =
   | 'schedule_propose'
   | 'schedule_commit'
   | 'memory_update'
+  | 'action_confirm'
   | 'smalltalk'
   | 'clarify'
   | 'unknown'
@@ -266,9 +267,10 @@ export async function createPipelineRun(payload: PipelineRunPayload) {
 }
 
 export function pipelineStreamUrl(runId: string) {
-  // EventSource ignores axios baseURL, so we read it back from the api instance
+  // EventSource ignores axios baseURL. The browser sends the HttpOnly resource
+  // session cookie; no bearer or ticket material is placed in the URL.
   const base = (api.defaults.baseURL || '').replace(/\/$/, '')
-  return withAuthQuery(`${base}/agent/runs/${runId}/stream`)
+  return `${base}/agent/runs/${runId}/stream`
 }
 
 export async function cancelPipelineRun(runId: string) {

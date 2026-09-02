@@ -1,15 +1,10 @@
-"""Memory curator — Hermes-style "agent-curated memory with periodic nudges".
+"""Proposal-only memory curator.
 
-Triggered when a chat thread is closed (DELETE /api/agent/threads/{id}). An
-auxiliary LLM reads the transcript plus the current MEMORY.md / USER.md and
-proposes a JSON list of `add` / `replace` / `remove` operations targeting one
-of the two files. Each operation is applied through FileMemory; per-item
-errors (limit exceeded, ambiguous match, missing text) are recorded but do
-not abort the batch.
-
-The curator is intentionally side-effecting (writes directly to disk). The
-frozen-snapshot design means changes are visible the NEXT session, never the
-one the user just closed.
+If explicitly called by a future user-visible workflow, an auxiliary LLM may
+read a transcript plus the current MEMORY.md / USER.md and propose a JSON list
+of `add` / `replace` / `remove` operations. Thread deletion never invokes this
+component. Curator output is untrusted and is never applied directly; only
+user-confirmed Chat memory tools may mutate the files.
 """
 from __future__ import annotations
 
@@ -19,14 +14,7 @@ import re
 from typing import Any
 
 from src.llm.litellm_client import LiteLLMClient
-from src.storage.file_memory import (
-    AGENT,
-    FileMemory,
-    MemoryAmbiguous,
-    MemoryLimitExceeded,
-    MemoryNotFound,
-    USER,
-)
+from src.storage.file_memory import AGENT, FileMemory, USER
 
 
 logger = logging.getLogger(__name__)
@@ -105,38 +93,20 @@ class MemoryCurator:
                 max_tokens=1024,
             )
         except Exception as exc:
-            logger.warning("memory curator: aux LLM failed (%s)", exc)
-            return {"skipped": True, "reason": f"llm error: {exc}", "applied": [], "rejected": []}
+            logger.warning("memory curator: aux LLM failed error_class=%s", exc.__class__.__name__)
+            return {"skipped": True, "reason": f"llm error: {exc.__class__.__name__}", "applied": [], "rejected": []}
 
         actions = self._parse(raw)[: self.max_actions]
-        applied: list[dict[str, Any]] = []
-        rejected: list[dict[str, Any]] = []
-        for action in actions:
-            try:
-                self._apply(action)
-                applied.append(action)
-            except (MemoryLimitExceeded, MemoryAmbiguous, MemoryNotFound, ValueError) as exc:
-                rejected.append({"action": action, "error": str(exc)})
-        logger.info("memory curator: applied=%d rejected=%d total=%d",
-                    len(applied), len(rejected), len(actions))
-        return {"applied": applied, "rejected": rejected, "actions": actions}
+        logger.info("memory curator: proposed=%d applied=0", len(actions))
+        return {
+            "applied": [],
+            "rejected": [],
+            "proposed": actions,
+            "actions": actions,
+            "requires_user_confirmation": bool(actions),
+        }
 
     # ─── helpers ───────────────────────────────────────────────────────────
-
-    def _apply(self, action: dict[str, Any]) -> None:
-        op = action.get("action")
-        target = action.get("target")
-        if op == "add":
-            text = (action.get("text") or "").strip()
-            if not text:
-                raise ValueError("add: empty text")
-            self.file_memory.add(target, text)
-        elif op == "replace":
-            self.file_memory.replace(target, action["old_text"], action["new_text"])
-        elif op == "remove":
-            self.file_memory.remove(target, action["old_text"])
-        else:
-            raise ValueError(f"unknown action {op!r}")
 
     @staticmethod
     def _parse(raw: str) -> list[dict[str, Any]]:

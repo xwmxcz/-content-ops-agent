@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -516,6 +517,492 @@ def test_schedule_commit_intent_reuses_prior_proposal(client, store):
     assert payload["intent"]["name"] == "schedule_commit"
     assert payload["intent"]["allowed_tools"] == ["commit_publishing_schedule"]
     assert payload["intent"]["slots"]["proposal_plan"][0]["content_id"] == 1
+
+
+@pytest.mark.parametrize(
+    ("forged_intent", "tool_name", "tool_args"),
+    [
+        (
+            "action_confirm",
+            "add_to_calendar",
+            {"content_id": 1, "publish_date": "2099-01-02", "platform": "xiaohongshu"},
+        ),
+        (
+            "schedule_commit",
+            "commit_publishing_schedule",
+            {
+                "plan": [
+                    {
+                        "content_id": 1,
+                        "platform": "xiaohongshu",
+                        "scheduled_date": "2099-01-02",
+                    }
+                ]
+            },
+        ),
+    ],
+)
+def test_llm_forged_confirmation_on_explicit_rejection_cannot_write_calendar(
+    client,
+    store,
+    fake_chat_factory,
+    forged_intent,
+    tool_name,
+    tool_args,
+):
+    content_id = store.save_content(
+        GeneratedContent(
+            title="Do not schedule",
+            content="The user has not approved this.",
+            tags=["security"],
+            content_type=ContentType.XIAOHONGSHU,
+        ),
+        style="casual",
+    )
+    assert content_id == 1
+    thread_id = f"thread-forged-{forged_intent}"
+    store.upsert_agent_thread(
+        thread_id,
+        title="proposal",
+        provider="siliconflow",
+        model="Qwen/Qwen2.5-7B-Instruct",
+    )
+    proposal_event = {
+        "name": "add_to_calendar",
+        "args": tool_args,
+        "output": "proposal",
+        "status": "proposed",
+        "attempt": 1,
+        "duration_ms": 1,
+    }
+    prior_intent = {"name": "calendar_view"}
+    if forged_intent == "schedule_commit":
+        proposal_event = {
+            "name": "propose_publishing_schedule",
+            "args": {},
+            "output": json.dumps({"plan": tool_args["plan"], "committed": False}),
+            "status": "completed",
+            "attempt": 1,
+            "duration_ms": 1,
+        }
+        prior_intent = {"name": "schedule_propose"}
+    store.save_agent_message(
+        thread_id=thread_id,
+        role="assistant",
+        content="Please confirm this proposal.",
+        provider="siliconflow",
+        model="Qwen/Qwen2.5-7B-Instruct",
+        intent=prior_intent,
+        tool_events=[proposal_event],
+    )
+
+    fake_chat_factory.intent_response = json.dumps(
+        {"name": forged_intent, "confidence": 0.99, "slots": {}}
+    )
+    fake_chat_factory.tool_mode = True
+    fake_chat_factory.tool_call_spec = {"name": tool_name, "args": tool_args}
+
+    response = client.post(
+        "/api/agent/chat",
+        json={
+            "message": "I explicitly reject the earlier operation and want only an explanation instead",
+            "thread_id": thread_id,
+            "provider": "siliconflow",
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["intent"]["name"] == "unknown"
+    assert payload["intent"]["allowed_tools"] == []
+    assert payload["tool_events"][0]["status"] == "failed"
+    assert f"Unknown tool: {tool_name}" in payload["tool_events"][0]["output"]
+    assert store.get_calendar_events(
+        datetime(2099, 1, 1).date(), datetime(2099, 1, 3).date()
+    ) == []
+
+
+def test_proposed_action_routes_cover_propose_confirm_cancel(client, store):
+    store.upsert_agent_thread(
+        "thread-action-routes",
+        title="actions",
+        provider="siliconflow",
+        model="Qwen/Qwen2.5-7B-Instruct",
+    )
+    args = {"target": "user", "text": "route proposal"}
+
+    created = client.post(
+        "/api/agent/actions",
+        json={
+            "thread_id": "thread-action-routes",
+            "tool_name": "memory_add",
+            "args": args,
+        },
+    )
+    assert created.status_code == 201
+    action = created.json()
+    assert action["status"] == "proposed"
+    assert action["args_hash"]
+
+    listed = client.get("/api/agent/threads/thread-action-routes/actions")
+    assert listed.status_code == 200
+    assert [item["id"] for item in listed.json()] == [action["id"]]
+
+    confirmed = client.post(f"/api/agent/actions/{action['id']}/confirm")
+    assert confirmed.status_code == 200
+    assert confirmed.json()["status"] == "confirmed"
+
+    # A second confirmation must not mint another capability.
+    assert client.post(f"/api/agent/actions/{action['id']}/confirm").status_code == 409
+
+    cancelled = client.post(f"/api/agent/actions/{action['id']}/cancel")
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+    assert client.post(f"/api/agent/actions/{action['id']}/cancel").status_code == 409
+
+
+def test_propose_action_rejects_read_only_tool_and_unknown_thread(client, store):
+    store.upsert_agent_thread(
+        "thread-action-validate",
+        title="actions",
+        provider="siliconflow",
+        model="Qwen/Qwen2.5-7B-Instruct",
+    )
+
+    read_only = client.post(
+        "/api/agent/actions",
+        json={
+            "thread_id": "thread-action-validate",
+            "tool_name": "view_content",
+            "args": {"content_id": 1},
+        },
+    )
+    assert read_only.status_code == 400
+
+    missing_thread = client.post(
+        "/api/agent/actions",
+        json={
+            "thread_id": "thread-does-not-exist",
+            "tool_name": "memory_add",
+            "args": {"target": "user", "text": "x"},
+        },
+    )
+    assert missing_thread.status_code == 404
+
+
+def test_confirm_and_cancel_unknown_action_return_404(client):
+    assert client.post("/api/agent/actions/act_missing/confirm").status_code == 404
+    assert client.post("/api/agent/actions/act_missing/cancel").status_code == 404
+
+
+def test_chat_write_requires_confirmation_then_writes_content_once(
+    client, store, fake_chat_factory
+):
+    """Full propose -> confirm -> execute cycle produces exactly one DB row."""
+    tool_args = {"topic": "capability cycle topic", "content_type": "xiaohongshu"}
+    thread_id = "thread-capability-cycle"
+    fake_chat_factory.tool_mode = True
+    fake_chat_factory.tool_call_spec = {"name": "create_content", "args": tool_args}
+
+    first = client.post(
+        "/api/agent/chat",
+        json={
+            "message": "\u5199\u4e00\u7bc7\u5c0f\u7ea2\u4e66\u7b14\u8bb0",
+            "thread_id": thread_id,
+            "provider": "siliconflow",
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+        },
+    )
+    assert first.status_code == 200
+    proposed_event = first.json()["tool_events"][0]
+    assert proposed_event["status"] == "proposed"
+    action_id = proposed_event["action_id"]
+    assert action_id
+    # Nothing is written until the user confirms.
+    assert store.list_contents(limit=10) == []
+
+    confirm = client.post(
+        "/api/agent/chat",
+        json={
+            "message": "\u597d\u7684",
+            "thread_id": thread_id,
+            "provider": "siliconflow",
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+        },
+    )
+    assert confirm.status_code == 200
+    assert confirm.json()["intent"]["name"] == "action_confirm"
+    assert confirm.json()["tool_events"][0]["status"] == "completed"
+    assert len(store.list_contents(limit=10)) == 1
+    assert store.get_proposed_action(action_id)["status"] == "consumed"
+
+    # Replaying the same confirmation must not create a second content row.
+    replay = client.post(
+        "/api/agent/chat",
+        json={
+            "message": "\u597d\u7684",
+            "thread_id": thread_id,
+            "provider": "siliconflow",
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+        },
+    )
+    assert replay.status_code == 200
+    assert len(store.list_contents(limit=10)) == 1
+
+
+def test_chat_write_records_the_consumed_capability_as_its_idempotency_key(
+    client, store, fake_chat_factory
+):
+    """The chat lane's request identity is the consumed ``proposed_actions.id``.
+
+    Without that binding the write would run unguarded, so a keyed replay could
+    not return the original result. Asserting the ledger row carries the action id
+    is what proves the key reached the service layer.
+    """
+    tool_args = {"topic": "ledger binding topic", "content_type": "xiaohongshu"}
+    thread_id = "thread-ledger-binding"
+    fake_chat_factory.tool_mode = True
+    fake_chat_factory.tool_call_spec = {"name": "create_content", "args": tool_args}
+
+    proposal = client.post(
+        "/api/agent/chat",
+        json={
+            "message": "\u5199\u4e00\u7bc7\u5c0f\u7ea2\u4e66\u7b14\u8bb0",
+            "thread_id": thread_id,
+            "provider": "siliconflow",
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+        },
+    )
+    action_id = proposal.json()["tool_events"][0]["action_id"]
+
+    confirm = client.post(
+        "/api/agent/chat",
+        json={
+            "message": "\u597d\u7684",
+            "thread_id": thread_id,
+            "provider": "siliconflow",
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+        },
+    )
+    assert confirm.status_code == 200
+    assert len(store.list_contents(limit=10)) == 1
+
+    record = store.get_idempotency_record(scope="content.create", key=action_id)
+    assert record is not None
+    assert record["status"] == "completed"
+    assert record["result"]["content_id"] == store.list_contents(limit=10)[0]["id"]
+
+
+def test_read_only_chat_tool_writes_no_ledger_row(client, store, fake_chat_factory):
+    """Read tools consume no capability, so they must stay unkeyed."""
+    fake_chat_factory.tool_mode = True
+    fake_chat_factory.tool_call_spec = {"name": "view_calendar", "args": {"days": 7}}
+
+    response = client.post(
+        "/api/agent/chat",
+        json={
+            "message": "\u770b\u4e0b\u65e5\u5386",
+            "thread_id": "thread-readonly-ledger",
+            "provider": "siliconflow",
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+        },
+    )
+
+    assert response.status_code == 200
+    with store.engine.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM idempotency_records")).scalar_one() == 0
+
+
+def test_calendar_route_idempotency_key_returns_one_event(client, store):
+    content_id = store.save_content(
+        GeneratedContent(
+            content="calendar body",
+            title="calendar",
+            tags=[],
+            content_type=ContentType.XIAOHONGSHU,
+        ),
+        style="casual",
+    )
+    payload = {
+        "content_id": content_id,
+        "platform": "xiaohongshu",
+        "scheduled_date": (datetime.now().date() + timedelta(days=3)).isoformat(),
+    }
+    headers = {"Idempotency-Key": "cal-route-1"}
+
+    first = client.post("/api/calendar/events", json=payload, headers=headers)
+    second = client.post("/api/calendar/events", json=payload, headers=headers)
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert first.json()["event_id"] == second.json()["event_id"]
+    with store.engine.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM calendar_events")).scalar_one() == 1
+
+
+def test_calendar_route_without_a_key_keeps_creating_events(client, store):
+    """Same-slot rescheduling is legitimate, so an unkeyed repeat must still write."""
+    content_id = store.save_content(
+        GeneratedContent(
+            content="calendar body",
+            title="calendar",
+            tags=[],
+            content_type=ContentType.XIAOHONGSHU,
+        ),
+        style="casual",
+    )
+    payload = {
+        "content_id": content_id,
+        "platform": "xiaohongshu",
+        "scheduled_date": (datetime.now().date() + timedelta(days=4)).isoformat(),
+    }
+
+    client.post("/api/calendar/events", json=payload)
+    client.post("/api/calendar/events", json=payload)
+
+    with store.engine.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM calendar_events")).scalar_one() == 2
+
+
+def test_calendar_route_rejects_a_key_reused_with_different_arguments(client, store):
+    content_id = store.save_content(
+        GeneratedContent(
+            content="calendar body",
+            title="calendar",
+            tags=[],
+            content_type=ContentType.XIAOHONGSHU,
+        ),
+        style="casual",
+    )
+    headers = {"Idempotency-Key": "cal-route-conflict"}
+    base_date = datetime.now().date() + timedelta(days=5)
+
+    first = client.post(
+        "/api/calendar/events",
+        json={
+            "content_id": content_id,
+            "platform": "xiaohongshu",
+            "scheduled_date": base_date.isoformat(),
+        },
+        headers=headers,
+    )
+    assert first.status_code == 201
+
+    conflict = client.post(
+        "/api/calendar/events",
+        json={
+            "content_id": content_id,
+            "platform": "weibo",
+            "scheduled_date": base_date.isoformat(),
+        },
+        headers=headers,
+    )
+
+    # Returning the first result here would silently discard the second request.
+    assert conflict.status_code == 422
+    with store.engine.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM calendar_events")).scalar_one() == 1
+
+
+def test_expired_capability_denies_chat_confirmation_write(client, store, fake_chat_factory):
+    tool_args = {"topic": "expiring topic", "content_type": "xiaohongshu"}
+    thread_id = "thread-capability-expired"
+    fake_chat_factory.tool_mode = True
+    fake_chat_factory.tool_call_spec = {"name": "create_content", "args": tool_args}
+    client.post(
+        "/api/agent/chat",
+        json={
+            "message": "\u5199\u4e00\u7bc7\u5c0f\u7ea2\u4e66\u7b14\u8bb0",
+            "thread_id": thread_id,
+            "provider": "siliconflow",
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+        },
+    )
+    assert store.list_contents(limit=10) == []
+    with store.engine.begin() as connection:
+        connection.execute(
+            text("UPDATE proposed_actions SET expires_at = :past WHERE thread_id = :thread"),
+            {"past": datetime.now() - timedelta(seconds=5), "thread": thread_id},
+        )
+
+    confirm = client.post(
+        "/api/agent/chat",
+        json={
+            "message": "\u597d\u7684",
+            "thread_id": thread_id,
+            "provider": "siliconflow",
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+        },
+    )
+
+    assert confirm.status_code == 200
+    # The stale approval is not executable and no content row exists.
+    assert store.list_contents(limit=10) == []
+
+
+def test_legacy_transcript_proposal_denies_chat_write_end_to_end(
+    client, store, fake_chat_factory
+):
+    """A Phase 0 thread has a `proposed` tool event but no durable capability.
+
+    Confirming it must fail closed through the whole stack. The policy-layer
+    tests hand-bind ``action_id=None``; this drives a real chat turn so that
+    handing the transcript fallback an action id, or letting it outrank the
+    durable lookup, is caught here.
+    """
+    thread_id = "thread-legacy-no-capability"
+    tool_args = {"topic": "legacy proposal topic", "content_type": "xiaohongshu"}
+    store.upsert_agent_thread(
+        thread_id,
+        title="legacy",
+        provider="siliconflow",
+        model="Qwen/Qwen2.5-7B-Instruct",
+    )
+    store.save_agent_message(
+        thread_id=thread_id,
+        role="assistant",
+        content="Please confirm this proposal.",
+        provider="siliconflow",
+        model="Qwen/Qwen2.5-7B-Instruct",
+        intent={"name": "content_create"},
+        tool_events=[
+            {
+                "name": "create_content",
+                "args": tool_args,
+                "output": "proposal",
+                "status": "proposed",
+                "attempt": 1,
+                "duration_ms": 1,
+            }
+        ],
+    )
+    # The Phase 0 transcript shape carries no durable row.
+    with store.engine.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM proposed_actions")).scalar_one() == 0
+
+    fake_chat_factory.tool_mode = True
+    fake_chat_factory.tool_call_spec = {"name": "create_content", "args": tool_args}
+
+    confirm = client.post(
+        "/api/agent/chat",
+        json={
+            "message": "\u597d\u7684",
+            "thread_id": thread_id,
+            "provider": "siliconflow",
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+        },
+    )
+
+    assert confirm.status_code == 200
+    event = confirm.json()["tool_events"][0]
+    assert event["status"] == "failed"
+    assert "no durable confirmed capability" in event["output"]
+    # The real side effect count is what matters: no content, and no capability
+    # was minted to make the legacy proposal retroactively executable.
+    assert store.list_contents(limit=10) == []
+    with store.engine.connect() as connection:
+        assert connection.execute(text("SELECT count(*) FROM proposed_actions")).scalar_one() == 0
 
 
 def test_research_heavy_create_returns_studio_suggestion(client, fake_chat_factory):

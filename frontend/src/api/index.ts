@@ -31,17 +31,6 @@ export function clearAuthToken() {
   window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY)
 }
 
-export function withAuthQuery(url: string) {
-  const token = getAuthToken()
-  if (!token) return url
-
-  const parsed = new URL(url, window.location.origin)
-  parsed.searchParams.set('access_token', token)
-  return parsed.origin === window.location.origin
-    ? `${parsed.pathname}${parsed.search}${parsed.hash}`
-    : parsed.toString()
-}
-
 api.interceptors.request.use(config => {
   const token = getAuthToken()
   if (token) {

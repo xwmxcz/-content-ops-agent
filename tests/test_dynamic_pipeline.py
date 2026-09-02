@@ -327,6 +327,40 @@ def test_sse_stream_resumes_from_last_event_id(store, planner_llm):
 
 
 @pytest.mark.asyncio
+async def test_pipeline_reports_failed_when_failure_wins_final_save_race(
+    store,
+    planner_llm,
+    monkeypatch,
+):
+    plan_json = json.dumps([
+        {"index": 1, "agent_id": "writer", "description": "Draft", "instruction": "go", "inputs_from": []},
+    ])
+    planner_llm.queue(plan_json, "null")
+    pipeline, _ = _make_pipeline(store, planner_llm, scripted={"writer": "final text"})
+
+    def fail_instead_of_complete(run_id, **kwargs):
+        transitioned = store.transition_run_and_append_event(
+            run_id,
+            expected_statuses={"running"},
+            new_status="failed",
+            event_type="run_failed",
+            payload={"error": "worker lost"},
+            error="worker lost",
+        )
+        assert transitioned is not None
+        return None
+
+    monkeypatch.setattr(store, "complete_run_with_content", fail_instead_of_complete)
+    response = await pipeline.run(_request())
+
+    assert response.status == "failed"
+    assert response.error == "worker lost"
+    assert response.saved_content_id is None
+    assert store.list_contents(status="agent_final") == []
+    assert store.list_run_events(response.run_id)[-1]["event_type"] == "run_failed"
+
+
+@pytest.mark.asyncio
 async def test_pipeline_observes_cancellation_at_step_boundary(store, planner_llm):
     """DELETE /api/agent/runs/{id} flips status to 'cancelled'; the running
     pipeline must notice that at the next step boundary and stop scheduling
@@ -347,7 +381,13 @@ async def test_pipeline_observes_cancellation_at_step_boundary(store, planner_ll
     async def cancel_after_first(*args, **kwargs):
         result = await original_run(*args, **kwargs)
         if len(runner.calls) == 1:
-            store.update_run(run_id, status="cancelled")
+            store.transition_run_and_append_event(
+                run_id,
+                expected_statuses={"running"},
+                new_status="cancelled",
+                event_type="run_cancelled",
+                payload={"run_id": run_id},
+            )
         return result
 
     runner.run = cancel_after_first  # type: ignore[assignment]

@@ -1,7 +1,7 @@
 import shutil
 from pathlib import Path as FilePath
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, status
 
 from src.api.dependencies import get_litellm_client, get_store
 from src.api.schemas.content import (
@@ -18,6 +18,11 @@ from src.api.services import content_service
 from src.llm.litellm_client import LLMConfigurationError, LLMGenerationError, LiteLLMClient
 from src.storage import ContentStore
 from src.utils import config
+from src.utils.idempotency import (
+    DuplicateRequestInFlight,
+    IdempotencyKeyConflict,
+    request_key,
+)
 
 
 router = APIRouter()
@@ -61,15 +66,24 @@ def delete_content(content_id: int = Path(..., gt=0), store: ContentStore = Depe
 @router.post("/generate", response_model=GenerateResponse, status_code=status.HTTP_201_CREATED)
 async def generate_content(
     request: GenerateRequest,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     store: ContentStore = Depends(get_store),
     llm: LiteLLMClient = Depends(get_litellm_client),
 ) -> dict:
     try:
-        content_id, generated, provider, model = await content_service.generate_content(request, llm, store)
+        with request_key(idempotency_key):
+            content_id, generated, provider, model = await content_service.generate_content(request, llm, store)
     except LLMConfigurationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except LLMGenerationError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    except DuplicateRequestInFlight as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except IdempotencyKeyConflict as exc:
+        # Literal 422: `HTTP_422_UNPROCESSABLE_ENTITY` is deprecated on Starlette
+        # 1.6 while `HTTP_422_UNPROCESSABLE_CONTENT` is absent on the older
+        # versions that `fastapi>=0.115` still allows.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return {
@@ -90,17 +104,24 @@ async def generate_content(
 @router.post("/refine", response_model=GenerateResponse, status_code=status.HTTP_201_CREATED)
 async def refine_content(
     request: RefineRequest,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     store: ContentStore = Depends(get_store),
     llm: LiteLLMClient = Depends(get_litellm_client),
 ) -> dict:
     try:
-        content_id, refined, provider, model = await content_service.refine_content(request, llm, store)
+        with request_key(idempotency_key):
+            content_id, refined, provider, model = await content_service.refine_content(request, llm, store)
     except LLMConfigurationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except LLMGenerationError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except DuplicateRequestInFlight as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except IdempotencyKeyConflict as exc:
+        # See the note on /generate: the 422 constant spelling is version-split.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     stored = store.get_content(content_id) or {}

@@ -7,6 +7,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 
 from src.api.schemas.agent import ChatRequest
 from src.api.services.chat_agent import ChatAgentService, _FROZEN_PROMPTS
+from src.api.services.intent_recognizer import IntentRecognizer
 from src.storage.file_memory import AGENT, FileMemory, USER
 
 
@@ -153,6 +154,61 @@ class TestFrozenSystemPrompt:
 
 
 class TestMemoryTools:
+    @pytest.mark.asyncio
+    async def test_server_policy_blocks_unconfirmed_memory_write(self, service, file_memory):
+        svc, factory = service
+        factory.next_tool_call = {
+            "name": "memory_add",
+            "args": {"target": "user", "text": "未经确认的偏好"},
+        }
+        response = await svc.chat(ChatRequest(message="记住我喜欢短文", thread_id="policy-memory"))
+        assert "未经确认的偏好" not in file_memory.load(USER)
+        assert response.tool_events[0].status == "proposed"
+        assert response.tool_events[0].args["text"] == "未经确认的偏好"
+
+    @pytest.mark.asyncio
+    async def test_now_does_not_bypass_exact_two_turn_confirmation(self, service, file_memory):
+        svc, factory = service
+        factory.next_tool_call = {
+            "name": "memory_add",
+            "args": {"target": "user", "text": "已明确确认的偏好"},
+        }
+        proposed = await svc.chat(ChatRequest(message="现在记住我喜欢短文", thread_id="policy-memory-now"))
+        assert "已明确确认的偏好" not in file_memory.load(USER)
+        assert proposed.tool_events[0].status == "proposed"
+
+        confirmed = await svc.chat(ChatRequest(message="好的", thread_id="policy-memory-now"))
+        assert confirmed.intent.name == "action_confirm"
+        assert confirmed.intent.slots["approved_args"] == {
+            "target": "user",
+            "text": "已明确确认的偏好",
+        }
+        assert "已明确确认的偏好" in file_memory.load(USER)
+        assert confirmed.tool_events[0].status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_llm_misclassification_of_rejection_cannot_execute_memory_write(self, service, file_memory):
+        svc, factory = service
+        args = {"target": "user", "text": "UNAUTHORIZED"}
+        factory.next_tool_call = {"name": "memory_add", "args": args}
+        proposed = await svc.chat(ChatRequest(message="记住这个偏好", thread_id="policy-reject"))
+        assert proposed.tool_events[0].status == "proposed"
+        assert "UNAUTHORIZED" not in file_memory.load(USER)
+
+        class RejectAsConfirmModel:
+            async def ainvoke(self, messages):
+                return AIMessage(content='{"name":"action_confirm","confidence":0.99,"slots":{}}')
+
+        svc.intent_recognizer = IntentRecognizer(lambda *unused: RejectAsConfirmModel())
+        rejected = await svc.chat(ChatRequest(
+            message="No, I have not approved that proposal and need more time",
+            thread_id="policy-reject",
+        ))
+        assert rejected.intent.name == "unknown"
+        assert rejected.intent.allowed_tools == []
+        assert "UNAUTHORIZED" not in file_memory.load(USER)
+        assert rejected.tool_events[0].status == "failed"
+
     def test_tool_names_swapped(self, service):
         svc, _ = service
         tools = svc._build_tools("claude", "m", 0.7, 1024)

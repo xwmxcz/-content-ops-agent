@@ -1,5 +1,10 @@
 import os
 
+# Runtime defaults are deliberately production/fail-closed. Tests opt into the
+# compatibility profile explicitly before importing application configuration.
+os.environ.setdefault("APP_ENV", "test")
+os.environ.setdefault("SCHEMA_MANAGEMENT", "create")
+
 import pytest
 
 from src.utils import config

@@ -62,9 +62,9 @@ export function usePipelineStream(handlers: PipelineStreamHandlers) {
     }
   }
 
-  function subscribe(runId: string) {
+  async function subscribe(runId: string) {
     close()
-    const source = new EventSource(pipelineStreamUrl(runId))
+    const source = new EventSource(pipelineStreamUrl(runId), { withCredentials: true })
     eventSource = source
 
     source.addEventListener('plan_ready', event => {

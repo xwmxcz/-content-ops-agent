@@ -4,18 +4,24 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.api.request_context import RequestContextMiddleware
 from src.api.routes import agent, auth, calendar, content, health, jobs, media, memory, models, publish, stats
-from src.api.security import AuthMiddleware
+from src.api.security import AuthMiddleware, HttpsEnforcementMiddleware
 from src.utils import config
+from src.utils.structured_logging import configure_logging
+
+
+configure_logging(config.LOG_LEVEL)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Build the DB schema once at startup. Per-task ContentStore instances in the
-    # job runner and pipeline worker then run with initialize_schema=False, so the
-    # create_all / ALTER DDL no longer executes on every job.
+    # Production startup is fail-closed and validation-only: migrations are a
+    # separate deployment step. Explicit development/test profiles may retain
+    # create_all for a fresh local database.
     from src.api.dependencies import get_store
 
+    config.validate_runtime()
     get_store()
     yield
 
@@ -28,6 +34,8 @@ app = FastAPI(
 )
 
 app.add_middleware(AuthMiddleware)
+app.add_middleware(RequestContextMiddleware)
+app.add_middleware(HttpsEnforcementMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.CORS_ORIGINS,

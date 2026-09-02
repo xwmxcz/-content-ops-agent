@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, status
 
 from src.api.dependencies import get_publish_service, get_store
 from src.api.schemas.publish import (
@@ -11,9 +11,15 @@ from src.api.schemas.publish import (
     XiaohongshuLoginStatusResponse,
     XiaohongshuPublishRequest,
 )
-from src.api.services.publish_service import PublicationValidationError, PublishService
+from src.api.services.publish_service import PublicationValidationError, PublishService, _NO_IDEMPOTENCY_KEY
 from src.jobs.queue import JobCapacityError, JobQueueError, create_and_enqueue_job
 from src.storage import ContentStore
+from src.utils.idempotency import (
+    SCOPE_PUBLICATION_CREATE,
+    DuplicateRequestInFlight,
+    IdempotencyKeyConflict,
+    idempotent_write,
+)
 
 
 router = APIRouter()
@@ -35,8 +41,16 @@ def create_xiaohongshu_publication(
     background_tasks: BackgroundTasks,
     publish_service: PublishService = Depends(get_publish_service),
     store: ContentStore = Depends(get_store),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> dict:
-    return _enqueue_publication(request, background_tasks, publish_service, store, require_future=False)
+    return _enqueue_publication(
+        request,
+        background_tasks,
+        publish_service,
+        store,
+        require_future=False,
+        idempotency_key=idempotency_key,
+    )
 
 
 @router.post("/xiaohongshu/schedule", response_model=PublishActionResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -45,8 +59,16 @@ def schedule_xiaohongshu_publication(
     background_tasks: BackgroundTasks,
     publish_service: PublishService = Depends(get_publish_service),
     store: ContentStore = Depends(get_store),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> dict:
-    return _enqueue_publication(request, background_tasks, publish_service, store, require_future=True)
+    return _enqueue_publication(
+        request,
+        background_tasks,
+        publish_service,
+        store,
+        require_future=True,
+        idempotency_key=idempotency_key,
+    )
 
 
 @router.get("/{publication_id}", response_model=PublicationResponse)
@@ -71,13 +93,14 @@ def _enqueue_publication(
     store: ContentStore,
     *,
     require_future: bool,
+    idempotency_key: str | None = None,
 ) -> dict:
     if require_future and not request.scheduled_at:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="scheduled_at is required")
     if require_future and request.scheduled_at and _is_past(request.scheduled_at):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="scheduled_at must be in the future")
 
-    try:
+    def create_and_enqueue() -> dict:
         publication = publish_service.create_publication_request(
             content_id=request.content_id,
             publish_type=request.publish_type,
@@ -89,12 +112,30 @@ def _enqueue_publication(
             visibility=request.visibility,
             is_original=request.is_original,
             status="queued",
+            idempotency_key=idempotency_key if idempotency_key is not None else _NO_IDEMPOTENCY_KEY,
         )
         job = create_and_enqueue_job(
             "publish_xiaohongshu",
             {"publication_id": publication["id"]},
             store,
             background_tasks,
+        )
+        return {"publication": publication, "job_id": job["id"]}
+
+    try:
+        # Keyed at the create boundary because a retried POST would otherwise mint
+        # a second publication row with a new id, and the execute-level key is
+        # derived from that id — so it could not recognize the duplicate.
+        return idempotent_write(
+            store,
+            scope=SCOPE_PUBLICATION_CREATE,
+            key=idempotency_key,
+            args={
+                "content_id": request.content_id,
+                "publish_type": request.publish_type,
+                "scheduled_at": request.scheduled_at.isoformat() if request.scheduled_at else None,
+            },
+            write=create_and_enqueue,
         )
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -104,8 +145,13 @@ def _enqueue_publication(
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
     except JobQueueError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
-
-    return {"publication": publication, "job_id": job["id"]}
+    except DuplicateRequestInFlight as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except IdempotencyKeyConflict as exc:
+        # 422 as a literal: Starlette 1.6 deprecates HTTP_422_UNPROCESSABLE_ENTITY
+        # while HTTP_422_UNPROCESSABLE_CONTENT is absent on older versions that
+        # fastapi>=0.115 still permits.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _is_past(value: datetime) -> bool:

@@ -1,4 +1,9 @@
+import ipaddress
+import math
 import os
+from collections import Counter
+from urllib.parse import unquote, urlsplit
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -6,6 +11,18 @@ load_dotenv()
 
 class Config:
     """应用配置"""
+
+    # Runtime profile. Backward-compatible schema creation and disabled auth are
+    # available only in the explicit development/test profiles. Production is
+    # validated fail-closed during API/worker startup.
+    # Omission is production, not development. Local compatibility must be an
+    # explicit APP_ENV=development/test choice (the checked-in env examples do
+    # this), so direct image/Gunicorn/server.py entrypoints also fail closed.
+    APP_ENV = os.getenv("APP_ENV", "production").lower()
+    SCHEMA_MANAGEMENT = os.getenv(
+        "SCHEMA_MANAGEMENT",
+        "create" if APP_ENV in {"development", "test"} else "validate",
+    ).lower()
 
     # LLM Provider Settings
     LLM_PROVIDER = os.getenv("LLM_PROVIDER", "claude").lower()  # claude, siliconflow, deepseek, moonshot
@@ -37,6 +54,9 @@ class Config:
 
     # Chat Agent
     CHAT_PLAN_ENABLED = os.getenv("CHAT_PLAN_ENABLED", "true").lower() == "true"
+    # A confirmed write capability is short-lived: an idle thread resumed later
+    # must re-propose rather than execute a stale approval.
+    ACTION_CAPABILITY_TTL_SECONDS = int(os.getenv("ACTION_CAPABILITY_TTL_SECONDS", "900"))
 
     # Authentication
     AUTH_ENABLED = os.getenv("AUTH_ENABLED", "false").lower() == "true"
@@ -44,6 +64,10 @@ class Config:
     AUTH_PASSWORD = os.getenv("AUTH_PASSWORD", "")
     AUTH_SECRET_KEY = os.getenv("AUTH_SECRET_KEY", "")
     AUTH_TOKEN_EXPIRE_MINUTES = int(os.getenv("AUTH_TOKEN_EXPIRE_MINUTES", "1440"))
+    AUTH_RESOURCE_TICKET_SECONDS = int(
+        os.getenv("AUTH_RESOURCE_TICKET_SECONDS", os.getenv("AUTH_STREAM_TICKET_SECONDS", "45"))
+    )
+    AUTH_MEDIA_TICKET_SECONDS = int(os.getenv("AUTH_MEDIA_TICKET_SECONDS", "300"))
 
     # Database
     DATABASE_URL = os.getenv(
@@ -60,6 +84,11 @@ class Config:
     JOB_TIMEOUT_SECONDS = int(os.getenv("JOB_TIMEOUT_SECONDS", "300"))
     REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     MAX_PROVIDER_INFLIGHT_JOBS = int(os.getenv("MAX_PROVIDER_INFLIGHT_JOBS", "8"))
+    
+    # Job retry settings
+    JOB_MAX_RETRIES = int(os.getenv("JOB_MAX_RETRIES", "5"))
+    JOB_RETRY_INITIAL_DELAY_SECONDS = int(os.getenv("JOB_RETRY_INITIAL_DELAY_SECONDS", "30"))
+    JOB_RETRY_MAX_DELAY_SECONDS = int(os.getenv("JOB_RETRY_MAX_DELAY_SECONDS", "480"))  # 8 minutes
 
     # Media and MCP integration
     MEDIA_STORAGE_ROOT = os.getenv("MEDIA_STORAGE_ROOT", "data/media")
@@ -85,8 +114,8 @@ class Config:
     CONTEXT_COMPRESS_TRIGGER_MESSAGES = int(os.getenv("CONTEXT_COMPRESS_TRIGGER_MESSAGES", "30"))
     CONTEXT_COMPRESS_KEEP_HEAD = int(os.getenv("CONTEXT_COMPRESS_KEEP_HEAD", "4"))
     CONTEXT_COMPRESS_KEEP_TAIL = int(os.getenv("CONTEXT_COMPRESS_KEEP_TAIL", "8"))
-    # Memory curator: when a thread is closed, an auxiliary LLM proposes
-    # add/replace/remove operations on MEMORY.md / USER.md and applies them.
+    # Memory curator is proposal-only. Thread deletion never invokes it and
+    # only confirmed Chat memory tools may apply changes.
     MEMORY_CURATOR_ENABLED = os.getenv("MEMORY_CURATOR_ENABLED", "true").lower() == "true"
     MEMORY_CURATOR_MIN_MESSAGES = int(os.getenv("MEMORY_CURATOR_MIN_MESSAGES", "4"))
     MEMORY_CURATOR_MAX_ACTIONS = int(os.getenv("MEMORY_CURATOR_MAX_ACTIONS", "6"))
@@ -97,11 +126,79 @@ class Config:
     API_HOST = os.getenv("API_HOST", "0.0.0.0")
     API_PORT = int(os.getenv("API_PORT", "8000"))
     API_RELOAD = os.getenv("API_RELOAD", "False").lower() == "true"
+    ENFORCE_HTTPS = os.getenv(
+        "ENFORCE_HTTPS", "true" if APP_ENV == "production" else "false"
+    ).lower() == "true"
     CORS_ORIGINS = [
         origin.strip()
         for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
         if origin.strip()
     ]
+    # X-Forwarded-Proto is accepted only from these explicitly configured
+    # proxy source networks. Empty by default: direct entrypoints cannot trust a
+    # client-supplied forwarding header. Compose sets its private bridge range.
+    TRUSTED_PROXY_CIDRS = [
+        value.strip()
+        for value in os.getenv("TRUSTED_PROXY_CIDRS", "").split(",")
+        if value.strip()
+    ]
+
+    @classmethod
+    def validate_runtime(cls) -> bool:
+        """Validate process-wide deployment settings before serving work."""
+        if cls.APP_ENV not in {"development", "test", "production"}:
+            raise ValueError("APP_ENV must be development, test, or production")
+        if cls.SCHEMA_MANAGEMENT not in {"create", "validate"}:
+            raise ValueError("SCHEMA_MANAGEMENT must be create or validate")
+
+        if cls.APP_ENV != "production":
+            return True
+
+        errors: list[str] = []
+        if cls.SCHEMA_MANAGEMENT != "validate":
+            errors.append("production requires SCHEMA_MANAGEMENT=validate")
+        if not cls.AUTH_ENABLED:
+            errors.append("production requires AUTH_ENABLED=true")
+        if _is_unsafe_secret(cls.AUTH_PASSWORD, minimum=12, minimum_unique=8):
+            errors.append("production requires a high-entropy AUTH_PASSWORD of at least 12 characters")
+        if _is_unsafe_secret(cls.AUTH_SECRET_KEY, minimum=32, minimum_unique=12):
+            errors.append("production requires a high-entropy AUTH_SECRET_KEY of at least 32 characters")
+        if cls.DEBUG:
+            errors.append("production requires DEBUG=false")
+        if not cls.ENFORCE_HTTPS:
+            errors.append("production requires ENFORCE_HTTPS=true")
+        if not cls.CORS_ORIGINS or any(
+            origin == "*"
+            or not origin.lower().startswith("https://")
+            or "localhost" in origin.lower()
+            or "127.0.0.1" in origin
+            for origin in cls.CORS_ORIGINS
+        ):
+            errors.append("production CORS_ORIGINS must contain only explicit HTTPS non-local origins")
+        invalid_proxy_cidrs = []
+        for value in cls.TRUSTED_PROXY_CIDRS:
+            try:
+                ipaddress.ip_network(value, strict=False)
+            except ValueError:
+                invalid_proxy_cidrs.append(value)
+        if invalid_proxy_cidrs:
+            errors.append("TRUSTED_PROXY_CIDRS contains invalid IP networks")
+        database_password = _url_password(cls.DATABASE_URL)
+        redis_password = _url_password(cls.REDIS_URL) if cls.JOB_QUEUE_MODE == "rq" else None
+        if _url_uses_weak_secret(cls.DATABASE_URL, {"content_ops", "postgres", "password"}):
+            errors.append("production DATABASE_URL must include a high-entropy password of at least 16 characters")
+        if cls.JOB_QUEUE_MODE == "rq" and _url_uses_weak_secret(
+            cls.REDIS_URL, {"content_ops", "redis", "password"}
+        ):
+            errors.append("production REDIS_URL must include a high-entropy password of at least 16 characters")
+        secrets = [cls.AUTH_PASSWORD, cls.AUTH_SECRET_KEY, database_password, redis_password]
+        normalized = [secret for secret in secrets if secret]
+        if len(normalized) != len(set(normalized)):
+            errors.append("production authentication, signing, database, and Redis secrets must be distinct")
+
+        if errors:
+            raise ValueError("Unsafe production configuration: " + "; ".join(errors))
+        return True
 
     @classmethod
     def validate(cls, provider: str | None = None):
@@ -230,6 +327,42 @@ class Config:
                 return None
             return base if base.endswith("/v1") else f"{base}/v1"
         return None
+
+
+def _is_unsafe_secret(
+    value: str | None,
+    *,
+    minimum: int = 1,
+    minimum_unique: int = 6,
+) -> bool:
+    secret = value or ""
+    lowered = secret.lower()
+    markers = ("change_me", "changeme", "replace_me", "replace-with", "example", "password")
+    if (
+        len(secret) < minimum
+        or len(set(secret)) < minimum_unique
+        or lowered in {"content_ops", "postgres", "redis"}
+        or any(marker in lowered for marker in markers)
+    ):
+        return True
+    frequencies = Counter(secret)
+    entropy = -sum((count / len(secret)) * math.log2(count / len(secret)) for count in frequencies.values())
+    return entropy < 2.5
+
+
+def _url_password(value: str) -> str | None:
+    try:
+        raw_password = urlsplit(value).password
+        return unquote(raw_password) if raw_password else None
+    except ValueError:
+        return None
+
+
+def _url_uses_weak_secret(value: str, examples: set[str]) -> bool:
+    password = _url_password(value)
+    return _is_unsafe_secret(password, minimum=16, minimum_unique=10) or bool(
+        password and password.lower() in examples
+    )
 
 
 config = Config()

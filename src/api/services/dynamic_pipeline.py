@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import time
 import uuid
@@ -42,11 +43,12 @@ from src.api.services.sub_agents import (
     estimate_cost,
 )
 from src.llm.litellm_client import LiteLLMClient, LLMConfigurationError
-from src.models import GeneratedContent
 from src.storage import ContentStore
 from src.utils import config
+from src.utils.structured_logging import log_event
 
 
+logger = logging.getLogger(__name__)
 MAX_STEPS = 8
 MAX_REVISIONS = 2
 WORKSPACE_RESEARCH_TOOLS = ("search_history", "view_content", "list_recent_contents")
@@ -132,12 +134,27 @@ class DynamicPipeline:
         try:
             plan = await self._make_plan(request, provider, request.model)
         except Exception as exc:
-            import sys
-            print(f"[planner] fallback to default plan: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+            log_event(
+                logger,
+                "planner_fallback",
+                level=logging.WARNING,
+                run_id=run_id,
+                provider=provider,
+                model=litellm_model,
+                reason="exception",
+                error_class=exc.__class__.__name__,
+            )
             plan = self._default_plan(request)
         if not plan:
-            import sys
-            print("[planner] empty plan returned → fallback to default", file=sys.stderr, flush=True)
+            log_event(
+                logger,
+                "planner_fallback",
+                level=logging.WARNING,
+                run_id=run_id,
+                provider=provider,
+                model=litellm_model,
+                reason="empty_plan",
+            )
             plan = self._default_plan(request)
         await self._emit(run_id, "plan_ready", {"plan": [s.model_dump() for s in plan]})
 
@@ -265,6 +282,13 @@ class DynamicPipeline:
                     continue
             i += 1
 
+        # Reconcile once more after the final sub-agent returns. Cancellation may
+        # arrive while that call is in flight; do not start the final content
+        # save when the terminal cancel transition has already won.
+        if not cancelled:
+            current = self.store.get_run(run_id)
+            cancelled = bool(current and current.get("status") == "cancelled")
+
         if cancelled:
             self.store.update_run(
                 run_id,
@@ -273,7 +297,6 @@ class DynamicPipeline:
                 total_prompt_tokens=total_prompt,
                 total_completion_tokens=total_completion,
                 total_cost=total_cost,
-                status="cancelled",
             )
             # The DELETE endpoint already emitted run_cancelled, so we do NOT emit
             # again here — duplicate terminal events would only confuse SSE clients.
@@ -300,36 +323,21 @@ class DynamicPipeline:
 
         final_text = self._select_final_output(plan, outputs) or request.topic
 
-        saved_content_id = None
+        content_fields = None
         if request.save_final and final_text.strip():
-            generated = GeneratedContent(
-                title=self._derive_title(final_text, request.topic),
-                content=final_text,
-                tags=request.keywords or [],
-                content_type=request.content_type,
-                metadata={"pipeline_run_id": run_id},
-            )
-            saved_content_id = self.store.save_content(
-                generated,
-                llm_provider=provider,
-                model_name=litellm_model,
-                style=request.style.value,
-                keywords=request.keywords,
-                token_usage=total_prompt + total_completion,
-                cost_estimate=total_cost,
-            )
-            self.store.update_content(saved_content_id, status="agent_final")
-
-        self.store.update_run(
-            run_id,
-            plan=[s.model_dump() for s in plan],
-            revision_count=revisions,
-            total_prompt_tokens=total_prompt,
-            total_completion_tokens=total_completion,
-            total_cost=total_cost,
-            saved_content_id=saved_content_id,
-            status="completed",
-        )
+            content_fields = {
+                "title": self._derive_title(final_text, request.topic),
+                "content": final_text,
+                "content_type": request.content_type.value,
+                "style": request.style.value,
+                "keywords": json.dumps(request.keywords or [], ensure_ascii=False),
+                "tags": json.dumps(request.keywords or [], ensure_ascii=False),
+                "status": "agent_final",
+                "llm_provider": provider,
+                "model_name": litellm_model,
+                "token_usage": total_prompt + total_completion,
+                "cost_estimate": total_cost,
+            }
 
         final = AgentFinalContent(
             title=self._derive_title(final_text, request.topic),
@@ -343,7 +351,7 @@ class DynamicPipeline:
             thread_id=thread_id,
             plan=plan,
             final_content=final,
-            saved_content_id=saved_content_id,
+            saved_content_id=None,
             provider=provider,
             model=litellm_model,
             total_prompt_tokens=total_prompt,
@@ -352,7 +360,43 @@ class DynamicPipeline:
             revision_count=revisions,
             status="completed",
         )
-        await self._emit(run_id, "run_complete", response.model_dump())
+        transitioned = self.store.complete_run_with_content(
+            run_id,
+            payload=response.model_dump(),
+            content_fields=content_fields,
+            plan=[s.model_dump() for s in plan],
+            revision_count=revisions,
+            total_prompt_tokens=total_prompt,
+            total_completion_tokens=total_completion,
+            total_cost=total_cost,
+        )
+        if transitioned is None:
+            # A cancel/fail transition may win while final content is being
+            # prepared. Never report a synthetic completed response when the
+            # atomic completion transaction did not commit.
+            current = self.store.get_run(run_id)
+            current_status = current.get("status") if current else None
+            if current_status in {"failed", "cancelled"}:
+                response.status = current_status
+                response.error = current.get("error")
+            else:
+                response.status = "failed"
+                response.error = "Run completion did not commit"
+        else:
+            response.saved_content_id = transitioned.get("saved_content_id")
+        log_event(
+            logger,
+            "pipeline_run_finished",
+            run_id=run_id,
+            thread_id=thread_id,
+            provider=provider,
+            model=litellm_model,
+            status=response.status,
+            prompt_tokens=total_prompt,
+            completion_tokens=total_completion,
+            cost=round(total_cost, 8),
+            revision_count=revisions,
+        )
         return response
 
     # -- planner ------------------------------------------------------------
@@ -466,12 +510,22 @@ class DynamicPipeline:
         try:
             payload = json.loads(cleaned)
         except json.JSONDecodeError as exc:
-            import sys
-            print(f"[planner] JSON parse failed: {exc}; raw[:200]={cleaned[:200]!r}", file=sys.stderr, flush=True)
+            log_event(
+                logger,
+                "planner_parse_failed",
+                level=logging.WARNING,
+                error_class=exc.__class__.__name__,
+                reason="invalid_json",
+            )
             return []
         if not isinstance(payload, list):
-            import sys
-            print(f"[planner] payload not a list, got {type(payload).__name__}: {str(payload)[:200]!r}", file=sys.stderr, flush=True)
+            log_event(
+                logger,
+                "planner_parse_failed",
+                level=logging.WARNING,
+                reason="payload_not_list",
+                payload_type=type(payload).__name__,
+            )
             return []
         return self._coerce_plan(payload)
 

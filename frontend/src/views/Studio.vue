@@ -811,7 +811,7 @@ async function runDynamic() {
   try {
     const handle = await createPipelineRun(payload)
     runId.value = handle.run_id
-    subscribe(handle.run_id)
+    await subscribe(handle.run_id)
   } catch (error) {
     running.value = false
     status.value = 'failed'
@@ -820,8 +820,8 @@ async function runDynamic() {
   }
 }
 
-function subscribe(id: string) {
-  pipelineStream.subscribe(id)
+async function subscribe(id: string) {
+  await pipelineStream.subscribe(id)
 }
 
 async function runWorkflow() {

@@ -6,7 +6,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-API-0f766e)
 ![Vue](https://img.shields.io/badge/Vue_3-Frontend-42b883)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2563eb)
-![Tests](https://img.shields.io/badge/tests-133%20passing-0f7a4f)
+![Tests](https://img.shields.io/badge/tests-PostgreSQL%20integration-0f7a4f)
 
 AI Content Ops Agent 是一个围绕内容运营工作流构建的 AI 全栈原型。它把
 FastAPI、Vue 3、LiteLLM、LangChain 工具调用、SQLAlchemy 存储、Docker
@@ -96,20 +96,7 @@ LLM_PROVIDER=deepseek
 DEEPSEEK_API_KEY=your_deepseek_key_here
 ```
 
-可选但推荐：
-
-```env
-# 稳定的 researcher / fact-checker 网页搜索
-SERPER_API_KEY=
-TAVILY_API_KEY=
-BRAVE_SEARCH_API_KEY=
-
-# 登录保护
-AUTH_ENABLED=true
-AUTH_USERNAME=admin
-AUTH_PASSWORD=change_me
-AUTH_SECRET_KEY=replace_with_a_long_random_secret
-```
+必须替换 `.env.docker.example` 中全部 `CHANGE_ME` 凭据。Docker 默认使用 fail-closed 生产模式，要求启用鉴权、独立强随机的管理员/签名/PostgreSQL/Redis 密钥、迁移校验和明确的 HTTPS 公网来源；网页搜索 key 仍是可选项。对外暴露前必须在前端之前配置 TLS。详见 [`docs/PHASE0_SECURITY_AND_MIGRATIONS.md`](docs/PHASE0_SECURITY_AND_MIGRATIONS.md)。
 
 3. 启动完整栈：
 
@@ -133,8 +120,9 @@ Docker 模式会启动：
 | 服务 | 作用 |
 | --- | --- |
 | `frontend` | Nginx 托管 Vue 构建产物，并把 `/api` 代理到 API 服务。 |
-| `api` | FastAPI 应用。 |
-| `worker` | RQ worker，处理长耗时任务。 |
+| `migrate` | 一次性 Alembic 升级；成功后 API/worker 才启动。 |
+| `api` | FastAPI 应用；生产启动时校验配置和 schema revision。 |
+| `worker` | RQ worker；仅校验 schema revision，不执行 DDL。 |
 | `postgres` | PostgreSQL 16 数据库。 |
 | `redis` | RQ 使用的 Redis。 |
 
@@ -167,7 +155,7 @@ docker compose up -d --build frontend
 | --- | --- |
 | 调用真实 LLM | 至少填写一个 provider key，例如 `DEEPSEEK_API_KEY`、`ANTHROPIC_API_KEY`、`SILICONFLOW_API_KEY`、`MOONSHOT_API_KEY` 或 `NEWAPI_API_KEY`。 |
 | 稳定网页调研 | 填写 `SERPER_API_KEY`、`TAVILY_API_KEY` 或 `BRAVE_SEARCH_API_KEY` 任意一个。不填时会退回无 key HTML 搜索，可能被搜索引擎反爬。 |
-| 登录保护 | 设置 `AUTH_ENABLED=true`，并填写 `AUTH_USERNAME`、`AUTH_PASSWORD` 和强随机 `AUTH_SECRET_KEY`。 |
+| 生产安全 | 启用鉴权；配置相互独立的管理员/签名/PostgreSQL/Redis 强密钥；设置 `SCHEMA_MANAGEMENT=validate` 与准确的 HTTPS `CORS_ORIGINS`。不安全默认值会拒绝启动。 |
 | 小红书发布演示 | 保持或修改 `XHS_MCP_URL`，指向本机 MCP 服务。 |
 
 Docker 会自动读取根目录 `.env`。如果是宿主机开发，复制 `.env.postgres-rq`，
@@ -211,7 +199,7 @@ cd ..
 docker compose up -d postgres
 ```
 
-默认的 `DATABASE_URL` 已指向该实例。
+默认的 `DATABASE_URL` 已指向该实例。宿主机本地开发必须通过 `.env.example` 或环境变量显式设置 `APP_ENV=development`、`SCHEMA_MANAGEMENT=create`；未设置 `APP_ENV` 时默认进入 fail-closed production，而不是自动开放开发模式。
 
 ### 默认模式：进程内任务
 
@@ -297,11 +285,12 @@ MEMORY_CURATOR_ENABLED=true
 
 ## 验证命令
 
-后端：
+后端（测试 fixture 会删除并重建表，只能连接一次性 PostgreSQL 测试库）：
 
 ```bash
+export TEST_DATABASE_URL='postgresql+psycopg://user:password@localhost:5432/content_ops_test'
 python -m pytest tests -q
-python -m compileall src tests examples
+python -m compileall src tests migrations examples
 ```
 
 前端：

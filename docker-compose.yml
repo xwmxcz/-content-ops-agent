@@ -1,4 +1,6 @@
 x-app-env: &app-env
+  APP_ENV: ${APP_ENV:-production}
+  SCHEMA_MANAGEMENT: ${SCHEMA_MANAGEMENT:-validate}
   LLM_PROVIDER: ${LLM_PROVIDER:-deepseek}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
   SILICONFLOW_API_KEY: ${SILICONFLOW_API_KEY:-}
@@ -18,11 +20,13 @@ x-app-env: &app-env
   TEMPERATURE: ${TEMPERATURE:-0.7}
   LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-120}
   CHAT_PLAN_ENABLED: ${CHAT_PLAN_ENABLED:-true}
-  AUTH_ENABLED: ${AUTH_ENABLED:-false}
+  AUTH_ENABLED: ${AUTH_ENABLED:-true}
   AUTH_USERNAME: ${AUTH_USERNAME:-admin}
   AUTH_PASSWORD: ${AUTH_PASSWORD:-}
   AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:-}
   AUTH_TOKEN_EXPIRE_MINUTES: ${AUTH_TOKEN_EXPIRE_MINUTES:-1440}
+  AUTH_RESOURCE_TICKET_SECONDS: ${AUTH_RESOURCE_TICKET_SECONDS:-45}
+  AUTH_MEDIA_TICKET_SECONDS: ${AUTH_MEDIA_TICKET_SECONDS:-300}
   DATABASE_URL: postgresql+psycopg://content_ops:${POSTGRES_PASSWORD:-content_ops}@postgres:5432/content_ops
   DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
   DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-20}
@@ -59,9 +63,28 @@ x-app-env: &app-env
   API_HOST: 0.0.0.0
   API_PORT: 8000
   API_RELOAD: false
-  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8088,http://localhost:8000}
+  ENFORCE_HTTPS: ${ENFORCE_HTTPS:-true}
+  # Only the private Docker bridge may assert X-Forwarded-Proto to the API.
+  TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-172.16.0.0/12}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8088}
 
 services:
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    command:
+      - "sh"
+      - "-c"
+      - "python -c 'from src.utils import config; config.validate_runtime()' && alembic upgrade head"
+    restart: "no"
+    environment:
+      <<: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   api:
     build:
       context: .
@@ -72,12 +95,14 @@ services:
     environment:
       <<: *app-env
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - app_data:/app/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -103,6 +128,8 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -114,8 +141,10 @@ services:
       dockerfile: Dockerfile
       target: frontend
     restart: unless-stopped
+    # Loopback-only by default. A host TLS reverse proxy must expose this
+    # service publicly and forward X-Forwarded-Proto: https.
     ports:
-      - "${FRONTEND_PORT:-8088}:80"
+      - "127.0.0.1:${FRONTEND_PORT:-8088}:80"
     depends_on:
       api:
         condition: service_healthy

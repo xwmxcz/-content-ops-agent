@@ -10,6 +10,41 @@ from src.models import ContentStyle, ContentType, GeneratedContent
 from src.storage import ContentStore
 from src.tools.prompt_templates import PromptTemplates
 from src.utils import config
+from src.utils.idempotency import (
+    SCOPE_CONTENT_CREATE,
+    SCOPE_CONTENT_REFINE,
+    current_request_key,
+    idempotent_write_async,
+)
+
+
+def _serialize_content_result(
+    content_id: int,
+    result: GeneratedContent,
+    provider: str,
+    model: str,
+) -> dict:
+    """JSON-safe form of the return tuple, so a retry can replay it verbatim."""
+    return {
+        "content_id": content_id,
+        "provider": provider,
+        "model": model,
+        "content": result.content,
+        "title": result.title,
+        "tags": list(result.tags or []),
+        "content_type": result.content_type.value if result.content_type else None,
+    }
+
+
+def _deserialize_content_result(payload: dict) -> tuple[int, GeneratedContent, str, str]:
+    content_type = payload.get("content_type")
+    generated = GeneratedContent(
+        content=payload["content"],
+        title=payload.get("title"),
+        tags=payload.get("tags") or [],
+        content_type=ContentType(content_type) if content_type else None,
+    )
+    return payload["content_id"], generated, payload["provider"], payload["model"]
 
 
 def resolve_provider(provider: str | None) -> str:
@@ -84,24 +119,47 @@ async def generate_content(
     store: ContentStore,
 ) -> tuple[int, GeneratedContent, str, str]:
     provider = resolve_provider(request.provider)
-    system_prompt, user_prompt = build_generation_prompts(request)
-    content_text = await llm.generate_from_prompts(
-        provider=provider,
-        model=request.model,
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        temperature=request.temperature,
-        max_tokens=request.max_tokens,
+    model_name = config.get_litellm_model(provider, request.model)
+
+    async def _write() -> dict:
+        system_prompt, user_prompt = build_generation_prompts(request)
+        content_text = await llm.generate_from_prompts(
+            provider=provider,
+            model=request.model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+        )
+        result = parse_generated_content(content_text, request.content_type)
+        content_id = store.save_content(
+            result,
+            llm_provider=provider,
+            model_name=model_name,
+            style=request.style.value,
+            keywords=request.keywords,
+        )
+        return _serialize_content_result(content_id, result, provider, model_name)
+
+    # Keyed on request identity, never on topic/style/keywords: asking for another
+    # draft of the same topic is a normal request, and a payload-derived key would
+    # return the first draft instead of generating a new one.
+    payload = await idempotent_write_async(
+        store,
+        scope=SCOPE_CONTENT_CREATE,
+        key=current_request_key(),
+        args={
+            "topic": request.topic,
+            "content_type": request.content_type.value if request.content_type else None,
+            "style": request.style.value if request.style else None,
+            "keywords": list(request.keywords or []),
+            "length": request.length,
+            "provider": provider,
+            "model": model_name,
+        },
+        write=_write,
     )
-    result = parse_generated_content(content_text, request.content_type)
-    content_id = store.save_content(
-        result,
-        llm_provider=provider,
-        model_name=config.get_litellm_model(provider, request.model),
-        style=request.style.value,
-        keywords=request.keywords,
-    )
-    return content_id, result, provider, config.get_litellm_model(provider, request.model)
+    return _deserialize_content_result(payload)
 
 
 async def refine_content(
@@ -114,45 +172,68 @@ async def refine_content(
         raise LookupError(f"Content {request.content_id} was not found")
 
     provider = resolve_provider(request.provider)
+    model_name = config.get_litellm_model(provider, request.model)
     style_instruction = ""
     if request.new_style:
         style_instruction = f" Rewrite it in a {request.new_style.value} style."
     instruction = request.instruction or "Improve clarity, structure, and readability."
 
-    system_prompt = "You are a professional content editor. Preserve the core message while improving the draft."
-    user_prompt = (
-        f"Instruction: {instruction}{style_instruction}\n\n"
-        f"Original content:\n{original['content']}\n\n"
-        "Return only the refined content."
+    async def _write() -> dict:
+        system_prompt = "You are a professional content editor. Preserve the core message while improving the draft."
+        user_prompt = (
+            f"Instruction: {instruction}{style_instruction}\n\n"
+            f"Original content:\n{original['content']}\n\n"
+            "Return only the refined content."
+        )
+        refined_text = await llm.generate_from_prompts(
+            provider=provider,
+            model=request.model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+        )
+        refined = GeneratedContent(
+            content=refined_text,
+            title=original.get("title"),
+            tags=original.get("tags"),
+            content_type=ContentType(original["content_type"]),
+            created_at=datetime.now(),
+        )
+        new_id = store.save_content(
+            refined,
+            llm_provider=provider,
+            model_name=model_name,
+            parent_id=request.content_id,
+            style=original.get("style", "casual"),
+            keywords=original.get("keywords", []),
+        )
+        update_fields = {"status": "refined"}
+        if request.new_style:
+            update_fields["style"] = request.new_style.value
+        store.update_content(new_id, **update_fields)
+        return _serialize_content_result(new_id, refined, provider, model_name)
+
+    # The insert and the status update are separate transactions, so the key spans
+    # the whole logical refine: a retry must not re-insert a row whose status
+    # update already landed, and must not leave a new row stuck at "draft".
+    # Keyed on request identity because the default instruction literal is shared
+    # by every no-instruction refine and chained same-instruction refinement of one
+    # parent is legitimate.
+    payload = await idempotent_write_async(
+        store,
+        scope=SCOPE_CONTENT_REFINE,
+        key=current_request_key(),
+        args={
+            "content_id": request.content_id,
+            "instruction": instruction,
+            "new_style": request.new_style.value if request.new_style else None,
+            "provider": provider,
+            "model": model_name,
+        },
+        write=_write,
     )
-    refined_text = await llm.generate_from_prompts(
-        provider=provider,
-        model=request.model,
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        temperature=request.temperature,
-        max_tokens=request.max_tokens,
-    )
-    refined = GeneratedContent(
-        content=refined_text,
-        title=original.get("title"),
-        tags=original.get("tags"),
-        content_type=ContentType(original["content_type"]),
-        created_at=datetime.now(),
-    )
-    new_id = store.save_content(
-        refined,
-        llm_provider=provider,
-        model_name=config.get_litellm_model(provider, request.model),
-        parent_id=request.content_id,
-        style=original.get("style", "casual"),
-        keywords=original.get("keywords", []),
-    )
-    update_fields = {"status": "refined"}
-    if request.new_style:
-        update_fields["style"] = request.new_style.value
-    store.update_content(new_id, **update_fields)
-    return new_id, refined, provider, config.get_litellm_model(provider, request.model)
+    return _deserialize_content_result(payload)
 
 
 async def generate_titles(request: TitleRequest, llm: LiteLLMClient, store: ContentStore) -> str:

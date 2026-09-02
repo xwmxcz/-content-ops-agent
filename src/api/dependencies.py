@@ -10,13 +10,24 @@ from src.api.services.publish_service import PublishService, create_publish_serv
 from src.llm.litellm_client import LiteLLMClient
 from src.api.services.chat_agent import ChatAgentService
 from src.storage import ContentStore
+from src.storage.schema import assert_schema_current
 from src.storage.file_memory import FileMemory
 from src.utils import config
 
 
 @lru_cache(maxsize=1)
 def get_store() -> ContentStore:
-    return ContentStore(database_url=config.DATABASE_URL)
+    store = ContentStore(
+        database_url=config.DATABASE_URL,
+        initialize_schema=config.SCHEMA_MANAGEMENT == "create",
+    )
+    if config.SCHEMA_MANAGEMENT == "validate":
+        try:
+            assert_schema_current(store.engine)
+        except Exception:
+            store.engine.dispose()
+            raise
+    return store
 
 
 @lru_cache(maxsize=1)

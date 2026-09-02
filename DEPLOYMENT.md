@@ -1,6 +1,8 @@
-# Production Concurrency Notes
+# Production Deployment and Concurrency
 
-This project now supports a production-style topology for higher concurrency:
+> Phase 0 security and database rollout details: [`docs/PHASE0_SECURITY_AND_MIGRATIONS.md`](docs/PHASE0_SECURITY_AND_MIGRATIONS.md).
+
+This project supports a production-style topology for higher concurrency:
 
 - FastAPI handles validation, job creation, and lightweight reads.
 - PostgreSQL stores content, agent history, calendar data, and job state.
@@ -13,12 +15,14 @@ This project now supports a production-style topology for higher concurrency:
 docker compose up -d postgres redis
 ```
 
-Use these environment values for a local production-like run:
+Use an **explicit development profile** for a local run. The example passwords are rejected in production:
 
 ```bash
+APP_ENV=development
+SCHEMA_MANAGEMENT=create
 DATABASE_URL=postgresql+psycopg://content_ops:content_ops@localhost:5432/content_ops
 JOB_QUEUE_MODE=rq
-REDIS_URL=redis://localhost:6379/0
+REDIS_URL=redis://:content_ops@localhost:6379/0
 JOB_QUEUE_NAME=content_ops
 MAX_PROVIDER_INFLIGHT_JOBS=8
 ```
@@ -28,13 +32,14 @@ MAX_PROVIDER_INFLIGHT_JOBS=8
 Development fallback, no Redis required:
 
 ```bash
-JOB_QUEUE_MODE=background python server.py
+APP_ENV=development SCHEMA_MANAGEMENT=create JOB_QUEUE_MODE=background python server.py
 ```
 
-Production-style API process (matches what the `api` container runs):
+Production API startup is validation-only. Run migrations first and provide all fail-closed settings from `.env.docker.example`:
 
 ```bash
-gunicorn -c gunicorn.conf.py src.api.main:app
+alembic upgrade head
+APP_ENV=production SCHEMA_MANAGEMENT=validate gunicorn -c gunicorn.conf.py src.api.main:app
 ```
 
 `gunicorn.conf.py` sets the UvicornWorker class, binds `API_HOST:API_PORT`, and
@@ -61,9 +66,7 @@ On Windows, `worker.py` automatically uses RQ `SimpleWorker` because the default
 docker compose up -d --build
 ```
 
-Brings up frontend (`:8088`), api (`:8000`, gunicorn + UvicornWorker), worker,
-postgres, and redis. Every service uses `restart: unless-stopped`, and the
-application containers run as a non-root `app` user.
+Brings up a one-shot Alembic migration job, frontend (`:8088`), API (`127.0.0.1:8000`, gunicorn + UvicornWorker), worker, PostgreSQL, and Redis. Copy `.env.docker.example` to `.env` and replace every `CHANGE_ME` value first. The API/worker refuse unsafe defaults in the default production profile. Application containers run as a non-root `app` user.
 
 Readiness vs liveness: `GET /api/health/ready` returns 200 only when the database
 (and Redis, in `rq` mode) are reachable, 503 otherwise — use it for orchestrator
@@ -72,11 +75,10 @@ what the compose healthcheck polls.
 
 ## Security and Tuning
 
-- **Passwords**: `POSTGRES_PASSWORD` and `REDIS_PASSWORD` default to `content_ops`
-  for a zero-config local bring-up. Set them in `.env` for any shared or
-  internet-facing deployment; compose wires them into `DATABASE_URL` and
-  `REDIS_URL` automatically. When running the half-local flow above with custom
-  passwords, use the same values in your local connection strings.
+- **Fail-closed settings**: omitted `APP_ENV` defaults to production for direct application/image entrypoints. Production requires enabled auth, strong independent admin/signing/PostgreSQL/Redis secrets, `DEBUG=false`, `SCHEMA_MANAGEMENT=validate`, and an exact public HTTPS CORS origin. Local compatibility requires explicit `APP_ENV=development`. Defaults exist only so `docker compose up postgres redis` remains useful locally; migrate/API/worker production startup rejects unsafe settings.
+- **Migrations**: the one-shot `migrate` service validates production settings before DDL and must complete before API/worker. Existing pre-Alembic databases require backup, schema verification, `alembic stamp 0001_baseline`, then `alembic upgrade head`; never stamp an unverified schema. Startup checks revision plus ORM type/nullability/foreign-key/index/constraint drift.
+- **Browser resource auth**: reusable bearer values are header-only. In production, login sets a `HttpOnly; Secure; SameSite=Strict` cookie that is accepted only for pipeline-stream and numeric media-file paths; it never authorizes general REST APIs. Exact-path `access_ticket` query credentials are development/test compatibility only and are rejected in production. The production Nginx edge rejects `access_ticket`/`access_token` query parameters before proxying and logs `$uri` without query-bearing request targets or Referer.
+- **TLS proxy trust**: `X-Forwarded-Proto` is ignored unless the immediate peer is in `TRUSTED_PROXY_CIDRS`; direct entrypoints default to no trusted forwarding proxies. Compose limits trust to its private bridge. Keep this range minimal and make the outer TLS proxy overwrite client forwarding headers.
 - **Exposed ports**: Postgres (`5432`) and Redis (`6379`) bind to `127.0.0.1`
   only, so they are reachable from the host for debugging but not over the
   network. Drop the `ports` mappings entirely and use

@@ -1,6 +1,7 @@
+from copy import deepcopy
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 from src.models import ContentStyle, ContentType
 
@@ -26,6 +27,7 @@ ChatIntentName = Literal[
     "schedule_propose",
     "schedule_commit",
     "memory_update",
+    "action_confirm",
     "smalltalk",
     "clarify",
     "unknown",
@@ -33,6 +35,18 @@ ChatIntentName = Literal[
 
 
 class ChatIntent(BaseModel):
+    # Server-owned, request-local authorization evidence. PrivateAttr is never
+    # accepted from model JSON, persisted in intent slots, or serialized to API
+    # clients/history. The executor authorizes against the private deep copy,
+    # not public ``slots``, so later slot mutation cannot change an approval.
+    _server_confirmation_validated: bool = PrivateAttr(default=False)
+    _server_approved_tool_name: str | None = PrivateAttr(default=None)
+    _server_approved_args: dict[str, Any] | None = PrivateAttr(default=None)
+    # Durable one-time capability for the approved call. Argument evidence alone
+    # is request-local and replayable within a turn; the executor additionally
+    # requires this id so a confirmed write is consumable exactly once.
+    _server_approved_action_id: str | None = PrivateAttr(default=None)
+
     name: ChatIntentName
     confidence: float = Field(0.0, ge=0.0, le=1.0)
     slots: dict[str, Any] = Field(default_factory=dict)
@@ -41,6 +55,23 @@ class ChatIntent(BaseModel):
     route_surface: Literal["chat", "studio", "publish", "none"] = "chat"
     route_reason: Optional[str] = None
     clarification: Optional[str] = None
+
+    def bind_server_approval(
+        self,
+        tool_name: str,
+        args: dict[str, Any],
+        action_id: str | None = None,
+    ) -> None:
+        """Attach immutable-by-convention authorization evidence for this request.
+
+        ``action_id`` references a confirmed ``proposed_actions`` row. Without it
+        the executor has argument evidence but no consumable capability, so the
+        write still fails closed.
+        """
+        self._server_approved_tool_name = tool_name
+        self._server_approved_args = deepcopy(args)
+        self._server_approved_action_id = action_id
+        self._server_confirmation_validated = True
 
 
 class PlanStep(BaseModel):
@@ -54,11 +85,14 @@ class ChatToolEvent(BaseModel):
     name: str
     args: dict[str, Any] = Field(default_factory=dict)
     output: str = ""
-    status: Literal["completed", "failed"] = "completed"
+    status: Literal["completed", "failed", "proposed"] = "completed"
     error: Optional[str] = None
     plan_step_index: Optional[int] = None
     attempt: int = 1
     duration_ms: int = 0
+    # Durable proposal id a later confirmation turn must reference. Display and
+    # correlation only; it is never accepted as authorization from a client.
+    action_id: Optional[str] = None
 
 
 class ChatResponse(BaseModel):
@@ -119,6 +153,31 @@ class AgentMessageResponse(BaseModel):
     plan: list[PlanStep] = Field(default_factory=list)
     status: str
     created_at: Optional[str] = None
+
+
+class ProposedActionCreate(BaseModel):
+    thread_id: str = Field(..., min_length=1, max_length=80)
+    tool_name: str = Field(..., min_length=1, max_length=80)
+    args: dict[str, Any] = Field(default_factory=dict)
+    impact_summary: Optional[str] = Field(default=None, max_length=500)
+
+
+class ProposedActionResponse(BaseModel):
+    id: str
+    thread_id: str
+    requester: Optional[str] = None
+    tool_name: str
+    args: dict[str, Any] = Field(default_factory=dict)
+    args_hash: str
+    impact_summary: str
+    status: Literal["proposed", "confirmed", "consumed", "cancelled", "expired"]
+    proposing_message_id: Optional[int] = None
+    consuming_message_id: Optional[int] = None
+    created_at: Optional[str] = None
+    expires_at: Optional[str] = None
+    confirmed_at: Optional[str] = None
+    consumed_at: Optional[str] = None
+    cancelled_at: Optional[str] = None
 
 
 class AgentRunRequest(BaseModel):
