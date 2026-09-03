@@ -1,6 +1,7 @@
 # Production Deployment and Concurrency
 
-> Phase 0 security and database rollout details: [`docs/PHASE0_SECURITY_AND_MIGRATIONS.md`](docs/PHASE0_SECURITY_AND_MIGRATIONS.md).
+> **Phase 0** security and database rollout: [`docs/PHASE0_SECURITY_AND_MIGRATIONS.md`](docs/PHASE0_SECURITY_AND_MIGRATIONS.md)  
+> **Phase 1 & 2** operations, monitoring, and maintenance: [`docs/PRODUCTION_OPERATIONS.md`](docs/PRODUCTION_OPERATIONS.md)
 
 This project supports a production-style topology for higher concurrency:
 
@@ -88,3 +89,62 @@ what the compose healthcheck polls.
 - **Volume ownership**: the app runs as non-root. An `app_data` volume created by
   an older root-owned image will not be writable — recreate it with
   `docker compose down -v` so the `app` user can write `/app/data`.
+
+## Reliability and Observability Features
+
+### Idempotency (Phase 1)
+
+Clients can include an `Idempotency-Key` header to prevent duplicate operations:
+
+```bash
+curl -X POST http://localhost:8000/api/content \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Idempotency-Key: req_$(uuidgen)" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "My Content", "body": "..."}'
+```
+
+Retrying with the same key returns the original result without re-executing. Supported operations:
+- Content creation and refinement
+- Calendar commits
+- Publication execution
+- Memory mutations
+
+### Automatic Job Retry (Phase 1)
+
+Transient failures (network timeouts, rate limits, 5xx errors) are automatically retried with exponential backoff:
+- Maximum retries: `JOB_MAX_RETRIES` (default: 5)
+- Initial delay: `JOB_RETRY_INITIAL_DELAY_SECONDS` (default: 30)
+- Maximum delay: `JOB_RETRY_MAX_DELAY_SECONDS` (default: 480)
+
+Permanent errors (validation failures, 4xx errors, configuration issues) are not retried.
+
+### Monitoring (Phase 2)
+
+**Prometheus metrics** are exposed at `GET /api/metrics`:
+- Idempotency tracking (claims, replays, conflicts)
+- Job retry statistics (by error type)
+- Capability lifecycle (proposals, consumptions, expirations)
+- Publication metrics (success rate, latency)
+- HTTP request metrics (rate, latency, errors)
+
+**Structured logs** emit JSON events for:
+- Idempotency operations
+- Job retries and failures
+- Capability lifecycle events
+
+See [`docs/PRODUCTION_OPERATIONS.md`](docs/PRODUCTION_OPERATIONS.md) for Prometheus setup, Grafana dashboards, alerting rules, and operational procedures.
+
+### Maintenance
+
+**Job cleanup** should run daily to archive old records:
+
+```bash
+# Preview what would be archived
+python3 -m src.jobs.cleanup --dry-run
+
+# Execute cleanup (30 days for completed, 7 days for failed)
+python3 -m src.jobs.cleanup --execute
+```
+
+Configure as a cron job or systemd timer for automated maintenance. See the operations guide for details.
