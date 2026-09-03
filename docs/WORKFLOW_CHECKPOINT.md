@@ -1,9 +1,9 @@
 # Workflow Checkpoint
 
-- Recorded at: `2024-09-03T00:15:00+08:00`
+- Recorded at: `2024-09-03T00:20:00+08:00`
 - Workflow: `report_driven_iterative_hardening_continuation`
-- Repository HEAD/current base: `5e94c4f` (was `97be2f4`, now includes P1-01/02/03 + Phase 2 commits + documentation)
-- Status: **Phase 1 + Phase 2 complete and verified green; Production documentation added**
+- Repository HEAD/current base: `063ace8` (was `97be2f4`, now includes Phase 1/2 implementation + comprehensive documentation)
+- Status: **Phase 1 + Phase 2 complete, verified green, and fully documented for production**
 - Completed phases:
   - `Phase 0` — Recover and Remediate (repository-local scope, partial)
   - `Phase 1` — Reliability and Recovery (P1-01/02/03) — **COMPLETE**
@@ -19,8 +19,9 @@
 - Git commits:
   - `9c2b951` — Phase 1: P1-01 Persistent capability + P1-02 Business idempotency + P1-03 Automatic retry
   - `97be2f4` — Phase 2: Observability & Monitoring
-  - `5e94c4f` — Documentation: Phase 2 checkpoint update (current HEAD)
-- Working tree: **Modified** (production operations documentation added, pending commit)
+  - `5e94c4f` — Documentation: Phase 2 checkpoint update
+  - `063ace8` — Documentation: Production operations guide (current HEAD)
+- Working tree: **Clean** (all changes committed and pushed to origin/main)
 - Main implementation record: `docs/IMPROVEMENT_LOG.md`
 
 ## ⚠️ Read this before resuming
@@ -175,10 +176,20 @@ Phase 1 core reliability infrastructure is **finished**. Phase 2 observability a
 
 ## Resume notes
 
-1. Working tree has **uncommitted documentation changes** (PRODUCTION_OPERATIONS.md added, DEPLOYMENT.md updated).
+1. Working tree is **clean** (all Phase 1 + Phase 2 implementation and documentation committed and pushed to origin/main at `063ace8`).
 2. The suite is **green** at `300 passed`. All P1-01/02/03 and P2-01/02/03/04 implementations are complete and verified.
-3. **New documentation**: `docs/PRODUCTION_OPERATIONS.md` provides comprehensive operational guide for Phase 1/2 features (monitoring, maintenance, troubleshooting).
+3. **Production documentation complete**: `docs/PRODUCTION_OPERATIONS.md` provides comprehensive operational guide including:
+   - Prometheus metrics setup and Grafana dashboard configuration
+   - Structured logging and log aggregation patterns
+   - Job cleanup maintenance procedures
+   - Idempotency, automatic retry, and capability system monitoring
+   - Troubleshooting guides for common operational issues
+   - Performance tuning recommendations
+   - Alerting rules and thresholds
 4. Run one pytest process at a time against the test database: the `store` fixture drops and recreates every table, so parallel runs corrupt each other and produce spurious `IntegrityError`.
 5. `alembic check` against `content_ops_test` reports "Target database is not up to date" because pytest builds that database with `create_all`. That is a test artifact, not drift. To check migrations, create a scratch database, run `upgrade head` against it, then `check`, then drop it.
 6. Alembic head is now `0007_job_archived_at`.
-7. Next steps: Commit documentation updates, then choose between Phase 0 external evidence gathering (Docker Compose runtime, browser/TLS testing, pre-Alembic migration rehearsal) or begin Phase 3 advanced hardening (P1-04 lease-based deduplication, P1-05 publication job refactor, P1-06 circuit breaker).
+7. **Next priority options**:
+   - **Phase 0 external evidence**: Docker Compose runtime verification, browser/TLS reverse-proxy testing, pre-Alembic migration rehearsal with real production snapshot
+   - **Phase 3 advanced hardening**: P1-04 (lease-based job recovery), P1-05 (publication job refactor), P1-06 (frontend testing + SSE resilience)
+   - **Production deployment**: System is production-ready with full operational documentation
