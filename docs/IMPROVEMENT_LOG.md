@@ -998,3 +998,134 @@ Phase 2 判定为**已验证通过**，全量测试 300 passed。
 - 考虑将 cleanup 改为后台 job（而非独立脚本）
 
 **下一阶段**：可以进入 Phase 3 或提交当前改动到 Git。
+
+---
+
+## P1-04 租约式作业去重与恢复（已验证通过）
+
+### 实施边界
+
+- 基线为 `HEAD=bce7004`（Phase 0 生产配置验证之后）。
+- 本轮完成 P1-04：job lease/heartbeat/reaper、`run_steps` checkpoint 恢复、取消传播。
+- 验证环境为 `pgserver` 自带的 PostgreSQL 16.2（`127.0.0.1:55432`，一次性实例）。原 `/tmp/pg16` 树已被清理，本轮从 `/mnt/data/venv/.../pgserver/pginstall/bin` 重新拉起。
+
+### 要解决的问题
+
+worker 被 SIGKILL、OOM 杀死或节点掉线时，进程内没有任何代码能运行清理逻辑。作业行永久停在 `running`：P1-03 的重试永远不会触发，因为重试的前提是有人把失败写进数据库，而死掉的进程写不了。唯一可观测的信号是"租约不再被续期"。
+
+### 实现内容
+
+#### 1. Job 租约
+
+**新增 migration `0008_job_lease_and_checkpoints.py`**（链在 `0007_job_archived_at` 之后）：
+- `worker_id` VARCHAR(255) NULL — 租约持有者身份
+- `lease_expires_at` DATETIME NULL — 租约到期时刻
+- `heartbeat_at` DATETIME NULL — 最后一次心跳
+- `INDEX ix_jobs_lease_expires_at (status, lease_expires_at)` — reaper 的扫描谓词
+
+**worker 身份**（`src/jobs/runner.py`）：`hostname-pid-uuid8`。只用 host+pid 不够——worker 重启后可能复用 PID，于是看起来像它从未持有过的那个租约的原主人；随机后缀让身份变成 per-process。
+
+**四个租约操作全部落在 ContentStore**（`acquire_job_lease` / `extend_job_lease` / `release_job_lease` / `reclaim_job_lease`）。每一个都是**单条带谓词的 UPDATE，按 rowcount 分支**，不是先读后写：read-then-write 会让两个 worker 都观察到空闲租约并双双继续，谓词必须留在 WHERE 子句里交给 PostgreSQL 裁决。
+
+**acquire 的成功条件**：租约无主、已由同一 worker 持有（同 worker 重试同一作业，可重入）、或已过期。过期租约之所以可窃取，恰恰是因为它的前主人可能已被 SIGKILL 且永远无法释放。
+
+**extend/release 都带 `worker_id` 谓词**：租约已被 reaper 回收、作业转给别人之后，慢 worker 必须*得知*租约丢失，而不是静默续期别人的租约，也不能在退出路径上清掉新主人的 claim。
+
+#### 2. Runner 集成
+
+**取租约在 `start_job` 之前**。反过来会留下一个 `running` 但无租约持有者的行，而 reaper 按"非空 expiry"扫描，认不出这种行是被遗弃的。
+
+**心跳与取消合并到一个 monitor task**（`_monitor_job_lease`）：一个轮询周期同时服务续约和取消检测，长任务无需配合改造。monitor 通过 `exec_task.cancel()` 把信号送进 in-flight 的 HTTP/LLM/tool await——没有这一步，作业会继续跑，并可能在别的 worker 已接管之后仍写回自己的结果。
+
+**租约丢失时不写任何终态**：reaper 已经把作业重新入队、可能已有新主人，此时写终态会覆盖新主人的工作。该 worker 直接退出。
+
+**`finally` 中释放租约**，且按 `worker_id` 收窄，因此租约已被回收的情况下是 no-op。失败路径同样释放——租约卡住会阻塞此后每一次重试。
+
+#### 3. Reaper
+
+**新增 `src/jobs/reaper.py`**：扫描 `status='running' AND lease_expires_at < now`，把作业退回 `queued`。
+
+**回收刻意不消耗重试次数**：worker 被驱逐不是作业错误，把它计入 `max_retries` 会让反复的基础设施抖动永久失败一个其实从未真正跑过的作业。
+
+**回收在 UPDATE 内重检过期**：扫描与写入之间，原 worker 可能恢复并完成了心跳，那种情况下作业必须留给它。
+
+**循环里逐次吞掉异常**：一次瞬时数据库错误不能杀死恢复循环，否则正是那场把作业搁住的故障，同时也停掉了恢复它们的机制。
+
+**CLI**：`--dry-run`（默认）/ `--execute` / `--loop`，与 `cleanup.py` 的开关形状一致。
+
+#### 4. run_steps checkpoint
+
+**新表 `run_steps`**，`UNIQUE(run_id, step_index)` 由 PostgreSQL 强制，外加 `INDEX (run_id, status)`（resume 查询按 run_id+status 过滤，唯一约束自带的索引服务不到）。
+
+**`get_resume_index` 返回最小的未完成索引**，因此某一步失败留下的空洞会被**重跑而不是跳过**。空 checkpoint 集合从 1 开始，匹配 planner 的 1-based 编号。
+
+**checkpoint 是 resume 机制，不是幂等机制**。它消除的是"结果已持久化却重跑"这个常见情况；它**不**使单个步骤可安全执行两次。写业务数据的步骤仍然走 P1-02 幂等账本——因为步骤自身 commit 与 checkpoint 写入之间的崩溃，会留下"已完成但未记录"的步骤，重试仍会再跑一次。这一点写进了 `src/jobs/checkpoint.py` 的模块 docstring。
+
+#### 5. Schema 启动校验
+
+`(status, lease_expires_at)`、`(run_id, status)` 两个索引与 `UNIQUE(run_id, step_index)` 加入 `REQUIRED_SCHEMA_INDEXES` / `REQUIRED_UNIQUE_CONSTRAINTS`。理由与既有条目一致：手工 stamp 到 head 的库可以缺索引/约束；reaper 的扫描无索引即退化为全表扫描，而恢复路径是负载下最先被饿死的东西。
+
+#### 6. Metrics
+
+新增 6 个 P1-04 指标：`job_lease_acquired_total`、`job_lease_conflicts_total`、`job_lease_lost_total`、`job_lease_reclaimed_total`、`job_checkpoints_saved_total`、`job_cancellations_total`。
+
+### 配置项
+
+```
+JOB_LEASE_DURATION_SECONDS      默认 300
+JOB_HEARTBEAT_INTERVAL_SECONDS  默认 30
+JOB_REAPER_INTERVAL_SECONDS     默认 60
+JOB_REAPER_BATCH_SIZE           默认 50
+```
+
+租约必须远大于心跳间隔：租约短于几个心跳周期时，一次慢数据库往返就会被看成 worker 死亡，作业在仍在运行时被回收。
+
+### 修改文件
+
+- **新增**：`migrations/versions/0008_job_lease_and_checkpoints.py`、`src/jobs/checkpoint.py`、`src/jobs/reaper.py`、`tests/jobs/test_job_lease.py`
+- **改动**：`src/storage/content_store.py`（`RunStep` 模型、Job 租约列、4 个租约操作 + 6 个 checkpoint 操作）、`src/jobs/runner.py`（worker 身份、租约生命周期、`_monitor_job_lease`）、`src/storage/schema.py`（校验清单）、`src/utils/config.py`（4 个配置项）、`src/utils/metrics.py`（6 个指标）、`tests/test_migrations.py`（head 断言 + 新 schema 对象覆盖）
+
+### 验证命令与结果
+
+```text
+PASS    一次性 PostgreSQL 16.2 全量 pytest
+        349 passed, 7 skipped in 96.47s
+        （基线 300 passed / 7 skipped；skip 数不变，无回归）
+
+PASS    pytest tests/jobs/test_job_lease.py -q
+        49 passed（目标 20+）
+
+PASS    pytest tests/test_migrations.py -q
+        4 passed
+
+PASS    全新 scratch 库 alembic upgrade head
+        0001_baseline -> ... -> 0008_job_lease_and_checkpoints
+PASS    alembic current => 0008_job_lease_and_checkpoints (head)
+PASS    alembic check（scratch 库升级后）=> No new upgrade operations detected
+PASS    alembic downgrade -1 => run_steps 与 3 个租约列均消失；再 upgrade 后恢复
+PASS    alembic upgrade 0007:0008 --sql => 3 ALTER + 1 CREATE TABLE + 2 CREATE INDEX
+
+PASS    create_all 路径校验
+        REQUIRED_SCHEMA_INDEXES / REQUIRED_UNIQUE_CONSTRAINTS 全部命中，无缺失
+
+PASS    python3 -m src.jobs.reaper --dry-run / --execute / --loop
+        空库 0 jobs；--loop 无 --execute 正确报错
+
+PASS    python3 -m compileall -q src tests migrations
+PASS    git diff --check
+PASS    python3 tests/standalone/test_production_validation.py => 7/7
+
+NOTE    prometheus_client 未安装，metrics 优雅降级为 NoOp（与 Phase 2 相同）
+```
+
+### 测试覆盖（49 tests）
+
+`TestLeaseAcquisition`(7) 含并发 8 路争抢仅一个赢家、过期租约可窃取、同 worker 可重入；`TestLeaseHeartbeat`(4) 含租约被窃后 extend 报告丢失；`TestLeaseRelease`(3) 含非持有者释放被拒；`TestExpiredLeaseDiscovery`(5) 含 completed 作业即使租约过期也不算被遗弃；`TestLeaseReclaim`(4) 含回收不消耗重试、租约仍活时拒绝回收；`TestReaperService`(5) 含 loop 可被 stop_event 停止；`TestCheckpoints`(11) 含空洞重跑而非跳过、running 不算完成、重复 checkpoint 不产生第二行；`TestRunnerLeaseIntegration`(8) 含租约丢失时不写作业状态、取消保持 cancelled、心跳在长任务中延长租约、被他人持有的作业不执行；`TestRetryInteraction`(2) 确认 P1-03 契约未变。
+
+### 残余风险
+
+1. **checkpoint 不是幂等替代品**：步骤 commit 与 checkpoint 写入之间崩溃 → 步骤已完成但未记录，重试会重跑。写业务数据的步骤必须继续依赖 P1-02 账本。
+2. **`_run_pipeline_job_async` 尚未接入 checkpoint**：本轮提供 checkpoint 基础设施与 store/service 层，DynamicPipeline 的分步接线未做（会改动 Phase 0 已审查的主路径，超出本任务边界）。当前 pipeline 失败仍从头重跑。
+3. **background 模式无独立队列**：reaper 回收后作业已回到 `queued`，但 background 模式下没有队列可推送，依赖下一次 enqueue 路径拾取。生产用 RQ 模式不受影响。
+4. **reaper 尚未挂进 API/worker 启动**：目前是 CLI（`--loop` 可常驻）。接入 lifespan 会改动启动路径，留待部署时决定用 sidecar 还是进程内 task。
+5. **心跳与租约时长的比例需按部署调**：默认 30s/300s（10 倍余量）。数据库延迟高的环境需同步调大租约。

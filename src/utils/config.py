@@ -90,6 +90,15 @@ class Config:
     JOB_RETRY_INITIAL_DELAY_SECONDS = int(os.getenv("JOB_RETRY_INITIAL_DELAY_SECONDS", "30"))
     JOB_RETRY_MAX_DELAY_SECONDS = int(os.getenv("JOB_RETRY_MAX_DELAY_SECONDS", "480"))  # 8 minutes
 
+    # Job lease settings (P1-04). The lease must outlive the heartbeat interval by
+    # a wide margin: a lease shorter than a few heartbeat periods lets one slow
+    # database round-trip look like a dead worker and get the job reclaimed while
+    # it is still running.
+    JOB_LEASE_DURATION_SECONDS = int(os.getenv("JOB_LEASE_DURATION_SECONDS", "300"))
+    JOB_HEARTBEAT_INTERVAL_SECONDS = int(os.getenv("JOB_HEARTBEAT_INTERVAL_SECONDS", "30"))
+    JOB_REAPER_INTERVAL_SECONDS = int(os.getenv("JOB_REAPER_INTERVAL_SECONDS", "60"))
+    JOB_REAPER_BATCH_SIZE = int(os.getenv("JOB_REAPER_BATCH_SIZE", "50"))
+
     # Media and MCP integration
     MEDIA_STORAGE_ROOT = os.getenv("MEDIA_STORAGE_ROOT", "data/media")
     MEDIA_MAX_IMAGE_COUNT = int(os.getenv("MEDIA_MAX_IMAGE_COUNT", "9"))

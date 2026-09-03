@@ -44,8 +44,28 @@ def test_alembic_upgrades_empty_postgres_to_current_schema(pg_engine):
         assert "archived_at" in job_columns
         job_indexes = {tuple(index.get("column_names") or []) for index in inspector.get_indexes("jobs")}
         assert ("archived_at",) in job_indexes
+        # P1-04 leases: an abandoned job is only recoverable by scanning for a
+        # lapsed lease, so both the columns and the sweep index must exist.
+        assert {"worker_id", "lease_expires_at", "heartbeat_at"} <= job_columns
+        assert ("status", "lease_expires_at") in job_indexes
+        # P1-04 checkpoints: UNIQUE(run_id, step_index) is what makes a repeated
+        # checkpoint write an upsert instead of a duplicate row.
+        step_constraints = inspector.get_unique_constraints("run_steps")
+        assert any(
+            item.get("name") == "uq_run_steps_run_index"
+            and tuple(item.get("column_names") or []) == ("run_id", "step_index")
+            for item in step_constraints
+        )
+        step_indexes = {
+            tuple(index.get("column_names") or [])
+            for index in inspector.get_indexes("run_steps")
+        }
+        assert ("run_id", "status") in step_indexes
         with pg_engine.connect() as connection:
-            assert MigrationContext.configure(connection).get_current_revision() == "0007_job_archived_at"
+            assert (
+                MigrationContext.configure(connection).get_current_revision()
+                == "0008_job_lease_and_checkpoints"
+            )
         assert_schema_current(pg_engine)
         # Metadata and the migration head must remain in sync; otherwise a
         # fresh production database can pass revision validation while missing

@@ -3,6 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import socket
+import uuid
+from contextlib import suppress
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -20,6 +24,17 @@ from src.utils.structured_logging import log_event, log_job_event
 
 
 logger = logging.getLogger(__name__)
+
+
+# Identifies this process as a lease holder. Host and PID alone are not enough:
+# a restarted worker can reuse a PID and would then look like the previous owner
+# of a lease it never took, so a random suffix makes the identity per-process.
+_WORKER_ID = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+
+
+def current_worker_id() -> str:
+    """Lease identity of this worker process."""
+    return _WORKER_ID
 
 
 def run_job(job_id: str, database_url: str | None = None) -> None:
@@ -91,10 +106,28 @@ async def run_job_async(job_id: str, store: ContentStore) -> None:
     if job["status"] not in {"queued", "failed"}:
         return
 
+    job_type = job["job_type"]
+    lease_duration = config.JOB_LEASE_DURATION_SECONDS
+    # P1-04: take the lease before marking the job running. The reverse order
+    # would leave a running row with no lease holder, which the reaper cannot
+    # recognise as abandoned because it sweeps on a non-null expiry.
+    if not store.acquire_job_lease(job_id, _WORKER_ID, lease_duration):
+        metrics.job_lease_conflicts_total.labels(job_type=job_type).inc()
+        log_event(
+            logger,
+            "job_lease_conflict",
+            job_id=job_id,
+            job_type=job_type,
+            worker_id=_WORKER_ID,
+        )
+        return
+    metrics.job_lease_acquired_total.labels(job_type=job_type).inc()
+
     attempts = int(job.get("attempts") or 0) + 1
     max_retries = int(job.get("max_retries") or config.JOB_MAX_RETRIES)
     job = store.start_job(job_id, attempts=attempts, progress=5)
     if not job:
+        store.release_job_lease(job_id, _WORKER_ID)
         return
     log_event(
         logger,
@@ -104,34 +137,114 @@ async def run_job_async(job_id: str, store: ContentStore) -> None:
         provider=job.get("provider"),
         model=job.get("model"),
         attempt=attempts,
+        worker_id=_WORKER_ID,
     )
     llm = create_litellm_client()
 
+    # The monitor both heartbeats the lease and watches for cancellation, so one
+    # poll interval serves both and long-running work does not need to cooperate.
+    monitor_state: dict[str, str | None] = {"reason": None}
+    exec_task = asyncio.ensure_future(_execute_job(job, llm, store))
+    monitor_task = asyncio.ensure_future(
+        _monitor_job_lease(job_id, job_type, store, exec_task, monitor_state)
+    )
+
     try:
-        result = await _execute_job(job, llm, store)
-    except (
-        LLMConfigurationError,
-        LLMGenerationError,
-        ValueError,
-        LookupError,
-        PipelineExecutionError,
-        PublicationValidationError,
-        McpClientError,
-    ) as exc:
-        if _is_cancelled(job_id, store):
+        try:
+            result = await exec_task
+        except asyncio.CancelledError:
+            reason = monitor_state.get("reason")
+            if reason == "lease_lost":
+                # The reaper already requeued this job and another worker may own
+                # it now. Writing a terminal state here would clobber that owner,
+                # so this worker exits without touching job state.
+                metrics.job_lease_lost_total.labels(job_type=job_type).inc()
+                log_event(
+                    logger,
+                    "job_lease_lost",
+                    level=logging.WARNING,
+                    job_id=job_id,
+                    job_type=job_type,
+                    worker_id=_WORKER_ID,
+                )
+                return
+            if reason == "cancelled":
+                metrics.job_cancellations_total.labels(job_type=job_type).inc()
+                log_event(
+                    logger,
+                    "job_cancelled",
+                    job_id=job_id,
+                    job_type=job_type,
+                    worker_id=_WORKER_ID,
+                )
+                return
+            raise
+        except (
+            LLMConfigurationError,
+            LLMGenerationError,
+            ValueError,
+            LookupError,
+            PipelineExecutionError,
+            PublicationValidationError,
+            McpClientError,
+        ) as exc:
+            if _is_cancelled(job_id, store):
+                return
+            _handle_job_error(job_id, exc, attempts, max_retries, store, job["job_type"])
+        except Exception as exc:
+            if _is_cancelled(job_id, store):
+                return
+            _handle_job_error(job_id, exc, attempts, max_retries, store, job["job_type"])
+        else:
+            if _is_cancelled(job_id, store):
+                return
+            store.update_job(job_id, status="completed", progress=100, result=result, error=None)
+            # P2-01: Log completion
+            log_job_event(logger, "completed", job_id, job_type=job["job_type"])
+            log_event(logger, "job_completed", job_id=job_id, job_type=job["job_type"])
+    finally:
+        monitor_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await monitor_task
+        # Scoped to this worker id, so a no-op when the lease was already reaped.
+        store.release_job_lease(job_id, _WORKER_ID)
+
+
+async def _monitor_job_lease(
+    job_id: str,
+    job_type: str,
+    store: ContentStore,
+    exec_task: "asyncio.Future[Any]",
+    state: dict[str, str | None],
+) -> None:
+    """Heartbeat the lease and propagate cancellation into the running job.
+
+    Cancelling ``exec_task`` is what carries a cancel or a lost lease into
+    in-flight HTTP/LLM/tool awaits; without it the job would keep running and
+    could still write its result after another worker took ownership.
+    """
+    interval = max(1, config.JOB_HEARTBEAT_INTERVAL_SECONDS)
+    lease_duration = config.JOB_LEASE_DURATION_SECONDS
+    while True:
+        await asyncio.sleep(interval)
+        if exec_task.done():
             return
-        _handle_job_error(job_id, exc, attempts, max_retries, store, job["job_type"])
-    except Exception as exc:
         if _is_cancelled(job_id, store):
+            state["reason"] = "cancelled"
+            exec_task.cancel()
             return
-        _handle_job_error(job_id, exc, attempts, max_retries, store, job["job_type"])
-    else:
-        if _is_cancelled(job_id, store):
+        if not store.extend_job_lease(job_id, _WORKER_ID, lease_duration):
+            state["reason"] = "lease_lost"
+            exec_task.cancel()
             return
-        store.update_job(job_id, status="completed", progress=100, result=result, error=None)
-        # P2-01: Log completion
-        log_job_event(logger, "completed", job_id, job_type=job["job_type"])
-        log_event(logger, "job_completed", job_id=job_id, job_type=job["job_type"])
+        log_event(
+            logger,
+            "job_lease_heartbeat",
+            level=logging.DEBUG,
+            job_id=job_id,
+            job_type=job_type,
+            worker_id=_WORKER_ID,
+        )
 
 
 def _is_cancelled(job_id: str, store: ContentStore) -> bool:

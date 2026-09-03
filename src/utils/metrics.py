@@ -105,6 +105,46 @@ job_completions_total = _create_counter(
 )
 
 # ============================================================================
+# Job Lease and Checkpoint Metrics (P1-04)
+# ============================================================================
+
+job_lease_acquired_total = _create_counter(
+    "job_lease_acquired_total",
+    "Total job leases acquired by workers",
+    labelnames=["job_type"]
+)
+
+job_lease_conflicts_total = _create_counter(
+    "job_lease_conflicts_total",
+    "Total lease acquisitions refused because another worker held a live lease",
+    labelnames=["job_type"]
+)
+
+job_lease_lost_total = _create_counter(
+    "job_lease_lost_total",
+    "Total heartbeats that found the lease no longer owned by this worker",
+    labelnames=["job_type"]
+)
+
+job_lease_reclaimed_total = _create_counter(
+    "job_lease_reclaimed_total",
+    "Total expired-lease jobs requeued by the reaper",
+    labelnames=["job_type"]
+)
+
+job_checkpoints_saved_total = _create_counter(
+    "job_checkpoints_saved_total",
+    "Total completed run-step checkpoints persisted",
+    labelnames=["step_name"]
+)
+
+job_cancellations_total = _create_counter(
+    "job_cancellations_total",
+    "Total jobs that observed a cancellation request while running",
+    labelnames=["job_type"]
+)
+
+# ============================================================================
 # Capability Metrics
 # ============================================================================
 

@@ -49,6 +49,16 @@ REQUIRED_SCHEMA_INDEXES: dict[str, set[tuple[str, ...]]] = {
     "idempotency_records": {
         ("scope", "created_at"),
     },
+    # The reaper is the only thing that can recover a job whose worker was
+    # SIGKILLed. Its sweep filters on (status, lease_expires_at); unindexed, that
+    # becomes a full scan and the recovery path is the first thing to be starved
+    # under load.
+    "jobs": {
+        ("status", "lease_expires_at"),
+    },
+    "run_steps": {
+        ("run_id", "status"),
+    },
 }
 # Duplicate-write prevention must be enforced by PostgreSQL, not by application
 # check-then-write: without the unique constraint two racing claims both see no
@@ -56,6 +66,9 @@ REQUIRED_SCHEMA_INDEXES: dict[str, set[tuple[str, ...]]] = {
 REQUIRED_UNIQUE_CONSTRAINTS: dict[str, set[tuple[str, ...]]] = {
     "agent_run_events": {("run_id", "seq")},
     "idempotency_records": {("scope", "idempotency_key")},
+    # Without this, a retry that re-checkpoints a step inserts a second row and
+    # the resume point can no longer be derived from the step set.
+    "run_steps": {("run_id", "step_index")},
 }
 
 
