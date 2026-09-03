@@ -145,6 +145,40 @@ job_cancellations_total = _create_counter(
 )
 
 # ============================================================================
+# Planner Structured Output Metrics (P1-05)
+# ============================================================================
+
+planner_plans_parsed_total = _create_counter(
+    "planner_plans_parsed_total",
+    "Planner responses turned into a plan, by request path and parse outcome",
+    labelnames=["source", "mode"]
+)
+
+planner_repair_passes_total = _create_counter(
+    "planner_repair_passes_total",
+    "Repair passes applied to malformed planner output, by pass name",
+    labelnames=["pass_name"]
+)
+
+planner_invariant_violations_total = _create_counter(
+    "planner_invariant_violations_total",
+    "Plan invariants still unsatisfied when a planner response was abandoned",
+    labelnames=["invariant"]
+)
+
+planner_structured_output_unsupported_total = _create_counter(
+    "planner_structured_output_unsupported_total",
+    "Planner calls that fell back to plain text after a provider rejected response_format",
+    labelnames=["provider"]
+)
+
+planner_revisions_rejected_total = _create_counter(
+    "planner_revisions_rejected_total",
+    "Plan revisions discarded for disturbing an already-completed step",
+    labelnames=["reason"]
+)
+
+# ============================================================================
 # Capability Metrics
 # ============================================================================
 

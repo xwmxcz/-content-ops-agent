@@ -58,6 +58,18 @@ class Config:
     # must re-propose rather than execute a stale approval.
     ACTION_CAPABILITY_TTL_SECONDS = int(os.getenv("ACTION_CAPABILITY_TTL_SECONDS", "900"))
 
+    # Planner structured output (P1-05). Repair is a fixed pipeline of passes, not a
+    # retry loop, so this caps how many of those passes may run before the caller
+    # gives up and uses the canonical default plan. The default equals the number of
+    # implemented passes; lowering it trades plan fidelity for a faster giving-up.
+    PLANNER_MAX_REPAIR_ATTEMPTS = int(os.getenv("PLANNER_MAX_REPAIR_ATTEMPTS", "3"))
+    # Ask the provider for JSON directly where it is supported. Kept switchable
+    # because a gateway can advertise JSON mode and still reject the parameter,
+    # which would otherwise fail every planner call behind that gateway.
+    PLANNER_STRUCTURED_OUTPUT_ENABLED = (
+        os.getenv("PLANNER_STRUCTURED_OUTPUT_ENABLED", "true").lower() == "true"
+    )
+
     # Authentication
     AUTH_ENABLED = os.getenv("AUTH_ENABLED", "false").lower() == "true"
     AUTH_USERNAME = os.getenv("AUTH_USERNAME", "admin")
@@ -335,6 +347,27 @@ class Config:
             if not base:
                 return None
             return base if base.endswith("/v1") else f"{base}/v1"
+        return None
+
+    @classmethod
+    def planner_response_format(cls, provider: str) -> dict[str, str] | None:
+        """Wire-level ``response_format`` for the planner, or None to use plain text.
+
+        Returns ``{"type": "json_object"}`` for the OpenAI-compatible providers and
+        ``None`` for Claude, whose API has no ``response_format`` parameter — sending
+        one there is rejected outright, so the planner stays on the text path and
+        relies on parse/repair instead.
+
+        JSON *object* mode rather than a strict JSON *schema*: schema mode is only
+        honoured by a subset of models behind these gateways, and an unsupported
+        schema is a hard request error rather than a soft downgrade. Object mode is
+        widely accepted, and its one real constraint — the response cannot be a
+        top-level array — is already handled by the planner envelope unwrapping.
+        """
+        if not cls.PLANNER_STRUCTURED_OUTPUT_ENABLED:
+            return None
+        if provider.lower() in {"siliconflow", "deepseek", "moonshot", "newapi"}:
+            return {"type": "json_object"}
         return None
 
 

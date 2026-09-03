@@ -12,11 +12,12 @@ from src.utils import config
 from src.utils.structured_logging import configure_logging
 
 
-configure_logging(config.LOG_LEVEL)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Configure logging at startup, not import time, to avoid interfering with
+    # pytest's caplog fixture.
+    configure_logging(config.LOG_LEVEL)
+    
     # Production startup is fail-closed and validation-only: migrations are a
     # separate deployment step. Explicit development/test profiles may retain
     # create_all for a fresh local database.

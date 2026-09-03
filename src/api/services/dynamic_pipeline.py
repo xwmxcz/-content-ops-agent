@@ -12,16 +12,18 @@ The flow:
 Hard guards:
   - MAX_STEPS = 8
   - MAX_REVISIONS = 2
-  - Schema validation: agent_id whitelist, inputs_from < own index, dedupe step indices
-  - On any planner failure (bad JSON / empty / shape error) → fall back to the
-    canonical 4-step strategy/writer/editor/reviewer plan
+  - Schema validation and bounded repair live in `plan_schema`: a Pydantic draft
+    model plus staged repair passes, capped by PLANNER_MAX_REPAIR_ATTEMPTS.
+  - A revision that would rename, drop, or re-wire an already-COMPLETED step is
+    rejected whole rather than repaired — see `assert_completed_steps_preserved`.
+  - On any planner failure (bad JSON / empty / invariant violation) → fall back to
+    the canonical 5-step researcher/strategy/writer/fact_checker/editor plan
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-import re
 import time
 import uuid
 from typing import Any
@@ -35,6 +37,15 @@ from src.api.schemas.agent import (
     SubAgentToolEvent,
 )
 from src.api.services.content_service import resolve_provider
+from src.api.services.plan_schema import (
+    MAX_REVISIONS,
+    MAX_STEPS,
+    PlanParseOutcome,
+    assert_completed_steps_preserved,
+    coerce_plan_payload,
+    parse_planner_output,
+    strip_fence,
+)
 from src.api.services.sub_agents import (
     PRICE_PER_1K,
     SUB_AGENTS,
@@ -45,12 +56,11 @@ from src.api.services.sub_agents import (
 from src.llm.litellm_client import LiteLLMClient, LLMConfigurationError
 from src.storage import ContentStore
 from src.utils import config
+from src.utils import metrics
 from src.utils.structured_logging import log_event
 
 
 logger = logging.getLogger(__name__)
-MAX_STEPS = 8
-MAX_REVISIONS = 2
 WORKSPACE_RESEARCH_TOOLS = ("search_history", "view_content", "list_recent_contents")
 WEB_RESEARCH_TOOLS = ("web_search",)
 
@@ -132,7 +142,12 @@ class DynamicPipeline:
             )
 
         try:
-            plan = await self._make_plan(request, provider, request.model)
+            outcome = await self._make_plan(request, provider, request.model)
+        except LLMConfigurationError:
+            # Misconfigured credentials are the operator's problem, not a planner
+            # shape problem. Falling back here would start a full run against a
+            # provider that cannot answer, so surface it instead.
+            raise
         except Exception as exc:
             log_event(
                 logger,
@@ -144,18 +159,21 @@ class DynamicPipeline:
                 reason="exception",
                 error_class=exc.__class__.__name__,
             )
+            metrics.planner_plans_parsed_total.labels(
+                source="text_json", mode="fallback"
+            ).inc()
             plan = self._default_plan(request)
-        if not plan:
-            log_event(
-                logger,
-                "planner_fallback",
-                level=logging.WARNING,
+        else:
+            self._record_plan_outcome(
+                outcome,
                 run_id=run_id,
                 provider=provider,
                 model=litellm_model,
-                reason="empty_plan",
             )
-            plan = self._default_plan(request)
+            if outcome.steps:
+                plan = outcome.steps
+            else:
+                plan = self._default_plan(request)
         await self._emit(run_id, "plan_ready", {"plan": [s.model_dump() for s in plan]})
 
         outputs: dict[int, str] = {}
@@ -406,7 +424,7 @@ class DynamicPipeline:
         request: PipelineRunRequest,
         provider: str,
         model: str | None,
-    ) -> list[PipelinePlanStep]:
+    ) -> PlanParseOutcome:
         keywords = ", ".join(request.keywords or []) or "none"
         available_tools = list(self._allowed_research_tools(request))
         focus = request.research_focus.strip() if request.research_focus else "(not specified)"
@@ -420,15 +438,74 @@ class DynamicPipeline:
             f"Available tools to researcher/fact_checker: {', '.join(available_tools) or '(none)'}\n\n"
             "Output the plan now."
         )
-        raw = await self.llm.generate_from_prompts(
+        raw, source = await self._call_planner(
             provider=provider,
             model=model,
             system_prompt=PLANNER_SYSTEM_PROMPT,
             user_prompt=user_prompt,
+        )
+        return parse_planner_output(raw, source=source)
+
+    async def _call_planner(
+        self,
+        *,
+        provider: str,
+        model: str | None,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> tuple[str, str]:
+        """Call the planner, preferring provider-native JSON mode.
+
+        Returns the raw text and which path produced it, so the parse outcome can
+        be attributed to structured output vs. plain text.
+
+        A provider that advertises JSON mode but rejects the parameter (common on
+        self-hosted OpenAI-compatible gateways) must not fail the run: the retry
+        without ``response_format`` is what keeps those deployments working, and the
+        downgrade is counted so a persistently unsupported provider is visible
+        rather than silently paying the extra round trip on every run.
+        """
+        response_format = config.planner_response_format(provider)
+        if response_format:
+            try:
+                raw = await self.llm.generate_from_prompts(
+                    provider=provider,
+                    model=model,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    temperature=0.3,
+                    max_tokens=1024,
+                    response_format=response_format,
+                )
+                return raw, "structured_output"
+            except LLMConfigurationError:
+                # Missing/invalid credentials fail the same way without JSON mode.
+                raise
+            except TypeError:
+                # An injected client predating response_format support. Retrying
+                # without it keeps custom clients and test doubles working.
+                pass
+            except Exception as exc:
+                log_event(
+                    logger,
+                    "planner_structured_output_unsupported",
+                    level=logging.WARNING,
+                    provider=provider,
+                    error_class=exc.__class__.__name__,
+                )
+                metrics.planner_structured_output_unsupported_total.labels(
+                    provider=provider
+                ).inc()
+
+        raw = await self.llm.generate_from_prompts(
+            provider=provider,
+            model=model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
             temperature=0.3,
             max_tokens=1024,
         )
-        return self._parse_plan(raw)
+        return raw, "text_json"
 
     @staticmethod
     def _validate_research_sources(request: PipelineRunRequest) -> None:
@@ -444,6 +521,64 @@ class DynamicPipeline:
         if request.use_web_search:
             tools.extend(WEB_RESEARCH_TOOLS)
         return tuple(tools)
+
+    def _record_plan_outcome(
+        self,
+        outcome: PlanParseOutcome,
+        *,
+        run_id: str,
+        provider: str,
+        model: str,
+    ) -> None:
+        """Emit logs and metrics for one planner parse attempt.
+
+        Every attempt is counted, including the clean ones: a repair rate is only
+        interpretable against the total, and `mode="strict"` is the baseline that
+        makes a rise in `repaired`/`fallback` legible.
+        """
+        metrics.planner_plans_parsed_total.labels(
+            source=outcome.source, mode=outcome.mode
+        ).inc()
+        for pass_name in outcome.applied_passes:
+            metrics.planner_repair_passes_total.labels(pass_name=pass_name).inc()
+        for invariant in outcome.violations:
+            metrics.planner_invariant_violations_total.labels(invariant=invariant).inc()
+
+        if outcome.mode == "fallback":
+            log_event(
+                logger,
+                "planner_fallback",
+                level=logging.WARNING,
+                run_id=run_id,
+                provider=provider,
+                model=model,
+                reason="invalid_plan",
+                **outcome.as_log_fields(),
+            )
+            return
+
+        log_event(
+            logger,
+            "planner_plan_accepted",
+            level=logging.WARNING if outcome.mode == "repaired" else logging.INFO,
+            run_id=run_id,
+            provider=provider,
+            model=model,
+            **outcome.as_log_fields(),
+        )
+        if not outcome.has_research_step:
+            # Not an error: the planner prompt allows skipping research for topics
+            # with no claims to verify. Recorded because a research-oriented track
+            # producing research-free plans in bulk means the prompt has drifted.
+            log_event(
+                logger,
+                "planner_plan_without_research",
+                level=logging.WARNING,
+                run_id=run_id,
+                provider=provider,
+                model=model,
+                step_count=len(outcome.steps),
+            )
 
     async def _maybe_revise_plan(
         self,
@@ -470,6 +605,10 @@ class DynamicPipeline:
             f"Original topic: {request.topic}\n\nCurrent plan and outputs:\n{summary}\n\n"
             "Decide whether to revise. Return null or full revised plan as JSON."
         )
+        # Deliberately not using _call_planner here: "no revision needed" is encoded as
+        # JSON `null`, which provider JSON-object mode forbids as a top-level value.
+        # Requesting json_object would push the planner into inventing a revision
+        # rather than declining one, so the revision path stays on plain text.
         raw = await self.llm.generate_from_prompts(
             provider=provider,
             model=model,
@@ -478,7 +617,7 @@ class DynamicPipeline:
             temperature=0.3,
             max_tokens=1024,
         )
-        cleaned = self._strip_fence(raw)
+        cleaned = strip_fence(raw)
         if not cleaned or cleaned.lower() == "null":
             return None
         try:
@@ -487,12 +626,31 @@ class DynamicPipeline:
             return None
         if payload is None:
             return None
-        if not isinstance(payload, list):
-            return None
-        revised = self._coerce_plan(payload)
+        revised = coerce_plan_payload(payload)
         if not revised:
             return None
-        # Preserve completed step outputs by id (best-effort: copy by index match)
+
+        # Safety gate, not a shape check. A revision that renames or drops a step
+        # whose output is already recorded would relabel that output, so downstream
+        # steps reading inputs_from would consume text from an agent they did not
+        # ask for. Reject the whole revision and keep running the known-good plan.
+        violations = assert_completed_steps_preserved(plan, revised)
+        if violations:
+            log_event(
+                logger,
+                "planner_revision_rejected",
+                level=logging.WARNING,
+                reason="completed_step_mutated",
+                violations=list(violations),
+            )
+            for violation in violations:
+                metrics.planner_revisions_rejected_total.labels(
+                    reason=violation.split(":", 1)[0]
+                ).inc()
+            return None
+
+        # Carry completed results forward. Safe now that identity is confirmed
+        # unchanged: index N in the revision is the same step that produced this output.
         completed_by_index = {s.index: s for s in plan if s.status == "completed"}
         for new_step in revised:
             if new_step.index in completed_by_index:
@@ -503,97 +661,17 @@ class DynamicPipeline:
                 new_step.prompt_tokens = old.prompt_tokens
                 new_step.completion_tokens = old.completion_tokens
                 new_step.cost_estimate = old.cost_estimate
+                new_step.tool_events = old.tool_events
         return revised
-
-    def _parse_plan(self, raw: str) -> list[PipelinePlanStep]:
-        cleaned = self._strip_fence(raw)
-        try:
-            payload = json.loads(cleaned)
-        except json.JSONDecodeError as exc:
-            log_event(
-                logger,
-                "planner_parse_failed",
-                level=logging.WARNING,
-                error_class=exc.__class__.__name__,
-                reason="invalid_json",
-            )
-            return []
-        if not isinstance(payload, list):
-            log_event(
-                logger,
-                "planner_parse_failed",
-                level=logging.WARNING,
-                reason="payload_not_list",
-                payload_type=type(payload).__name__,
-            )
-            return []
-        return self._coerce_plan(payload)
-
-    @staticmethod
-    def _strip_fence(text: str) -> str:
-        text = (text or "").strip()
-        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE | re.DOTALL)
-        return text.strip()
 
     @staticmethod
     def _coerce_plan(payload: list[Any]) -> list[PipelinePlanStep]:
-        steps: list[PipelinePlanStep] = []
-        seen_indices: set[int] = set()
-        valid_ids = set(SUB_AGENTS.keys())
-        for raw_step in payload[:MAX_STEPS]:
-            if not isinstance(raw_step, dict):
-                continue
-            agent_id = raw_step.get("agent_id")
-            if agent_id not in valid_ids:
-                continue
-            try:
-                idx = int(raw_step.get("index") or len(steps) + 1)
-            except (TypeError, ValueError):
-                continue
-            if idx in seen_indices:
-                continue
-            inputs_from = [
-                int(x) for x in (raw_step.get("inputs_from") or []) if isinstance(x, (int, str)) and str(x).isdigit()
-            ]
-            inputs_from = [x for x in inputs_from if x < idx]
-            description = str(raw_step.get("description") or "").strip() or f"{agent_id} step"
-            instruction = str(raw_step.get("instruction") or "").strip()
-            try:
-                steps.append(PipelinePlanStep(
-                    index=idx,
-                    agent_id=agent_id,  # type: ignore[arg-type]
-                    description=description,
-                    instruction=instruction,
-                    inputs_from=inputs_from,
-                    status="pending",
-                ))
-                seen_indices.add(idx)
-            except Exception:
-                continue
-        steps.sort(key=lambda s: s.index)
-        # Renumber to 1..N after dropping invalid or duplicate planner steps.
-        # Keep dependency edges attached to the same surviving original steps.
-        old_to_new = {step.index: new_idx for new_idx, step in enumerate(steps, start=1)}
-        for step in steps:
-            old_index = step.index
-            new_index = old_to_new[old_index]
-            step.index = new_index
-            remapped_inputs = {
-                old_to_new[source]
-                for source in step.inputs_from
-                if source in old_to_new and old_to_new[source] < new_index
-            }
-            step.inputs_from = sorted(remapped_inputs)
-        # Trim if last step is not writer/editor
-        if steps and steps[-1].agent_id not in ("writer", "editor"):
-            steps = steps + [PipelinePlanStep(
-                index=steps[-1].index + 1,
-                agent_id="writer",
-                description="Compose the final draft using prior outputs.",
-                instruction="Write the final draft based on the strategy and any reviewer notes above.",
-                inputs_from=[s.index for s in steps],
-            )]
-        return steps[:MAX_STEPS]
+        """Lenient salvage of a raw step list. Delegates to `plan_schema`.
+
+        Retained as a method because it is the documented seam for coercion and is
+        exercised directly by the plan-coercion tests.
+        """
+        return coerce_plan_payload(payload)
 
     def _default_plan(self, request: PipelineRunRequest) -> list[PipelinePlanStep]:
         # Dynamic pipeline is positioned as the RESEARCH-oriented track. The default

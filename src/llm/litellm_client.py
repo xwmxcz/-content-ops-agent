@@ -41,7 +41,15 @@ class LiteLLMClient:
         messages: list[dict[str, str]],
         temperature: float = 0.7,
         max_tokens: int = 2048,
+        response_format: dict[str, Any] | None = None,
     ) -> str:
+        """One-shot completion.
+
+        ``response_format`` is forwarded to the provider when set (JSON mode for the
+        OpenAI-compatible gateways). A provider that rejects the parameter raises
+        during the call, so callers that opt in must be able to retry without it;
+        see ``DynamicPipeline._call_planner``.
+        """
         try:
             import litellm
         except ImportError as exc:
@@ -67,6 +75,8 @@ class LiteLLMClient:
         api_base = config.get_provider_api_base(provider)
         if api_base:
             request["api_base"] = api_base
+        if response_format:
+            request["response_format"] = response_format
 
         try:
             response = await asyncio.wait_for(
@@ -93,6 +103,7 @@ class LiteLLMClient:
         user_prompt: str,
         temperature: float = 0.7,
         max_tokens: int = 2048,
+        response_format: dict[str, Any] | None = None,
     ) -> str:
         return await self.generate(
             provider=provider,
@@ -103,6 +114,7 @@ class LiteLLMClient:
             ],
             temperature=temperature,
             max_tokens=max_tokens,
+            response_format=response_format,
         )
 
     async def generate_stream(
