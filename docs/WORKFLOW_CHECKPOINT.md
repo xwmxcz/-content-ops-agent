@@ -1,17 +1,18 @@
 # Workflow Checkpoint
 
-- Recorded at: `2025-01-13T15:30:00+08:00`
+- Recorded at: `2025-01-13T21:50:00+08:00`
 - Workflow: `report_driven_iterative_hardening_continuation`
-- Repository HEAD/current base: `063ace8` (Phase 1/2 implementation + comprehensive documentation + Phase 0 partial external evidence)
-- Status: **Phase 1 + Phase 2 complete, Phase 0 external evidence partially verified**
+- Repository HEAD/current base: `e4c6c34` (Phase 1 P1-04 job lease & checkpoint recovery)
+- Status: **Phase 1 P1-01/02/03/04 + Phase 2 complete, Phase 0 external evidence partially verified**
 - Completed phases:
   - `Phase 0` — Recover and Remediate (repository-local scope, partial)
-  - `Phase 1` — Reliability and Recovery (P1-01/02/03) — **COMPLETE**
+  - `Phase 1` — Reliability and Recovery (P1-01/02/03/04) — **COMPLETE**
   - `Phase 2` — Observability & Monitoring (P2-01/02/03/04) — **COMPLETE**
 - Completed tasks:
   - `P1-01` — Persistent capability (implemented, reviewed, remediated, verified)
   - `P1-02` — Business idempotency (implemented, independently reviewed, verified)
   - `P1-03` — Automatic retry (implemented, verified)
+  - `P1-04` — Job lease, heartbeat, reaper & checkpoint recovery (implemented, verified)
   - `P2-01` — Prometheus metrics (implemented, verified)
   - `P2-02` — Enhanced structured logging (implemented, verified)
   - `P2-03` — Job cleanup mechanism (implemented, verified)
@@ -20,17 +21,20 @@
   - `9c2b951` — Phase 1: P1-01 Persistent capability + P1-02 Business idempotency + P1-03 Automatic retry
   - `97be2f4` — Phase 2: Observability & Monitoring
   - `5e94c4f` — Documentation: Phase 2 checkpoint update
-  - `063ace8` — Documentation: Production operations guide (current HEAD)
-- Working tree: **Clean** (all changes committed and pushed to origin/main)
+  - `063ace8` — Documentation: Production operations guide
+  - `bce7004` — Phase 0: Production configuration validation tests
+  - `e4c6c34` — Phase 1 P1-04: Job lease, heartbeat, reaper & checkpoint recovery (current HEAD)
+- Working tree: **Clean** (all changes committed)
 - Main implementation record: `docs/IMPROVEMENT_LOG.md`
 
 ## ⚠️ Read this before resuming
 
-The suite is **green**: `300 passed` on the disposable PostgreSQL. Phase 1 + Phase 2 are complete and **committed to Git**:
+The suite is **green**: `349 passed, 7 skipped` on the disposable PostgreSQL. Phase 1 (P1-01/02/03/04) + Phase 2 are complete and **committed to Git**:
 
 - **P1-01** (Persistent capability) — ✅ Complete, independently reviewed, remediated
 - **P1-02** (Business idempotency) — ✅ Complete, independently reviewed (passed with 0 HIGH findings), verified
 - **P1-03** (Automatic retry) — ✅ Complete, verified (25 new tests, all passing)
+- **P1-04** (Job lease & checkpoint recovery) — ✅ Complete, verified (49 new tests, all passing)
 - **P2-01** (Prometheus metrics) — ✅ Complete, verified (12 core metrics + /api/metrics endpoint)
 - **P2-02** (Enhanced structured logging) — ✅ Complete, verified (6 key event functions + instrumentation)
 - **P2-03** (Job cleanup mechanism) — ✅ Complete, verified (soft delete + dry-run/execute modes)
@@ -38,9 +42,9 @@ The suite is **green**: `300 passed` on the disposable PostgreSQL. Phase 1 + Pha
 
 All components are production-ready within their documented residual risk boundaries.
 
-**Git status**: All changes committed and pushed to `origin/main` at commit `97be2f4`.
+**Git status**: All changes committed at `e4c6c34`.
 
-Next step: Phase 3 (hardening), address external evidence gaps for Phase 0 completion, or production deployment preparation.
+Next step: P1-05 (publication job refactor), P1-06 (frontend testing + SSE resilience), or production deployment preparation.
 
 ## Phase 0 checkpoint — 🔄 PARTIAL PROGRESS (2025-01-13)
 
@@ -197,22 +201,66 @@ Production recommendations:
 - Set up alerting rules (retry exhausted, 5xx high frequency)
 - Configure cron for daily `cleanup.py --execute`
 
+## P1-04 checkpoint — ✅ COMPLETE
+
+**Implementation**: Job lease/heartbeat/reaper mechanism with checkpoint recovery for worker SIGKILL/OOM scenarios.
+
+**New migration**: `0008_job_lease_and_checkpoints.py` adds:
+- `worker_id` VARCHAR(255) — lease holder identity (hostname-pid-uuid8)
+- `lease_expires_at` DATETIME — lease expiry timestamp
+- `heartbeat_at` DATETIME — last heartbeat timestamp
+- New table `run_steps` with `UNIQUE(run_id, step_index)` for checkpoint persistence
+- Indexes: `(status, lease_expires_at)` for reaper scan, `(run_id, status)` for resume query
+
+**Core components**:
+1. **Job lease** (`src/storage/content_store.py`): 4 operations (acquire/extend/release/reclaim) with single-UPDATE atomic predicates
+2. **Runner integration** (`src/jobs/runner.py`): worker identity, lease lifecycle, monitor task with cancellation propagation
+3. **Reaper service** (`src/jobs/reaper.py`): CLI with `--dry-run`/`--execute`/`--loop` modes, reclaims expired leases without consuming retry count
+4. **Checkpoint recovery** (`src/jobs/checkpoint.py`): 10 functions for pipeline step persistence, resume from last completed step
+
+**Config**:
+- `JOB_LEASE_DURATION_SECONDS` (default 300)
+- `JOB_HEARTBEAT_INTERVAL_SECONDS` (default 30)
+- `JOB_REAPER_INTERVAL_SECONDS` (default 60)
+- `JOB_REAPER_BATCH_SIZE` (default 50)
+
+**Test coverage**: 49 new tests in `tests/jobs/test_job_lease.py`:
+- Lease acquisition: concurrency (8-way race), expiry, re-entry
+- Heartbeat: extension, lost lease detection
+- Release: non-holder rejection
+- Reaper: expired discovery, reclaim logic, loop control
+- Checkpoints: gap replay, running exclusion, duplicate prevention
+- Runner integration: lease loss handling, cancellation, long task heartbeat
+- Retry interaction: early skip, due execution
+
+**Metrics**: 6 new P1-04 metrics (`job_lease_acquired_total`, `job_lease_conflicts_total`, `job_lease_lost_total`, `job_lease_reclaimed_total`, `job_checkpoints_saved_total`, `job_cancellations_total`)
+
+**Full suite**: **349 passed, 7 skipped** (baseline: 300/7, no regression)
+
+**Known residual risks** (documented in `docs/IMPROVEMENT_LOG.md`):
+1. Checkpoint ≠ idempotency: step commit + checkpoint write gap can leave completed-but-unrecorded steps; business writes still need P1-02 ledger
+2. DynamicPipeline not yet wired to checkpoint (out of P1-04 scope)
+3. Background mode has no queue for reclaimed jobs (RQ production mode unaffected)
+4. Reaper not yet integrated into API/worker lifespan (CLI works, integration deferred)
+5. Lease:heartbeat ratio (10x) may need tuning per deployment
+
 ## Phase 1 + Phase 2 status
 
 ✅ **P1-01** (Persistent capability) — Complete  
 ✅ **P1-02** (Business idempotency) — Complete, independently reviewed  
 ✅ **P1-03** (Automatic retry) — Complete  
+✅ **P1-04** (Job lease & checkpoint recovery) — Complete  
 ✅ **P2-01** (Prometheus metrics) — Complete  
 ✅ **P2-02** (Enhanced structured logging) — Complete  
 ✅ **P2-03** (Job cleanup mechanism) — Complete  
 ✅ **P2-04** (Dashboard query helpers) — Complete  
 
-Phase 1 core reliability infrastructure is **finished**. Phase 2 observability and monitoring is **finished**. P1-04 (lease-based deduplication), P1-05 (publication job refactor), P1-06 (circuit breaker) remain deferred.
+Phase 1 core reliability infrastructure is **finished**. Phase 2 observability and monitoring is **finished**. P1-05 (publication job refactor), P1-06 (frontend testing + SSE resilience) remain deferred.
 
 ## Resume notes
 
-1. Working tree is **clean** (all Phase 1 + Phase 2 implementation and documentation committed and pushed to origin/main at `063ace8`).
-2. The suite is **green** at `300 passed`. All P1-01/02/03 and P2-01/02/03/04 implementations are complete and verified.
+1. Working tree is **clean** (all Phase 1 P1-04 + Phase 2 implementation and documentation committed at `e4c6c34`).
+2. The suite is **green** at `349 passed, 7 skipped`. All P1-01/02/03/04 and P2-01/02/03/04 implementations are complete and verified.
 3. **Production documentation complete**: `docs/PRODUCTION_OPERATIONS.md` provides comprehensive operational guide including:
    - Prometheus metrics setup and Grafana dashboard configuration
    - Structured logging and log aggregation patterns
@@ -223,12 +271,12 @@ Phase 1 core reliability infrastructure is **finished**. Phase 2 observability a
    - Alerting rules and thresholds
 4. Run one pytest process at a time against the test database: the `store` fixture drops and recreates every table, so parallel runs corrupt each other and produce spurious `IntegrityError`.
 5. `alembic check` against `content_ops_test` reports "Target database is not up to date" because pytest builds that database with `create_all`. That is a test artifact, not drift. To check migrations, create a scratch database, run `upgrade head` against it, then `check`, then drop it.
-6. Alembic head is now `0007_job_archived_at`.
+6. Alembic head is now `0008_job_lease_and_checkpoints`.
 7. **Phase 0 progress (2025-01-13)**:
    - ✅ Production configuration validation tests created and verified (7/7 passing)
    - ⏸️ Docker Compose validation deferred (environment constraint)
    - 📋 Remaining: browser/TLS testing, pre-Alembic migration rehearsal, multi-host evidence
 8. **Next priority options**:
    - **Complete Phase 0**: Docker Compose runtime verification (requires Docker), browser/TLS reverse-proxy testing, pre-Alembic migration rehearsal with real production snapshot
-   - **Phase 3 advanced hardening**: P1-04 (lease-based job recovery), P1-05 (publication job refactor), P1-06 (frontend testing + SSE resilience)
+   - **Phase 3 advanced hardening**: P1-05 (publication job refactor with structured output), P1-06 (frontend testing + SSE resilience with Vitest/Playwright)
    - **Production deployment**: System is production-ready with full operational documentation
