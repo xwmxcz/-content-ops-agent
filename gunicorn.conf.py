@@ -7,9 +7,14 @@ multi-worker path.
 """
 import os
 
-from src.utils import config
+# Aliased deliberately. Gunicorn reads every module-level name in this file that
+# matches one of its own settings, and it *has* a setting called `config` (the
+# -c option) whose value must be a string. Binding the name `config` here made
+# gunicorn reject its own config file with "Not a string: <Config object>", so
+# the api container crash-looped and never became healthy.
+from src.utils import config as app_config
 
-bind = f"{config.API_HOST}:{config.API_PORT}"
+bind = f"{app_config.API_HOST}:{app_config.API_PORT}"
 
 # Disable Gunicorn/Uvicorn's independent X-Forwarded-* preprocessing. The app
 # middleware validates the immediate peer against TRUSTED_PROXY_CIDRS before
@@ -35,5 +40,5 @@ timeout = int(os.getenv("GUNICORN_TIMEOUT", "120"))
 graceful_timeout = 30
 keepalive = 5
 
-loglevel = config.LOG_LEVEL.lower()
+loglevel = app_config.LOG_LEVEL.lower()
 errorlog = "-"

@@ -31,6 +31,118 @@
 
 ## ⚠️ Read this before resuming
 
+### 最新一轮（2026-09-04，Docker 已安装后）
+
+**Docker 环境**：Engine 29.8.0 / Compose v5.5.1。用户已在 `docker` 组，但既有 shell 的进程凭证无该 gid —— 用 `sg docker -c "..."`，**不需 sudo**。
+
+**全量套件首次在真实 PostgreSQL 上跑通**：`433 passed, 7 skipped`（1659s）。修复前是 `5 failed, 428 passed`。
+
+> 🔴 P1-05 会话声称的 `413 passed` 与它自己列的「5 个 caplog 测试在完整套件中失败」相互矛盾。真实情况：那 5 个失败是**真缺陷**，不是测试隔离瑕疵，已定根因并修复。
+
+### 本轮发现并修复的两个生产缺陷
+
+两个都是**只有真实跑容器/迁移才能发现**的类型，纯代码审查与无容器单测都碰不到。这正是 Phase 0 坚持要外部证据的理由。
+
+**1. `gunicorn.conf.py` 名字碰撞 → api 容器崩溃重启循环（生产完全跑不起来）**
+
+```
+Error: Not a string: <src.utils.config.Config object at 0x...>
+```
+
+gunicorn 遍历配置文件的模块级名字，凡与自身 119 个设置项同名就当作该设置的值。它恰好有一个叫 `config` 的设置（`-c` 选项），要求字符串。`from src.utils import config` 绑定了这个名字。`python server.py` 开发路径不加载该文件，所以一直没暴露。
+
+修复：`from src.utils import config as app_config`。
+
+**2. `migrations/env.py` 禁用全部 `src.*` logger**
+
+`logging.config.fileConfig` 的 `disable_existing_loggers` **默认为 True**，会把所有未在 `alembic.ini` 声明的 logger 设为 `disabled = True`。任何进程内 alembic 运行后，应用日志静默。在套件里表现为 5 个无关的 caplog 断言仅当 `test_migrations.py` 先跑时失败；在生产则是迁移后静默丢日志。
+
+定位方法：逐文件二分（每个候选文件 + 那 5 个失败测试配对）。我最初假设是 `configure_logging` 的 `root.handlers.clear()` 摧了 caplog handler，但 `test_api_contract + test_plan_schema` 配对 115 passed 推翻了这个假设。
+
+修复：`fileConfig(..., disable_existing_loggers=False)`。
+
+**回归测试**：`tests/test_deployment_config.py`（4 条）。直接调 gunicorn 自己的 `Config.set()` 校验，不复刻其规则。**已做变异验证**：重新植入两个缺陷 → 3 failed（缺陷 1 被 2 条抓住，缺陷 2 被源码断言抓住）。
+
+### Docker Compose 验证已完成（Phase 0 外部证据）
+
+完整记录在 `docs/phase0_external_evidence.md` §2。摘要：
+
+- **否定用例**：`.env.docker.example`（`CHANGE_ME` 占位值）→ 退出码 1，fail-closed，四条弱密钥全部被拒
+- **正向用例**：migrate（退出 0，8 步迁移）→ api healthy + worker + frontend；readiness 200 含 `database:ok, redis:ok`；RQ worker 监听 `content_ops`
+- **P1-06 SSE keepalive 端到端实证**：40s 得 2 个 `: keepalive` 注释帧，**带 `id:` 的帧 = 0**。后一条是客户端去重赖以成立的不变量
+- 补上 `SSE_*` 三个变量到 `docker-compose.yml`（之前未透传，容器只能用代码默认值）
+
+### 镜像源改为国内节点
+
+容器内**无代理**，两处默认源均不可用。做成 build arg：`APT_MIRROR`（USTC）、`PIP_INDEX_URL`（tuna）。
+
+| | 默认源 | 国内节点 |
+|---|---|---|
+| apt | `deb.debian.org` >650s 未拉完 9.6MB 索引，构建失败 | USTC **8s** 取完全部包 |
+| pip | `pypi.org` **0 KB/s**（20s 零字节），构建爬行 22.9 kB/s | tuna **16 MB/s** |
+
+> 🔴 **方法论教训**：我先前在宿主机 shell 测出「上游快 26 倍」并据此选了上游，是错的 —— 该 shell 导出 `http(s)_proxy=127.0.0.1:7890`。代理让上游显快、又把国内镜像拖去海外出口，排名完全反转。凡要代表容器网络的测量，必须先剥离代理。
+
+### ⚠️ 待你决策的安全发现（未修复）
+
+`X-Forwarded-Proto` 信任边界比 compose 注释声明的更宽。受控实验：
+
+```
+无 XFP 头              -> 426
+XFP: http              -> 426
+XFP: https（宿主机）  -> 401   ← 已穿过 HTTPS 强制
+收窄 TRUSTED_PROXY_CIDRS 至不含网关后，同一请求 -> 426
+```
+
+机制：宿主机经发布端口进来的流量被 SNAT 成桥网关 `172.18.0.1`，落在 `172.16.0.0/12` 内。nginx 的 `geo` 块同样信任该网段（access log 确认 `remote_addr=172.18.0.1`）。
+
+影响：8000/8088 均只绑 `127.0.0.1`，利用前提是已有宿主机本地访问权 —— 不是远程漏洞，而是纵深防御被削弱且与文档意图不符。**未擅自改**：收紧网段会改变生产反代拓扑的前提假设。
+
+### 环境现状（暂停时保留）
+
+容器**故意留着**，恢复时可直接用：
+
+```
+cops_test_pg      127.0.0.1:55432   测试库 content_ops_test
+cops_test_redis   127.0.0.1:56379
+content-ops-agent-{api,frontend,worker,postgres,redis}-1   正向用例栈
+```
+
+```bash
+export TEST_DATABASE_URL='postgresql+psycopg://content_ops:content_ops@127.0.0.1:55432/content_ops_test'
+export REDIS_URL='redis://127.0.0.1:56379/0'
+```
+
+清理：`sg docker -c "docker rm -f cops_test_pg cops_test_redis"`，以及 `sg docker -c "docker compose --env-file /tmp/compose_positive.env down -v"`。
+
+`/tmp/compose_positive.env` 含强随机密钥（权限 0600），**故意不在仓库内**以免误提交；`/tmp` 被清后重新生成即可。
+
+### 🔴 恢复后第一件事
+
+全量套件含新增 4 条部署测试的复验（预期 437）**被我中途停止，未完成**。`433 passed` 是加这 4 条**之前**的数字；4 条单独跑通过。恢复后先跑：
+
+```bash
+python3 -m pytest tests/ -q    # 预期 437 passed, 7 skipped（约 28 分钟）
+```
+
+一次只跑一个 pytest 进程：`store` fixture 会 drop/create 全部表，并行会互相污染并产生假的 `IntegrityError`。
+
+---
+
+### Phase 1 / Phase 2 总体状态
+
+Phase 1（P1-01…P1-06）+ Phase 2 均完成：
+
+- **P1-01** 持久化能力 — ✅ 已独立审查与整改
+- **P1-02** 业务幂等 — ✅ 已独立审查（0 HIGH）
+- **P1-03** 自动重试 — ✅ 25 条新测试
+- **P1-04** 租约与检查点恢复 — ✅ 49 条
+- **P1-05** Planner 结构化输出 — ✅ 64 条
+- **P1-06** 前端测试 + SSE 弹性 — ✅ 55 条；Playwright E2E 切出未做
+- **P2-01…P2-04** 可观测性 — ✅ 全部完成
+
+**Git**：P1-01…P1-06 已提交至 `972625f`。本轮 Docker 修复另行提交。本地领先 origin/main，**未推送**。
+
 The last **full-suite** green was `413 passed, 7 skipped` on a disposable PostgreSQL, recorded in the P1-05 session. That figure was **not re-verified in the P1-06 session**: that environment had no PostgreSQL binary, no Docker, and no `TEST_DATABASE_URL`, so 239 DB-backed tests skipped and only `201 passed, 239 skipped` could be observed. Re-run against a real database before treating the suite as green.
 
 Phase 1 (P1-01…P1-06) + Phase 2 are complete:
@@ -77,26 +189,30 @@ Next step: Playwright E2E and the rest of the Phase 0 external evidence (both ne
 
 **Report**: Full validation results in `docs/phase0_external_evidence.md`
 
-### Docker Compose Validation ⏸️ DEFERRED (Environment Constraint)
+### Docker Compose Validation ✅ DONE (2026-09-04)
 
-Phase 0 remains **partial** for external evidence still missing:
+Superseded: this section said DEFERRED while Docker was unavailable. Docker was
+installed and the validation was really executed. Full record in
+`docs/phase0_external_evidence.md` §2; summary at the top of this file.
 
-- ❌ Docker Compose runtime (migrate → API/worker, plus a negative start with weak defaults)
-- ❌ Real browser/TLS reverse-proxy behavior for stream/media HttpOnly cookies, logout/expiry, and Range requests
-- ❌ Real pre-Alembic production snapshot rehearsal (backup → schema review → `alembic stamp 0001_baseline` → upgrade head)
+Closed by that run:
+
+- ✅ Docker Compose runtime (migrate → API/worker/frontend, plus a negative start with weak defaults)
+- ✅ Health/readiness endpoints answering for real (`database:ok, redis:ok`)
+- ✅ Service-to-service networking (api↔postgres↔redis, nginx→api, in-bridge container→api)
+
+Still missing, and Phase 0 stays **partial** until obtained:
+
+- ❌ Real browser/TLS reverse-proxy behavior for stream/media HttpOnly cookies, logout/expiry, and Range requests — this round used `curl` against loopback, not a browser against an HTTPS endpoint
+- ❌ Real pre-Alembic production snapshot rehearsal (backup → schema review → `alembic stamp 0001_baseline` → upgrade head) — this round went 0001→0008 on an empty database
 - ❌ Multi-host/load evidence
+- ❌ Volume persistence across a restart (this round ended with `down -v`)
 
-**Blocker**: Docker unavailable in current environment (`bash: docker: command not found`)
+Do not report the remaining four as passed.
 
-**Mitigation**: Docker Compose configuration verified structurally:
-- ✅ `docker-compose.yml` exists and is valid
-- ✅ 3 services defined: app, postgres, redis
-- ✅ Health checks configured
-- ✅ Volume mounts and network config correct
-
-**Next**: Complete Docker validation in environment with Docker Engine, or in CI/CD pipeline.
-
-Do not promote Phase 0 from "partial" until that external evidence is obtained. Do not report any of it as passed.
+One security finding from that run is **unfixed and needs your decision**: the
+`X-Forwarded-Proto` trust boundary is wider than the compose comment claims. See
+the top of this file, or `phase0_external_evidence.md` §2.6.
 
 ## P1-01 checkpoint
 
@@ -136,7 +252,47 @@ Independent review completed. Known residual risk documented:
 
 ## Reusable verification environment
 
-Both services were **stopped** at the end of this session. The trees under `/tmp` still exist, so restarting is enough unless `/tmp` has been cleared, in which case they must be re-provisioned from scratch. Loopback-only, trust auth, no Redis password: throwaway local use only, never reuse this config anywhere shared.
+**Current method: Docker** (2026-09-04). The old hand-provisioned `/tmp/pg16` and
+`/tmp/redis-root` trees described below were cleared and no longer exist; Docker
+is available now, so there is no reason to rebuild them.
+
+Loopback-only, throwaway credentials, non-standard ports so they cannot collide
+with the compose stack (5432/6379). Never reuse this config anywhere shared.
+
+```bash
+sg docker -c "docker run -d --name cops_test_pg \
+  -e POSTGRES_DB=content_ops_test -e POSTGRES_USER=content_ops \
+  -e POSTGRES_PASSWORD=content_ops \
+  -p 127.0.0.1:55432:5432 postgres:16-alpine"
+
+sg docker -c "docker run -d --name cops_test_redis \
+  -p 127.0.0.1:56379:6379 redis:7-alpine"
+```
+
+```bash
+export TEST_DATABASE_URL='postgresql+psycopg://content_ops:content_ops@127.0.0.1:55432/content_ops_test'
+export REDIS_URL='redis://127.0.0.1:56379/0'
+```
+
+Readiness gate before running pytest:
+
+```bash
+sg docker -c "docker exec cops_test_pg pg_isready -U content_ops -d content_ops_test"
+```
+
+Teardown: `sg docker -c "docker rm -f cops_test_pg cops_test_redis"`.
+
+`sg docker -c "..."` is required, not optional: the user is in the `docker` group
+but an already-running shell does not carry that gid in its process credentials,
+so a bare `docker` call fails with `permission denied ... /var/run/docker.sock`.
+It needs no sudo.
+
+Only `content_ops_test` is used, in whatever state the last pytest run left it
+(the `store` fixture drops and recreates every table per test, so its contents do
+not matter).
+
+<details>
+<summary>Superseded: hand-provisioned /tmp trees (no longer present)</summary>
 
 ```bash
 export PGHOME=/tmp/pg16
@@ -151,16 +307,11 @@ nohup /tmp/redis-root/usr/bin/redis-server --port 56379 --bind 127.0.0.1 \
   --unixsocket /tmp/redis.sock --dir /tmp/redisdata > /tmp/redis.log 2>&1 &
 ```
 
-```bash
-export TEST_DATABASE_URL='postgresql+psycopg://content_ops:content_ops@127.0.0.1:55432/content_ops_test'
-export REDIS_URL='redis://127.0.0.1:56379/0'
-```
-
 Stop with `pg_ctl -D /tmp/pgdata -m fast -w stop` and `redis-cli -p 56379 shutdown nosave`. Full teardown is `rm -rf /tmp/pgdata /tmp/pg16 /tmp/pgsock /tmp/redisdata /tmp/redis-root`.
 
-`LD_LIBRARY_PATH` is per-service: PostgreSQL binaries need `/tmp/pg16/lib`, and `redis-cli`/`redis-server` need `/tmp/redis-root/usr/lib/x86_64-linux-gnu`. Exporting the PostgreSQL path and then calling `redis-cli` fails with `liblzf.so.1: cannot open shared object file`.
+`LD_LIBRARY_PATH` was per-service: PostgreSQL binaries needed `/tmp/pg16/lib`, and `redis-cli`/`redis-server` needed `/tmp/redis-root/usr/lib/x86_64-linux-gnu`. Exporting the PostgreSQL path and then calling `redis-cli` failed with `liblzf.so.1: cannot open shared object file`.
 
-No scratch databases were left behind; only `content_ops_test` remains, in whatever state the last pytest run left it (the `store` fixture rebuilds it per test, so its contents do not matter).
+</details>
 
 ## P1-03 checkpoint — ✅ COMPLETE
 
@@ -314,8 +465,9 @@ Phase 1 core reliability infrastructure is **finished**. Phase 2 observability a
 
 ## Resume notes
 
-1. Working tree has **uncommitted P1-06 changes** (frontend test toolchain, SSE resilience, keepalive, docs). Everything through P1-05 is committed at `5a2236c`.
-2. Full-suite green was last observed at `413 passed, 7 skipped` in the P1-05 session. **Not re-verified since**: without `TEST_DATABASE_URL` and a PostgreSQL binary, 239 tests skip and you only see `201 passed, 239 skipped`. Provision a disposable database before claiming the suite is green.
+1. P1-01…P1-06 are committed at `972625f`. The Docker-round fixes (gunicorn alias, alembic `fileConfig`, mirrors, `SSE_*` in compose, `tests/test_deployment_config.py`, docs) are a separate commit. Local is ahead of `origin/main` and **not pushed**.
+2. Full suite on a real PostgreSQL: **`433 passed, 7 skipped`** (1659s, 2026-09-04). 🔴 The re-run including the 4 new deployment tests (expect **437**) was **stopped mid-flight and never finished** — run it first. The 4 pass on their own.
+   - Ignore the older `413 passed` claim: it coexisted with "5 caplog tests fail in the full suite", and those 5 failures were a real defect (alembic disabling `src.*` loggers), now fixed.
 3. **Production documentation complete**: `docs/PRODUCTION_OPERATIONS.md` provides comprehensive operational guide including:
    - Prometheus metrics setup and Grafana dashboard configuration
    - Structured logging and log aggregation patterns
@@ -328,11 +480,14 @@ Phase 1 core reliability infrastructure is **finished**. Phase 2 observability a
 5. `alembic check` against `content_ops_test` reports "Target database is not up to date" because pytest builds that database with `create_all`. That is a test artifact, not drift. To check migrations, create a scratch database, run `upgrade head` against it, then `check`, then drop it.
 6. Alembic head is now `0008_job_lease_and_checkpoints`.
 7. **Frontend tests** (new in P1-06): `cd frontend && npm test` (Vitest, 35 tests) needs no database. `npx vue-tsc --noEmit` and `npm run build` both clean.
-8. **Phase 0 progress (2025-01-13)**:
-   - ✅ Production configuration validation tests created and verified (7/7 passing)
-   - ⏸️ Docker Compose validation deferred (environment constraint)
-   - 📋 Remaining: browser/TLS testing, pre-Alembic migration rehearsal, multi-host evidence
+8. **Phase 0 status (updated 2026-09-04)**:
+   - ✅ Production configuration validation tests (7/7 passing)
+   - ✅ **Docker Compose validation done for real** — negative start fail-closed, positive stack all healthy, 8 migrations, health/readiness answering, RQ worker listening
+   - ⚠️ **Unfixed, needs your decision**: `X-Forwarded-Proto` trust boundary is wider than the compose comment claims (host loopback traffic SNATs into `TRUSTED_PROXY_CIDRS`). Details at the top of this file.
+   - 📋 Still missing: real browser/TLS reverse-proxy behaviour, pre-Alembic production snapshot rehearsal, multi-host/load evidence, volume persistence across restart
 9. **Next priority options**:
-   - **Complete Phase 0 + Playwright E2E**: Docker Compose runtime verification, browser/TLS reverse-proxy testing (now also covers real-browser SSE reconnect and HttpOnly cookie behaviour), pre-Alembic migration rehearsal with a real production snapshot. All blocked on the same missing Docker/PostgreSQL runtime.
-   - **Production deployment**: System is production-ready with full operational documentation
+   - **Finish the 437 re-run** (see item 2) — cheapest and highest value
+   - **Decide on the `X-Forwarded-Proto` finding** — the only known unfixed issue
+   - **Remaining Phase 0 evidence + Playwright E2E**: browser/TLS behaviour now also covers real-browser SSE reconnect and HttpOnly cookies. Docker is available, so these are no longer blocked on tooling — only on setting up a TLS proxy and a production snapshot.
+   - **Production deployment**: ready within the documented residual-risk boundaries, with the `X-Forwarded-Proto` decision made first
    - **Optional follow-ups** from P1-06 residual risks: swap SSE table polling for `LISTEN/NOTIFY`, tune the reconnect budget against real outage data

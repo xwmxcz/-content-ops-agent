@@ -11,7 +11,12 @@ from src.utils import config as app_config
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers defaults to True, which would set `disabled = True`
+    # on every logger not declared in alembic.ini -- including all of src.* . That
+    # silences application logging for the rest of the process whenever migrations
+    # run in-process (Alembic's own commands, or a test that calls them), and it
+    # is invisible until something asserts on log output.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 if not config.get_main_option("sqlalchemy.url"):
     config.set_main_option("sqlalchemy.url", app_config.DATABASE_URL.replace("%", "%%"))

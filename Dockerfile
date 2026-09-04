@@ -8,13 +8,34 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN apt-get update \
+# Default to a domestic Debian mirror. Both figures below are from inside the
+# build container, which has no proxy: deb.debian.org spent >650s without
+# finishing the 9.6MB Packages index and failed the build, while USTC fetched
+# every package in ~8s. Override for other regions, e.g.
+#   docker compose build --build-arg APT_MIRROR=http://deb.debian.org
+# Trixie ships deb822 sources, so the URIs live in debian.sources -- rewriting
+# the legacy /etc/apt/sources.list is a no-op on this base image.
+ARG APT_MIRROR=http://mirrors.ustc.edu.cn
+RUN sed -i "s|http://deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
     && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
-RUN python -m pip install --upgrade pip \
-    && python -m pip install -r requirements.txt
+# Measured from inside this network with no proxy, which is what the build
+# container actually gets (10s sustained read of a botocore wheel):
+#   tuna 6880 KB/s, huawei 6512, ustc 6118, tencent 195, aliyun 89,
+#   upstream pypi.org 0 KB/s -- 20s without a single byte.
+# Do not trust a measurement taken from a shell that exports http(s)_proxy: the
+# proxy makes upstream look fast and drags domestic mirrors through an overseas
+# exit, which inverts the ranking entirely.
+# Override for a network with real upstream reachability, e.g.
+#   docker compose build --build-arg PIP_INDEX_URL=https://pypi.org/simple
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+RUN python -m pip install \
+        --index-url "${PIP_INDEX_URL}" --retries 10 --timeout 120 --upgrade pip \
+    && python -m pip install \
+        --index-url "${PIP_INDEX_URL}" --retries 10 --timeout 120 -r requirements.txt
 
 COPY src ./src
 COPY migrations ./migrations

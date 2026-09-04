@@ -36,6 +36,12 @@ x-app-env: &app-env
   JOB_QUEUE_NAME: ${JOB_QUEUE_NAME:-content_ops}
   JOB_TIMEOUT_SECONDS: ${JOB_TIMEOUT_SECONDS:-300}
   MAX_PROVIDER_INFLIGHT_JOBS: ${MAX_PROVIDER_INFLIGHT_JOBS:-8}
+  # SSE run streaming. The keepalive interval must stay well below the browser
+  # client's staleness budget (45s), or a normal long-running step is reported as
+  # a dead connection.
+  SSE_KEEPALIVE_SECONDS: ${SSE_KEEPALIVE_SECONDS:-15}
+  SSE_POLL_INTERVAL_SECONDS: ${SSE_POLL_INTERVAL_SECONDS:-0.4}
+  SSE_STREAM_TIMEOUT_SECONDS: ${SSE_STREAM_TIMEOUT_SECONDS:-600}
   MEDIA_STORAGE_ROOT: /app/data/media
   MEDIA_MAX_IMAGE_COUNT: ${MEDIA_MAX_IMAGE_COUNT:-9}
   MEDIA_MAX_VIDEO_SIZE_MB: ${MEDIA_MAX_VIDEO_SIZE_MB:-512}
