@@ -1,18 +1,20 @@
 # Workflow Checkpoint
 
-- Recorded at: `2025-01-13T21:50:00+08:00`
+- Recorded at: `2026-09-04T20:00:00+08:00`
 - Workflow: `report_driven_iterative_hardening_continuation`
-- Repository HEAD/current base: `e4c6c34` (Phase 1 P1-04 job lease & checkpoint recovery)
-- Status: **Phase 1 P1-01/02/03/04 + Phase 2 complete, Phase 0 external evidence partially verified**
+- Repository HEAD/current base: `5a2236c` (session summary for P1-04/P1-05)
+- Status: **Phase 1 P1-01…P1-06 + Phase 2 complete, Phase 0 external evidence still partial**
 - Completed phases:
   - `Phase 0` — Recover and Remediate (repository-local scope, partial)
-  - `Phase 1` — Reliability and Recovery (P1-01/02/03/04) — **COMPLETE**
+  - `Phase 1` — Reliability and Recovery (P1-01/02/03/04/05/06) — **COMPLETE**
   - `Phase 2` — Observability & Monitoring (P2-01/02/03/04) — **COMPLETE**
 - Completed tasks:
   - `P1-01` — Persistent capability (implemented, reviewed, remediated, verified)
   - `P1-02` — Business idempotency (implemented, independently reviewed, verified)
   - `P1-03` — Automatic retry (implemented, verified)
   - `P1-04` — Job lease, heartbeat, reaper & checkpoint recovery (implemented, verified)
+  - `P1-05` — Planner structured output with bounded repair (implemented, verified)
+  - `P1-06` — Frontend testing + SSE resilience (implemented, verified; Playwright E2E still deferred)
   - `P2-01` — Prometheus metrics (implemented, verified)
   - `P2-02` — Enhanced structured logging (implemented, verified)
   - `P2-03` — Job cleanup mechanism (implemented, verified)
@@ -29,12 +31,16 @@
 
 ## ⚠️ Read this before resuming
 
-The suite is **green**: `349 passed, 7 skipped` on the disposable PostgreSQL. Phase 1 (P1-01/02/03/04) + Phase 2 are complete and **committed to Git**:
+The last **full-suite** green was `413 passed, 7 skipped` on a disposable PostgreSQL, recorded in the P1-05 session. That figure was **not re-verified in the P1-06 session**: that environment had no PostgreSQL binary, no Docker, and no `TEST_DATABASE_URL`, so 239 DB-backed tests skipped and only `201 passed, 239 skipped` could be observed. Re-run against a real database before treating the suite as green.
+
+Phase 1 (P1-01…P1-06) + Phase 2 are complete:
 
 - **P1-01** (Persistent capability) — ✅ Complete, independently reviewed, remediated
 - **P1-02** (Business idempotency) — ✅ Complete, independently reviewed (passed with 0 HIGH findings), verified
 - **P1-03** (Automatic retry) — ✅ Complete, verified (25 new tests, all passing)
 - **P1-04** (Job lease & checkpoint recovery) — ✅ Complete, verified (49 new tests, all passing)
+- **P1-05** (Planner structured output) — ✅ Complete, verified (64 new tests)
+- **P1-06** (Frontend testing + SSE resilience) — ✅ Complete, verified (55 new tests); Playwright E2E deferred
 - **P2-01** (Prometheus metrics) — ✅ Complete, verified (12 core metrics + /api/metrics endpoint)
 - **P2-02** (Enhanced structured logging) — ✅ Complete, verified (6 key event functions + instrumentation)
 - **P2-03** (Job cleanup mechanism) — ✅ Complete, verified (soft delete + dry-run/execute modes)
@@ -42,9 +48,9 @@ The suite is **green**: `349 passed, 7 skipped` on the disposable PostgreSQL. Ph
 
 All components are production-ready within their documented residual risk boundaries.
 
-**Git status**: All changes committed at `e4c6c34`.
+**Git status**: P1-01…P1-05 committed through `5a2236c`. The P1-06 changes are **uncommitted** in the working tree.
 
-Next step: P1-05 (publication job refactor), P1-06 (frontend testing + SSE resilience), or production deployment preparation.
+Next step: Playwright E2E and the rest of the Phase 0 external evidence (both need Docker/PostgreSQL), or production deployment preparation.
 
 ## Phase 0 checkpoint — 🔄 PARTIAL PROGRESS (2025-01-13)
 
@@ -244,23 +250,72 @@ Production recommendations:
 4. Reaper not yet integrated into API/worker lifespan (CLI works, integration deferred)
 5. Lease:heartbeat ratio (10x) may need tuning per deployment
 
+## P1-06 checkpoint — ✅ COMPLETE (E2E deferred)
+
+**Implementation**: Frontend test toolchain plus SSE reconnect/idempotency, and the server-side keepalive the client's staleness detection depends on.
+
+**The bug this closed**: the backend already accepted `after_seq` / `Last-Event-ID` and stamped every event with `id: <seq>`, but the frontend discarded all of it — a single `EventSource` `onerror` marked the run `failed` with no recovery path. Since `onerror` also fires for idle-proxy recycling, laptop sleep, and Wi-Fi handover, a still-healthy run that completed and saved server-side was routinely shown to the user as "执行失败".
+
+**Frontend** (`frontend/src/composables/usePipelineStream.ts`, rewritten):
+- `StreamConnectionState`: `idle | connecting | open | stale | reconnecting | closed`, tracked separately from `RunStatus`
+- Exponential backoff 1s → 2s → 4s … capped at 30s, 6 attempts; `attempt` resets after a successful reopen
+- Monotonic `lastSeq` cursor; every reconnect requests `?after_seq=N`, and any event with `seq <= lastSeq` is dropped before reaching a handler, so a replayed prefix cannot double-count tokens or duplicate body text
+- `hello`/`ping` carry no `id` and are treated as liveness only — they must never rewind the cursor
+- Terminal events set `terminal` and suppress all further reconnects
+- Malformed frames are dropped instead of killing the subscription
+
+**Native `EventSource` auto-reconnect is deliberately not used**: the browser sends `Last-Event-ID` only for reconnects it initiates, and its backoff is neither observable nor testable. Managing it manually buys an assertable `attempt` and deterministic timing.
+
+**Reconciliation instead of guessing** (`frontend/src/views/Studio.vue`): when retries are exhausted the view calls `GET /api/agent/runs/{id}` for authoritative state. Terminal statuses are applied; a still-`running` run keeps the banner and a 重新连接 button so the run is not lost. A failed probe leaves the banner up rather than inventing a terminal state.
+
+**Server keepalive** (`src/api/routes/agent.py`): emits a `: keepalive` **comment** frame after `SSE_KEEPALIVE_SECONDS` of silence. A comment frame consumes no sequence number, so it can never be mistaken for a replayable event, while still keeping intermediaries from reaping the connection. The hardcoded 600s deadline and 0.4s poll are now config.
+
+**Config**:
+- `SSE_KEEPALIVE_SECONDS` (default 15)
+- `SSE_POLL_INTERVAL_SECONDS` (default 0.4)
+- `SSE_STREAM_TIMEOUT_SECONDS` (default 600)
+
+Keepalive must stay well under the client's `staleAfterMs` (45s default, 3x margin) or normal long steps get misreported as stale.
+
+**Toolchain**: Vitest 3.2.4 + `@vue/test-utils` 2.4.6 + jsdom 25 (`npm test`, `npm run test:watch`). `tests/support/fakeEventSource.ts` deliberately does **not** auto-reconnect, so the composable's own backoff and cursor are the only things driving reconnects.
+
+**Test coverage**: 55 new tests.
+- `frontend/tests/usePipelineStream.spec.ts` (21) — dispatch, backoff timing asserted to the millisecond, cap, attempt reset, exhaustion reported once, replay dedupe, keepalive cursor safety, all three terminal types, stale without closing the socket, cursor reset across runs
+- `frontend/tests/useJobPolling.spec.ts` (8) — completion, failure, cancellation, empty result, abort, reset, timeout, `onUpdate`
+- `frontend/tests/ContentCard.spec.ts` (6) — proves the Vue component path works, not just plain TS
+- `tests/test_sse_stream.py` (20) — drives the stream generator with an in-memory store double, so it needs **no PostgreSQL**: `id:` equals store seq, `after_seq` is strictly exclusive, `after_seq=0` is honoured rather than falling through to the header, keepalives carry no sequence, cursor parsing is fail-safe
+
+**Verification**: `35 passed` (vitest), `vue-tsc --noEmit` clean, `npm run build` clean, `201 passed, 239 skipped` (pytest; baseline 181/239, +20 new, no regression).
+
+**⚠️ Not verified this round**: the `413 passed` figure from the P1-05 session. This environment has no PostgreSQL binary, no Docker, and no `TEST_DATABASE_URL`, so all 239 DB-backed tests skip. The new backend tests were written to avoid that dependency.
+
+**Known residual risks**:
+1. Playwright E2E still missing — real-browser SSE + HttpOnly cookie + reverse-proxy behaviour remains open Phase 0 external evidence, same blocker as the Docker/TLS items
+2. Token dedupe trusts server-side sequence monotonicity, currently guaranteed by `UNIQUE(run_id, seq)` plus the run-row lock; concurrent non-monotonic appenders would break it
+3. Reconciliation fires only on retry exhaustion, not in `stale` — automatic polling would race the SSE stream and waste requests during normal long steps
+4. The 6-attempt / 30s cap (~1 minute to give up) is a guess; tune against real P95 outage duration
+5. `SSE_POLL_INTERVAL_SECONDS` is still table polling; high subscription counts want `LISTEN/NOTIFY`
+6. Studio's workflow mode is unaffected — it uses `useJobPolling`, which tolerates drops but offers no stale/reconnect signal
+
 ## Phase 1 + Phase 2 status
 
 ✅ **P1-01** (Persistent capability) — Complete  
 ✅ **P1-02** (Business idempotency) — Complete, independently reviewed  
 ✅ **P1-03** (Automatic retry) — Complete  
 ✅ **P1-04** (Job lease & checkpoint recovery) — Complete  
+✅ **P1-05** (Planner structured output) — Complete  
+✅ **P1-06** (Frontend testing + SSE resilience) — Complete, Playwright E2E deferred  
 ✅ **P2-01** (Prometheus metrics) — Complete  
 ✅ **P2-02** (Enhanced structured logging) — Complete  
 ✅ **P2-03** (Job cleanup mechanism) — Complete  
 ✅ **P2-04** (Dashboard query helpers) — Complete  
 
-Phase 1 core reliability infrastructure is **finished**. Phase 2 observability and monitoring is **finished**. P1-05 (publication job refactor), P1-06 (frontend testing + SSE resilience) remain deferred.
+Phase 1 core reliability infrastructure is **finished**. Phase 2 observability and monitoring is **finished**. All of P1-01…P1-06 are now closed; only Playwright E2E remains carved out of P1-06, blocked on the same missing runtime as the Phase 0 external evidence.
 
 ## Resume notes
 
-1. Working tree is **clean** (all Phase 1 P1-04 + Phase 2 implementation and documentation committed at `e4c6c34`).
-2. The suite is **green** at `349 passed, 7 skipped`. All P1-01/02/03/04 and P2-01/02/03/04 implementations are complete and verified.
+1. Working tree has **uncommitted P1-06 changes** (frontend test toolchain, SSE resilience, keepalive, docs). Everything through P1-05 is committed at `5a2236c`.
+2. Full-suite green was last observed at `413 passed, 7 skipped` in the P1-05 session. **Not re-verified since**: without `TEST_DATABASE_URL` and a PostgreSQL binary, 239 tests skip and you only see `201 passed, 239 skipped`. Provision a disposable database before claiming the suite is green.
 3. **Production documentation complete**: `docs/PRODUCTION_OPERATIONS.md` provides comprehensive operational guide including:
    - Prometheus metrics setup and Grafana dashboard configuration
    - Structured logging and log aggregation patterns
@@ -272,11 +327,12 @@ Phase 1 core reliability infrastructure is **finished**. Phase 2 observability a
 4. Run one pytest process at a time against the test database: the `store` fixture drops and recreates every table, so parallel runs corrupt each other and produce spurious `IntegrityError`.
 5. `alembic check` against `content_ops_test` reports "Target database is not up to date" because pytest builds that database with `create_all`. That is a test artifact, not drift. To check migrations, create a scratch database, run `upgrade head` against it, then `check`, then drop it.
 6. Alembic head is now `0008_job_lease_and_checkpoints`.
-7. **Phase 0 progress (2025-01-13)**:
+7. **Frontend tests** (new in P1-06): `cd frontend && npm test` (Vitest, 35 tests) needs no database. `npx vue-tsc --noEmit` and `npm run build` both clean.
+8. **Phase 0 progress (2025-01-13)**:
    - ✅ Production configuration validation tests created and verified (7/7 passing)
    - ⏸️ Docker Compose validation deferred (environment constraint)
    - 📋 Remaining: browser/TLS testing, pre-Alembic migration rehearsal, multi-host evidence
-8. **Next priority options**:
-   - **Complete Phase 0**: Docker Compose runtime verification (requires Docker), browser/TLS reverse-proxy testing, pre-Alembic migration rehearsal with real production snapshot
-   - **Phase 3 advanced hardening**: P1-05 (publication job refactor with structured output), P1-06 (frontend testing + SSE resilience with Vitest/Playwright)
+9. **Next priority options**:
+   - **Complete Phase 0 + Playwright E2E**: Docker Compose runtime verification, browser/TLS reverse-proxy testing (now also covers real-browser SSE reconnect and HttpOnly cookie behaviour), pre-Alembic migration rehearsal with a real production snapshot. All blocked on the same missing Docker/PostgreSQL runtime.
    - **Production deployment**: System is production-ready with full operational documentation
+   - **Optional follow-ups** from P1-06 residual risks: swap SSE table polling for `LISTEN/NOTIFY`, tune the reconnect budget against real outage data

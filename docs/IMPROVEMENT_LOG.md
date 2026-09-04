@@ -1129,3 +1129,134 @@ NOTE    prometheus_client 未安装，metrics 优雅降级为 NoOp（与 Phase 2
 3. **background 模式无独立队列**：reaper 回收后作业已回到 `queued`，但 background 模式下没有队列可推送，依赖下一次 enqueue 路径拾取。生产用 RQ 模式不受影响。
 4. **reaper 尚未挂进 API/worker 启动**：目前是 CLI（`--loop` 可常驻）。接入 lifespan 会改动启动路径，留待部署时决定用 sidecar 还是进程内 task。
 5. **心跳与租约时长的比例需按部署调**：默认 30s/300s（10 倍余量）。数据库延迟高的环境需同步调大租约。
+
+---
+
+## P1-06 前端测试与 SSE 弹性（已验证通过，DB 依赖项未复验）
+
+### 实施边界
+
+- 基线为 `HEAD=5a2236c`（P1-04/P1-05 会话总结之后）。
+- 本轮完成 P1-06 的两条主线：前端测试工具链落地 + SSE 断线重连与事件幂等。
+- **未做**：Playwright E2E。E2E 需要能跑起 API + PostgreSQL 的环境，本轮环境无 Docker、无 PostgreSQL 二进制，装了也无法真实执行，因此不装空壳配置。
+- **本轮环境限制**：`docker` 不存在，`/tmp/pg16` 与 `/tmp/redis-root` 树已被清空，无 `TEST_DATABASE_URL`。因此 239 条依赖 PostgreSQL 的 Python 测试全部 skip，`413 passed` 这个数字本轮**未能复验**。新增的后端测试刻意设计为不依赖数据库。
+
+### 要解决的问题
+
+后端早已支持断点续传：`/agent/runs/{id}/stream` 接受 `after_seq` 与 `Last-Event-ID`，每个事件都带 `id: <seq>`，`agent_run_events` 表里 `UNIQUE(run_id, seq)` 保证序号稳定。**前端把这套能力全部丢掉了**：
+
+```ts
+source.onerror = () => { handlers.onConnectionLost?.() }   // 改前
+```
+
+一次 `onerror` 就把运行判为 `failed`。而 `onerror` 的真实含义只是「这条 TCP 连接断了」——反向代理回收空闲连接、笔记本合盖、Wi-Fi 切换都会触发。此时服务端的 pipeline 仍在跑，作业最终会正常完成并落库，但用户界面已经显示「执行失败」，且没有任何恢复入口。
+
+第二个问题是没有幂等：即使加上重连，服务端按 `after_seq` 重放时若游标偏保守（或客户端从 0 重连），`step_token` 会被二次追加，token 计数与成本会重复累加，正文出现重复片段。
+
+第三个问题是长静默无法区分：一个研究步骤可以几分钟不产出事件，这与「代理已经把连接掐了」在客户端看来完全一样。服务端此前没有 keepalive。
+
+### 逐项闭环
+
+#### 连接状态与运行状态解耦
+
+新增 `StreamConnectionState`：`idle | connecting | open | stale | reconnecting | closed`，与 `RunStatus` 完全分离。`stale` 明确表示「socket 还开着，只是没信号」——不关连接，因为运行很可能仍然活着。
+
+#### 重连与退避
+
+指数退避 1s → 2s → 4s → …，上限 30s，默认 6 次。每次重连都带上游标：`pipelineStreamUrl(runId, afterSeq)` 生成 `?after_seq=N`。
+
+刻意**不复用**原生 `EventSource` 的自动重连：浏览器只在它自己发起的重连里送 `Last-Event-ID`，且退避策略不可观测、不可测试。自己管重连换来了可观测的 `attempt` 与可断言的时序。
+
+重连成功后 `attempt` 归零，因此一次长运行中的多次零星断连不会累计耗尽预算。
+
+#### 事件幂等
+
+游标 `lastSeq` 只增不减。`isAlreadyApplied()` 对每个带 `id` 的事件判定：`seq <= lastSeq` 直接丢弃，绝不进 handler。因此重放前缀既不会重复累加 token，也不会重复追加正文。
+
+`hello` 与 `ping` 不带 `id`，被识别为纯存活信号：它们**不能**回退游标，否则一个 keepalive 就会让下次重连从头replay。这一条有专门的测试。
+
+#### 终态即终止
+
+`run_complete` / `run_failed` / `run_cancelled` 到达后置 `terminal = true` 并关闭连接。终态之后的 `onerror` 是噪声（关闭 socket 本身就会触发），必须不再重连——否则每个正常完成的运行都会在结束时多打 6 次无用连接。
+
+#### 重试耗尽后对账，而不是猜测
+
+重试用尽时不再把运行判为失败，而是调 `GET /api/agent/runs/{id}` 取权威状态：
+
+- `completed` / `failed` / `cancelled` → 应用真实终态，横幅消失
+- 仍在 `running` → 保留横幅与「重新连接」按钮，运行不丢
+- 对账请求本身失败 → 保留横幅。用一次失败的探测编造终态比不作为更糟
+
+`retryStream()` 先对账再 `resume()`，`resume()` 保留游标，因此手动重连也只补缺口。
+
+#### 服务端 keepalive
+
+静默超过 `SSE_KEEPALIVE_SECONDS`（默认 15s）时发注释帧 `: keepalive\n\n`。用注释帧而非事件帧是关键：它不占序号，客户端永远不会把它误当成可重放事件，同时又能让中间代理看到流量。客户端 `staleAfterMs` 默认 45s，是 keepalive 间隔的 3 倍，留足抖动余量。
+
+顺带把硬编码的 `deadline = time.time() + 600` 与 `asyncio.sleep(0.4)` 提成配置项。
+
+#### 解析容错
+
+`parseEvent` 返回 `T | null`，畸形帧不再抛出。改前一个坏帧会打断整条订阅；现在丢弃该帧，等下一个事件或对账修正视图。
+
+### 配置项
+
+```
+SSE_KEEPALIVE_SECONDS        默认 15    静默多久发一次 keepalive 注释帧
+SSE_POLL_INTERVAL_SECONDS    默认 0.4   事件表轮询间隔
+SSE_STREAM_TIMEOUT_SECONDS   默认 600   单条订阅上限；客户端带游标重连，不丢事件
+```
+
+keepalive 间隔必须显著小于客户端 `staleAfterMs`（默认 45s），否则正常长步骤会被误报为 stale。
+
+### 修改文件
+
+- **新增**：`frontend/vitest.config.ts`、`frontend/tests/support/fakeEventSource.ts`、`frontend/tests/usePipelineStream.spec.ts`、`frontend/tests/useJobPolling.spec.ts`、`frontend/tests/ContentCard.spec.ts`、`tests/test_sse_stream.py`
+- **改动**：`frontend/src/composables/usePipelineStream.ts`（重写：状态机、退避重连、游标幂等、stale 检测）、`frontend/src/api/agent.ts`（`pipelineStreamUrl` 接受 `afterSeq`；新增 `getPipelineRun` 与 `PipelineRunSnapshot`）、`frontend/src/views/Studio.vue`（连接状态横幅、对账、手动重连；stop/reset 清理连接态）、`frontend/package.json`（`test` / `test:watch`，三个 devDependencies）、`src/api/routes/agent.py`（keepalive + 配置化）、`src/utils/config.py`（3 个配置项）
+
+### 验证命令与结果
+
+```text
+PASS    npx vitest run
+        35 passed（3 files）；无 unhandled rejection
+
+PASS    npx vue-tsc --noEmit
+        exit 0
+
+PASS    npm run build
+        built in 6.67s，Studio chunk 32.78 kB (gzip 11.73)
+
+PASS    python3 -m pytest tests/test_sse_stream.py -q
+        20 passed（不依赖数据库）
+
+PASS    python3 -m pytest tests/ -q
+        201 passed, 239 skipped（基线 181/239；+20 全为本轮新增，无回归）
+
+PASS    python3 -m compileall -q src tests
+        exit 0
+
+SKIP    239 条 PostgreSQL 测试
+        无 TEST_DATABASE_URL；本环境无 PostgreSQL 二进制、无 Docker
+NOTE    prometheus_client 未安装，metrics 优雅降级为 NoOp（与前几轮一致）
+```
+
+### 测试覆盖（55 条新增：前端 35 + 后端 20）
+
+`usePipelineStream.spec.ts`(21)：订阅与事件分发（4，含畸形帧不中断订阅）；重连（6，含带游标重连、退避时序逐毫秒断言、上限封顶、成功后 attempt 归零、耗尽只报一次、手动 resume 保留游标）；事件幂等（3，含重放前缀不二次计 token、单连接重复投递去重、无序号 keepalive 不回退游标）；终态（3，三种终态均停止重连）；stale（3，含 stale 不关 socket、事件到达即恢复、终态后不进 stale）；close（2，含取消待执行重连、换 run 重置游标）。
+
+`useJobPolling.spec.ts`(8)：完成取值、失败透传服务端错误、取消、完成但结果空、abort 停止轮询、reset 可复用、超时、onUpdate 每轮回调。
+
+`ContentCard.spec.ts`(6)：枚举标签渲染、缺标题回退、未知枚举值透传而非隐藏。用于证明 Vue 组件测试链路（`@vue/test-utils` + jsdom）真实可用，而不只是纯 TS 单测。
+
+`tests/test_sse_stream.py`(20)：用内存 store 替身直接驱动流生成器，因此**不需要 PostgreSQL**。覆盖 404、hello 开场、每个事件的 `id:` 等于 store 序号、三种终态各自终止流、`after_seq` 严格大于游标、`Last-Event-ID` 回退、`after_seq` 优先于头、`after_seq=0` 不被当作缺省、keepalive 在静默时发出、keepalive 不带序号、游标解析 fail-safe（7 个参数化用例）。
+
+`fakeEventSource.ts` 刻意**不实现**自动重连：每次连接都是一次可观察的显式构造，因此被测的退避与游标逻辑是唯一驱动重连的东西。
+
+### 残余风险
+
+1. **Playwright E2E 仍缺失**：本轮只做到组件/composable 层。真实浏览器下的 SSE + HttpOnly cookie + 反向代理行为仍属 Phase 0 未闭合的外部证据，与 Docker/TLS 那几项同一个阻塞原因。
+2. **`step_token` 幂等依赖服务端序号单调**：客户端信任 `id:`。若将来引入多写者并发 append 且序号非单调，去重前提就破了。当前 `UNIQUE(run_id, seq)` + 行锁保证了单调。
+3. **对账只在重试耗尽时触发**：`stale` 状态下不自动对账，只提供手动按钮。自动轮询会与 SSE 争抢，且在正常长步骤下是纯浪费。
+4. **重连上限 6 次 / 30s 封顶是猜的**：最坏情况约 1 分钟放弃。长时间网络中断后用户须手动点「重新连接」。真实部署数据出来后应按 P95 中断时长调。
+5. **`SSE_POLL_INTERVAL_SECONDS` 仍是轮询**：每条活跃订阅每 0.4s 查一次事件表。并发订阅数高时应换 PostgreSQL `LISTEN/NOTIFY`，本轮不改以免动 Phase 0 已审查的主路径。
+6. **Studio 的 workflow 模式未受益**：它走 `useJobPolling` 而非 SSE，轮询本身对断线不敏感，但也没有 stale/重连提示。

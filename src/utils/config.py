@@ -111,6 +111,17 @@ class Config:
     JOB_REAPER_INTERVAL_SECONDS = int(os.getenv("JOB_REAPER_INTERVAL_SECONDS", "60"))
     JOB_REAPER_BATCH_SIZE = int(os.getenv("JOB_REAPER_BATCH_SIZE", "50"))
 
+    # SSE run streaming (P1-06). Clients treat silence as a stale connection, so
+    # the server must emit a keepalive comment well inside the client's staleness
+    # budget: a long research step produces no events for minutes, and without a
+    # keepalive that is indistinguishable from a dead proxy. The poll interval is
+    # how often the event table is swept for new rows.
+    SSE_KEEPALIVE_SECONDS = int(os.getenv("SSE_KEEPALIVE_SECONDS", "15"))
+    SSE_POLL_INTERVAL_SECONDS = float(os.getenv("SSE_POLL_INTERVAL_SECONDS", "0.4"))
+    # Hard ceiling on one subscription. The client reconnects with `after_seq`, so
+    # this bounds server-side resource hold time without losing events.
+    SSE_STREAM_TIMEOUT_SECONDS = int(os.getenv("SSE_STREAM_TIMEOUT_SECONDS", "600"))
+
     # Media and MCP integration
     MEDIA_STORAGE_ROOT = os.getenv("MEDIA_STORAGE_ROOT", "data/media")
     MEDIA_MAX_IMAGE_COUNT = int(os.getenv("MEDIA_MAX_IMAGE_COUNT", "9"))

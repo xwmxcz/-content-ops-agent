@@ -266,11 +266,41 @@ export async function createPipelineRun(payload: PipelineRunPayload) {
   return data
 }
 
-export function pipelineStreamUrl(runId: string) {
+export function pipelineStreamUrl(runId: string, afterSeq?: number) {
   // EventSource ignores axios baseURL. The browser sends the HttpOnly resource
   // session cookie; no bearer or ticket material is placed in the URL.
   const base = (api.defaults.baseURL || '').replace(/\/$/, '')
-  return `${base}/agent/runs/${runId}/stream`
+  const url = `${base}/agent/runs/${runId}/stream`
+  // Resume cursor goes in the query string, not Last-Event-ID: the native
+  // EventSource sends that header only for its own automatic reconnects, and we
+  // manage reconnection ourselves so backoff and state are observable.
+  if (afterSeq && afterSeq > 0) return `${url}?after_seq=${afterSeq}`
+  return url
+}
+
+export interface PipelineRunSnapshot {
+  id: string
+  thread_id: string
+  status: 'running' | 'completed' | 'failed' | 'cancelled' | string
+  plan: PipelinePlanStep[]
+  revision_count: number
+  total_prompt_tokens: number
+  total_completion_tokens: number
+  total_cost: number
+  saved_content_id?: number | null
+  error?: string | null
+  next_event_seq: number
+  created_at?: string | null
+  completed_at?: string | null
+}
+
+/**
+ * Authoritative run state, used to reconcile after the stream gives up. A dead
+ * transport does not mean a dead run, so the UI must ask instead of assuming.
+ */
+export async function getPipelineRun(runId: string) {
+  const { data } = await api.get<PipelineRunSnapshot>(`/agent/runs/${runId}`)
+  return data
 }
 
 export async function cancelPipelineRun(runId: string) {

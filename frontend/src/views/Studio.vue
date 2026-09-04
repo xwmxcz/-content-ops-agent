@@ -172,6 +172,24 @@
 
           <el-alert v-if="errorMessage" type="error" :title="errorMessage" show-icon :closable="false" class="surface-alert" />
 
+          <el-alert
+            v-if="connectionNotice"
+            :type="connectionNotice.type"
+            :title="connectionNotice.title"
+            show-icon
+            :closable="false"
+            class="surface-alert"
+          >
+            <el-button
+              v-if="connectionNotice.canRetry"
+              size="small"
+              :loading="reconciling"
+              @click="retryStream"
+            >
+              重新连接
+            </el-button>
+          </el-alert>
+
           <div v-if="!plan.length && !running" class="timeline-empty">
             点击"运行"开始。{{ mode === 'dynamic' ? 'Planner 会先输出 JSON 计划，每步 token 实时回流。' : '4 个固定 Agent 依次执行：策略 → 初稿 → 润色 → 审核。' }}
           </div>
@@ -320,6 +338,7 @@ import ModelSelector from '../components/ModelSelector.vue'
 import {
   cancelPipelineRun,
   createPipelineRun,
+  getPipelineRun,
   type PipelinePlanStep,
   type PipelineRunPayload,
   type SubAgentId,
@@ -332,7 +351,7 @@ import {
   type JobResponse
 } from '../api/jobs'
 import { useJobPolling } from '../composables/useJobPolling'
-import { usePipelineStream } from '../composables/usePipelineStream'
+import { usePipelineStream, type StreamConnectionState } from '../composables/usePipelineStream'
 import type { AgentRunPayload, AgentRunResponse, AgentStep } from '../api/agent'
 
 interface FinalContent {
@@ -436,6 +455,13 @@ const totalCompletionTokens = ref(0)
 const totalCost = ref(0)
 const revisionCount = ref(0)
 const status = ref<RunStatus>('idle')
+// Transport health is tracked separately from run status: a broken stream does
+// not mean a broken run, and conflating them made every network blip look like a
+// pipeline failure.
+const connectionState = ref<StreamConnectionState>('idle')
+const streamExhausted = ref(false)
+const reconciling = ref(false)
+const isRunActive = computed(() => status.value === 'planning' || status.value === 'running')
 
 let workflowJobId: string | null = null
 const workflowPolling = useJobPolling()
@@ -532,14 +558,83 @@ const pipelineStream = usePipelineStream({
     closeStream()
   },
   onConnectionLost() {
-    if (status.value !== 'completed' && status.value !== 'failed' && status.value !== 'cancelled') {
-      status.value = 'failed'
-      running.value = false
-      errorMessage.value = errorMessage.value || 'SSE 连接中断'
-      closeStream()
-    }
+    // Retries are spent. The run may still be progressing server-side, so ask the
+    // API for authoritative state instead of declaring failure.
+    streamExhausted.value = true
+    void reconcileRun()
+  },
+  onStateChange(next) {
+    connectionState.value = next.state
+    if (next.state === 'open') streamExhausted.value = false
   }
 })
+
+const connectionNotice = computed(() => {
+  if (!isRunActive.value && !streamExhausted.value) return null
+  if (streamExhausted.value) {
+    return {
+      type: 'warning' as const,
+      title: '实时连接已断开，运行可能仍在后台继续。已同步一次最新状态。',
+      canRetry: true
+    }
+  }
+  if (connectionState.value === 'reconnecting') {
+    return { type: 'info' as const, title: '连接中断，正在自动重连…', canRetry: false }
+  }
+  if (connectionState.value === 'stale') {
+    return { type: 'info' as const, title: '连接空闲，等待服务端事件…', canRetry: true }
+  }
+  return null
+})
+
+/**
+ * Pulls authoritative run state after the stream gives up. Terminal statuses are
+ * applied to the view; a still-running run leaves the UI running so the user can
+ * reconnect rather than losing the run.
+ */
+async function reconcileRun() {
+  const id = runId.value
+  if (!id) return
+  reconciling.value = true
+  try {
+    const snapshot = await getPipelineRun(id)
+    if (snapshot.plan?.length) plan.value = snapshot.plan.map(step => ({ ...step }))
+    totalPromptTokens.value = snapshot.total_prompt_tokens ?? totalPromptTokens.value
+    totalCompletionTokens.value = snapshot.total_completion_tokens ?? totalCompletionTokens.value
+    totalCost.value = snapshot.total_cost ?? totalCost.value
+    revisionCount.value = snapshot.revision_count ?? revisionCount.value
+
+    if (snapshot.status === 'completed') {
+      savedContentId.value = snapshot.saved_content_id ?? null
+      status.value = 'completed'
+      running.value = false
+      streamExhausted.value = false
+    } else if (snapshot.status === 'failed') {
+      status.value = 'failed'
+      running.value = false
+      errorMessage.value = snapshot.error || '运行失败'
+      streamExhausted.value = false
+    } else if (snapshot.status === 'cancelled') {
+      status.value = 'cancelled'
+      running.value = false
+      errorMessage.value = snapshot.error || '已停止运行'
+      streamExhausted.value = false
+    }
+    // Still running: keep the banner and the retry affordance in place.
+  } catch {
+    // Reconciliation is best-effort. Leaving the banner up is more honest than
+    // inventing a terminal state from a failed status probe.
+  } finally {
+    reconciling.value = false
+  }
+}
+
+async function retryStream() {
+  if (!runId.value) return
+  streamExhausted.value = false
+  await reconcileRun()
+  if (isRunActive.value) pipelineStream.resume()
+}
 
 const totalTokens = computed(() => totalPromptTokens.value + totalCompletionTokens.value)
 void totalTokens // kept for future re-introduction; not currently displayed
@@ -741,6 +836,8 @@ function resetWorkspace() {
   revisionCount.value = 0
   errorMessage.value = ''
   status.value = 'idle'
+  connectionState.value = 'idle'
+  streamExhausted.value = false
 }
 
 function closeStream() {
@@ -770,6 +867,8 @@ function stop() {
   running.value = false
   status.value = 'cancelled'
   errorMessage.value = '已停止运行'
+  // A user-initiated stop is not a transport problem: drop the reconnect banner.
+  streamExhausted.value = false
 }
 
 async function run() {

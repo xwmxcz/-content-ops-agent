@@ -139,9 +139,13 @@ async def stream_pipeline_run(
 
     async def event_stream():
         last_seq = after_seq if after_seq is not None else _parse_last_event_id(last_event_id)
-        deadline = time.time() + 600
+        deadline = time.time() + config.SSE_STREAM_TIMEOUT_SECONDS
         terminal = {"run_complete", "run_failed", "run_cancelled"}
         yield "event: hello\ndata: {}\n\n"
+        # Keepalives are comment frames: they prove liveness to the client and to
+        # any intermediate proxy without consuming a sequence number, so they can
+        # never be mistaken for a replayable run event.
+        last_activity = time.time()
         while time.time() < deadline:
             events = store.list_run_events(run_id, after_seq=last_seq, limit=100)
             for evt in events:
@@ -149,7 +153,13 @@ async def stream_pipeline_run(
                 yield f"id: {evt['seq']}\nevent: {evt['event_type']}\ndata: {evt['payload']}\n\n"
                 if evt["event_type"] in terminal:
                     return
-            await asyncio.sleep(0.4)
+            now = time.time()
+            if events:
+                last_activity = now
+            elif now - last_activity >= config.SSE_KEEPALIVE_SECONDS:
+                yield ": keepalive\n\n"
+                last_activity = now
+            await asyncio.sleep(config.SSE_POLL_INTERVAL_SECONDS)
 
     return StreamingResponse(
         event_stream(),
