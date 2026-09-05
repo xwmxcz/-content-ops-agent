@@ -1,5 +1,39 @@
 # Improvement Log
 
+## 2026-09-05 — 浏览器/TLS 验证与运行期缺陷修复
+
+当前进度以 [WORKFLOW_CHECKPOINT.md](WORKFLOW_CHECKPOINT.md) 为准，本文后续章节为历史记录。
+
+新增 `scripts/verify_browser.py`、`frontend/e2e/browser.spec.ts` 和测试配置，
+将生产 Compose 配置放进独立项目，通过真实 Chromium、TLS 代理、前端 Nginx、
+Gunicorn、PostgreSQL 验证 Cookie、媒体、SSE 和持久化。完整运行方法与边界见
+[BROWSER_VERIFICATION.md](BROWSER_VERIFICATION.md)。
+
+首次进入浏览器断言阶段的结果是 **4 passed / 2 failed**，两项失败均定位为实际缺陷：
+
+1. **SSE 长步骤误报 stale**：后端只发注释心跳；原生 EventSource 不派发注释。
+   即使改为 ping，不带 `id:` 的帧仍继承上一条事件的 `lastEventId`，会被原前端去重丢弃。
+   修复：后端心跳包含 `event: ping` 与 `data: {}`，不写入事件表、不产生序号；
+   前端 hello/ping 只刷新存活计时，不参与业务事件去重。FakeEventSource 补上原生 ID 继承语义，
+   新增两条单测，修复前 **2 failed / 21 passed**，修复后前端全量 **37 passed**。
+2. **Nginx 默认日志旁路脱敏**：在 `http` 层增加 sanitized 日志没有替换镜像自带的 main 日志，
+   同一请求被记两次；带 URL 凭据的请求虽被拒绝为 400，main 日志仍包含查询值。
+   修复：把 `access_log ... sanitized` 放到 `server` 层，覆盖父层继承。
+   E2E 验证真实日志中查询与 Referer 探测值均消失，且保留每个拒绝请求的一条脱敏记录。
+
+协议依据：[HTML EventSource 标准](https://html.spec.whatwg.org/multipage/server-sent-events.html#event-stream-interpretation)
+说明注释处理与 last-event-ID 保留规则；[Nginx 日志模块](https://nginx.org/en/docs/http/ngx_http_log_module.html#access_log)
+说明同层可配置多个日志。上述缺陷的判定同时有真实浏览器/容器的失败证据。
+
+本轮没有将已运行的应用栈用于测试，没有调用模型或发布平台；新测试无生产 API 后门。
+首次两次环境启动因测试 CORS 使用 localhost 被生产校验拒绝，随后改为仅在浏览器内解析的
+`content-ops.test` 和实际 HTTPS 端口，保留原有生产校验。
+
+修复后浏览器复跑 **6 passed**，容器重建后的持久化验证通过，整体验证脚本退出 0。
+真实 PostgreSQL 完整基线 **437 passed、7 skipped**（2172.58 秒）；7 条独立检查另行全部通过。
+完整套件在 SSE 修改前已加载 Python 模块；最终 SSE/部署专项 **24 passed**，不与基线数量相加。
+最终结果与源码校验值见 [validation.json](evidence/2026-09-05-validation.json)，范围说明见当前 checkpoint。
+
 ## continue_phase1_implement — P1-02 业务幂等（已验证通过）
 
 ### 实施边界

@@ -27,6 +27,7 @@ export class FakeEventSource {
   withCredentials: boolean
   closed = false
   onerror: ((event: Event) => void) | null = null
+  private lastEventId = ''
 
   private listeners = new Map<string, Array<(event: Event) => void>>()
 
@@ -49,11 +50,14 @@ export class FakeEventSource {
   /** Delivers one server frame. `seq` maps to the SSE `id:` field. */
   emit(type: string, data: unknown, seq?: number) {
     if (this.closed) throw new Error(`emit("${type}") on a closed EventSource`)
+    // Native EventSource retains the last id across frames which omit `id:`.
+    // In particular, a ping following a run event inherits that event's id.
+    if (seq !== undefined) this.lastEventId = String(seq)
     const handlers = this.listeners.get(type)
     if (!handlers) return
     const event = {
       data: typeof data === 'string' ? data : JSON.stringify(data),
-      lastEventId: seq === undefined ? '' : String(seq)
+      lastEventId: this.lastEventId
     } as MessageEvent
     handlers.forEach(handler => handler(event as unknown as Event))
   }

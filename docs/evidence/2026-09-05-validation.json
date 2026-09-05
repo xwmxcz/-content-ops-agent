@@ -1,0 +1,101 @@
+{
+  "recorded_at": "2026-09-05T19:22:58+08:00",
+  "base_commit": "e7e9744e15427d2c7d06d527108871820a8d1bff",
+  "changes_committed": false,
+  "backend_full_baseline": {
+    "command": "python3 -m pytest tests/ -q --durations=15",
+    "database": "disposable PostgreSQL 16",
+    "started_at": "2026-09-05T18:45:00.216848+08:00",
+    "passed": 437,
+    "skipped": 7,
+    "failures": 0,
+    "errors": 0,
+    "duration_seconds": 2172.576,
+    "exit_code": 0,
+    "skip_reason": "Standalone test - run directly as script",
+    "scope_note": "Full suite started before SSE edits and retained collected Python modules. Final SSE code was then verified separately by focused backend tests and real browser tests; counts are not additive."
+  },
+  "final_backend_focused": {
+    "command": "env -u TEST_DATABASE_URL python3 -m pytest tests/test_sse_stream.py tests/test_deployment_config.py -q",
+    "passed": 24,
+    "duration_seconds": 1.03,
+    "exit_code": 0
+  },
+  "production_configuration": {
+    "command": "python3 tests/standalone/test_production_validation.py",
+    "passed": 7,
+    "exit_code": 0
+  },
+  "frontend_unit": {
+    "command": "npm test",
+    "passed": 37,
+    "duration_seconds": 1.42,
+    "exit_code": 0
+  },
+  "frontend_build": {
+    "command": "npm run build",
+    "typecheck": "passed",
+    "vite_build": "passed",
+    "exit_code": 0
+  },
+  "browser_tls": {
+    "command": "python3 scripts/verify_browser.py",
+    "passed": 6,
+    "failed": 0,
+    "skipped": 0,
+    "flaky": 0,
+    "browser_duration_seconds": 85.976,
+    "runner_exit_code": 0,
+    "browser": "Google Chrome 152.0.7977.82",
+    "playwright": "1.63.0",
+    "tls": "local self-signed certificate; browser-only content-ops.test resolver",
+    "transport": "native EventSource with compiled repository composable; real API/DB, fixture events"
+  },
+  "volume_persistence": {
+    "passed": true,
+    "procedure": "compose down retaining volumes, recreate all containers with up --wait",
+    "verified": [
+      "content row",
+      "media bytes",
+      "memory directory file",
+      "run event sequence"
+    ],
+    "temporary_resources_removed": true
+  },
+  "before_fix": {
+    "frontend_heartbeat_tests": {
+      "failed": 2,
+      "passed": 21
+    },
+    "browser_tests": {
+      "failed": 2,
+      "passed": 4,
+      "failures": [
+        "comment heartbeat / inherited lastEventId produces false stale",
+        "default nginx access log leaks rejected URL credentials"
+      ]
+    }
+  },
+  "remaining": [
+    "forwarded-proto trust boundary",
+    "real pre-Alembic production snapshot rehearsal",
+    "multi-host/load evidence",
+    "full Studio workflow E2E",
+    "actual deployment certificate and proxy topology validation"
+  ],
+  "sha256": {
+    "src/api/routes/agent.py": "b68415706785dca3d365c9b3c24a052b95ab296df033531a11e5b944e28d2745",
+    "src/utils/config.py": "171f2c5e9f389c151bc35b889833f7087b9edd92d1a16aa7abac8114ce1beb03",
+    "frontend/src/composables/usePipelineStream.ts": "8b3b363185e395e4d7dffc06b721b39f99006066f630b0fb056a753ad6f14f9d",
+    "frontend/nginx.conf": "5233f6beb7d56c6714340bd7f70faaed59ccc542c4d6081a22928855b3ae89b9",
+    "tests/test_sse_stream.py": "44578c3eb395dc573e63be5f405bb5c33ca980fbcc880129223617c5b1867516",
+    "frontend/tests/usePipelineStream.spec.ts": "c41438f86f53f90344698f36145b098f6110c10b50fd03631b15ac4f3ecd4399",
+    "frontend/tests/support/fakeEventSource.ts": "6b23b176d1403807c5dcee3a3076af78ad4e8ee186edc592b5b75e9eed84a198",
+    "frontend/e2e/browser.spec.ts": "13ce65e3af71cbab8947440f6aed95fe93f023b04f62d9ed6e5b5da756491b71",
+    "frontend/playwright.config.ts": "29bc6a131775b81a661a51c09a428f46c14042b8939932c89f6b8285fa12ecac",
+    "tests/e2e/seed.py": "9e6f032cdafdd468b36bbe28f143e92678eb702d34f21dcc787b4f4560d442bb",
+    "tests/e2e/tls.conf": "601ddf400bd10be30da14a39068eb8090d26ef67a50db169c3e33781bf6ab50e",
+    "scripts/verify_browser.py": "591bc634f72b339d1422ea93a5e93236c670f69217abb98f028e8dd9e4b3debd",
+    "frontend/package-lock.json": "b818dfb36cc5d79dfaf0563e4ce1c295fc7df32667e307c8d05edc56f6ba4bf4"
+  }
+}

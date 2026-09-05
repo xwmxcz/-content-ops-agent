@@ -1,5 +1,9 @@
 # Phase 0 External Evidence Verification Plan
 
+> 历史验证计划（2026-09-05 标注）：下文保留最初计划与当时的工具限制，不能代表当前状态。
+> Docker 已可用；浏览器/TLS 与持久化的可执行入口见 [BROWSER_VERIFICATION.md](BROWSER_VERIFICATION.md)，
+> 实际通过项和剩余工作以 [WORKFLOW_CHECKPOINT.md](WORKFLOW_CHECKPOINT.md) 为准。
+
 **Status**: In Progress  
 **Started**: 2024-09-03  
 **Environment Constraints**: Docker unavailable, browser automation tools not installed

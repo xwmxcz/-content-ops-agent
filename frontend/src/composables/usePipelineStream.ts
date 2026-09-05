@@ -221,18 +221,23 @@ export function usePipelineStream(
    */
   function accept(event: Event): boolean {
     if (isAlreadyApplied(event)) return false
+    receiveActivity()
+    return true
+  }
+
+  function receiveActivity() {
+    if (terminal) return
     if (state !== 'open') {
       attempt = 0
       setState('open')
     }
     markActivity()
-    return true
   }
 
   /** Advances the resume cursor, or reports the seq as already applied. */
   function isAlreadyApplied(event: Event): boolean {
     const seq = Number((event as MessageEvent).lastEventId)
-    // Unsequenced frames (hello/ping) are liveness only, never replay hazards.
+    // Run frames without a usable sequence cannot advance the replay cursor.
     if (!Number.isFinite(seq) || seq <= 0) return false
     if (seq <= lastSeq) return true
     lastSeq = seq
@@ -240,14 +245,11 @@ export function usePipelineStream(
   }
 
   function bind(source: EventSource) {
-    // `hello` carries no seq; it only proves the connection is live.
-    source.addEventListener('hello', event => {
-      accept(event)
-    })
-
-    source.addEventListener('ping', event => {
-      accept(event)
-    })
+    // EventSource inherits the preceding lastEventId when a frame omits `id:`.
+    // Heartbeats therefore bypass run-event dedupe entirely: they refresh
+    // liveness without reading or advancing the persisted replay cursor.
+    source.addEventListener('hello', receiveActivity)
+    source.addEventListener('ping', receiveActivity)
 
     source.addEventListener('plan_ready', event => {
       if (!accept(event)) return

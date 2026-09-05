@@ -184,7 +184,7 @@ jobs, `rq` for a separate worker).
 Prerequisites:
 
 - Python 3.10+
-- Node.js 18+
+- Node.js 20+ (including the Playwright browser tests)
 - Docker Desktop if you want PostgreSQL, Redis, or the full Compose stack
 
 Install backend dependencies:
@@ -319,8 +319,13 @@ Frontend:
 
 ```bash
 cd frontend
+npm test
 npm run build
+cd ..
 ```
+
+For isolated browser/TLS and volume-persistence checks, run `python3 scripts/verify_browser.py`.
+See [browser verification](docs/BROWSER_VERIFICATION.md) for the required images, browser setup, and coverage limits.
 
 Migrations and Docker production validation:
 

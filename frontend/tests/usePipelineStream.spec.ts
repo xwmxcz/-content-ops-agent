@@ -39,6 +39,33 @@ describe('usePipelineStream', () => {
   })
 
   describe('subscription and event dispatch', () => {
+    it('refreshes liveness for pings that inherit the preceding run event id', async () => {
+      const { handlers, states } = makeHandlers()
+      const stream = usePipelineStream(handlers, { staleAfterMs: 1000 })
+      await stream.subscribe('run-1')
+      FakeEventSource.last.emit('step_token', { index: 1, delta: 'a' }, 7)
+      for (let i = 0; i < 4; i++) {
+        vi.advanceTimersByTime(750)
+        FakeEventSource.last.emit('ping', {})
+      }
+      expect(states.map(s => s.state)).not.toContain('stale')
+      expect(stream.getStatus()).toMatchObject({ state: 'open', lastSeq: 7 })
+      expect(handlers.onStepToken).toHaveBeenCalledTimes(1)
+      stream.close()
+    })
+
+    it('recovers from stale on a ping without changing the replay cursor', async () => {
+      const { handlers } = makeHandlers()
+      const stream = usePipelineStream(handlers, { staleAfterMs: 1000 })
+      await stream.subscribe('run-1')
+      FakeEventSource.last.emit('step_token', { index: 1, delta: 'a' }, 7)
+      vi.advanceTimersByTime(1000)
+      expect(stream.getStatus().state).toBe('stale')
+      FakeEventSource.last.emit('ping', {})
+      expect(stream.getStatus()).toMatchObject({ state: 'open', lastSeq: 7 })
+      stream.close()
+    })
+
     it('opens without a resume cursor on a fresh subscription', async () => {
       const { handlers } = makeHandlers()
       const stream = usePipelineStream(handlers)

@@ -166,7 +166,7 @@ Docker 会自动读取根目录 `.env`。如果是宿主机开发，复制 `.env
 环境要求：
 
 - Python 3.10+
-- Node.js 18+
+- Node.js 20+（包含 Playwright 浏览器测试）
 - 如果要启动 PostgreSQL、Redis 或完整 Compose 栈，需要 Docker Desktop
 
 安装后端依赖：
@@ -297,8 +297,13 @@ python -m compileall src tests migrations examples
 
 ```bash
 cd frontend
+npm test
 npm run build
+cd ..
 ```
+
+浏览器/TLS 与卷持久化验证：`python3 scripts/verify_browser.py`。
+所需镜像、浏览器安装和覆盖边界见 [浏览器验证指南](docs/BROWSER_VERIFICATION.md)。
 
 Docker：
 

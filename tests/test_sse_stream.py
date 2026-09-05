@@ -7,7 +7,7 @@ resume logic depends on:
 - every run event carries an `id:` equal to its store sequence
 - `after_seq` / `Last-Event-ID` resume strictly after the given sequence
 - terminal events end the stream
-- silence produces keepalive comment frames, not sequence numbers
+- silence produces browser-visible ping frames, without sequence numbers
 """
 
 import asyncio
@@ -168,18 +168,21 @@ def test_keepalive_is_emitted_while_no_events_arrive():
     frames = asyncio.run(collect(store, limit=4))
 
     assert frames[0] == "event: hello\ndata: {}\n\n"
-    assert frames[1:] == [": keepalive\n\n"] * (len(frames) - 1)
+    assert frames[1:] == [": keepalive\nevent: ping\ndata: {}\n\n"] * (len(frames) - 1)
 
 
 def test_keepalive_carries_no_sequence_number():
     """A keepalive must never look like a replayable event to the client."""
-    store = FakeStore([])
+    store = FakeStore([event(7, "step_token", {"index": 1, "delta": "a"})])
 
-    frames = asyncio.run(collect(store, limit=3))
+    frames = asyncio.run(collect(store, limit=4))
 
-    for frame in frames[1:]:
+    assert frames[1].startswith("id: 7\n")
+    for frame in frames[2:]:
         assert "id:" not in frame
-        assert "event:" not in frame
+        assert "event: ping\n" in frame
+        assert "data: {}\n\n" in frame
+    assert store.calls[-1] == 7
 
 
 @pytest.mark.parametrize(

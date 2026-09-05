@@ -112,7 +112,7 @@ class Config:
     JOB_REAPER_BATCH_SIZE = int(os.getenv("JOB_REAPER_BATCH_SIZE", "50"))
 
     # SSE run streaming (P1-06). Clients treat silence as a stale connection, so
-    # the server must emit a keepalive comment well inside the client's staleness
+    # the server must emit a browser-visible ping inside the client's staleness
     # budget: a long research step produces no events for minutes, and without a
     # keepalive that is indistinguishable from a dead proxy. The poll interval is
     # how often the event table is swept for new rows.

@@ -142,9 +142,9 @@ async def stream_pipeline_run(
         deadline = time.time() + config.SSE_STREAM_TIMEOUT_SECONDS
         terminal = {"run_complete", "run_failed", "run_cancelled"}
         yield "event: hello\ndata: {}\n\n"
-        # Keepalives are comment frames: they prove liveness to the client and to
-        # any intermediate proxy without consuming a sequence number, so they can
-        # never be mistaken for a replayable run event.
+        # Comments keep proxies alive but are invisible to native EventSource.
+        # Include a named ping so the browser can refresh its silence timer.
+        # No id is emitted: heartbeats never consume a persisted event sequence.
         last_activity = time.time()
         while time.time() < deadline:
             events = store.list_run_events(run_id, after_seq=last_seq, limit=100)
@@ -157,7 +157,7 @@ async def stream_pipeline_run(
             if events:
                 last_activity = now
             elif now - last_activity >= config.SSE_KEEPALIVE_SECONDS:
-                yield ": keepalive\n\n"
+                yield ": keepalive\nevent: ping\ndata: {}\n\n"
                 last_activity = now
             await asyncio.sleep(config.SSE_POLL_INTERVAL_SECONDS)
 
