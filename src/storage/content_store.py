@@ -941,9 +941,13 @@ class ContentStore:
                 generation_params=json.dumps(generation_params, ensure_ascii=False) if generation_params else None,
             )
             session.add(asset)
-            session.commit()
+            session.flush()
             session.refresh(asset)
-            return self._media_asset_to_dict(asset)
+            # Finish metadata reads before commit so upload cleanup never
+            # removes a file because a post-commit refresh or conversion failed.
+            result = self._media_asset_to_dict(asset)
+            session.commit()
+            return result
         except Exception:
             session.rollback()
             raise
@@ -1917,7 +1921,7 @@ class ContentStore:
                 action.status = "expired"
                 session.commit()
                 # P2-01: Track expired capabilities
-                metrics.capability_expired_total.inc()
+                metrics.capability_expired_total.labels(tool=action.tool_name).inc()
                 log_capability_event(
                     logger, "expired", action_id, tool_name,
                     expired=True

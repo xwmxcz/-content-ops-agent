@@ -96,8 +96,11 @@ async def run_job_async(job_id: str, store: ContentStore) -> None:
     if not job:
         return
     
-    # Check if job should be retried based on next_retry_at
-    if job["status"] == "failed" and job.get("next_retry_at"):
+    # Only scheduled failures are retryable; duplicate deliveries must not
+    # revive permanent failures or jobs that exhausted their retry budget.
+    if job["status"] == "failed":
+        if not job.get("next_retry_at"):
+            return
         next_retry_at = datetime.fromisoformat(job["next_retry_at"])
         if datetime.now() < next_retry_at:
             # Too early to retry, skip this execution
@@ -294,7 +297,7 @@ def _handle_job_error(
         )
         
         # P2-01: Metrics and logging
-        metrics.job_retry_attempts_total.labels(error_type=error_type).inc()
+        metrics.job_retry_attempts_total.labels(error_type=error_type, job_type=job_type).inc()
         log_job_event(
             logger, "retry_scheduled", job_id, job_type,
             error_type=error_type, retry_count=current_attempt, next_retry_at=next_retry_at.isoformat()
@@ -337,8 +340,8 @@ def _handle_job_error(
         
         # P2-01: Metrics and logging
         if current_attempt >= max_retries:
-            metrics.job_retry_exhausted_total.inc()
-        metrics.job_failures_total.labels(error_type=error_type).inc()
+            metrics.job_retry_exhausted_total.labels(job_type=job_type).inc()
+        metrics.job_failures_total.labels(error_type=error_type, job_type=job_type).inc()
         log_job_event(
             logger, "failed_permanently", job_id, job_type,
             error_type=error_type, retry_count=current_attempt, max_retries=max_retries

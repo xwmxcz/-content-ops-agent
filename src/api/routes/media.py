@@ -1,3 +1,5 @@
+"""Media endpoints; uploads copy bounded chunks in FastAPI's worker pool."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -27,7 +29,7 @@ def list_media_assets(
 
 
 @router.post("/media/upload", response_model=MediaUploadResponse, status_code=status.HTTP_201_CREATED)
-async def upload_media(
+def upload_media(
     content_id: int = Form(...),
     media_type: str = Form(...),
     file: UploadFile = File(...),
@@ -55,33 +57,38 @@ async def upload_media(
             detail="Only one video is allowed per content item in v1",
         )
 
-    payload = await file.read()
-    if not payload:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
-    if media_type == "video":
-        max_size = config.MEDIA_MAX_VIDEO_SIZE_MB * 1024 * 1024
-        if len(payload) > max_size:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Video file exceeds {config.MEDIA_MAX_VIDEO_SIZE_MB} MB",
-            )
-
     storage_root = Path(config.MEDIA_STORAGE_ROOT).resolve()
     target_dir = storage_root / str(content_id) / media_type
     target_dir.mkdir(parents=True, exist_ok=True)
 
     original_name = Path(file.filename or f"{media_type}.bin")
     target_path = target_dir / f"{uuid4().hex}{original_name.suffix.lower()}"
-    target_path.write_bytes(payload)
+    max_size = config.MEDIA_MAX_VIDEO_SIZE_MB * 1024 * 1024 if media_type == "video" else None
+    size = 0
+    try:
+        with target_path.open("wb") as destination:
+            while chunk := file.file.read(1024 * 1024):
+                size += len(chunk)
+                if max_size is not None and size > max_size:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Video file exceeds {config.MEDIA_MAX_VIDEO_SIZE_MB} MB",
+                    )
+                destination.write(chunk)
+        if not size:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
 
-    asset = store.save_media_asset(
-        content_id=content_id,
-        media_type=media_type,
-        source_type="upload",
-        file_name=original_name.name,
-        file_path=str(target_path),
-        mime_type=file.content_type,
-    )
+        asset = store.save_media_asset(
+            content_id=content_id,
+            media_type=media_type,
+            source_type="upload",
+            file_name=original_name.name,
+            file_path=str(target_path),
+            mime_type=file.content_type,
+        )
+    except Exception:
+        target_path.unlink(missing_ok=True)
+        raise
     return _with_file_url(asset)
 
 

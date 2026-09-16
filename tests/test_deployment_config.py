@@ -7,6 +7,7 @@ so nothing exercised them until Docker Compose actually started.
 
 import importlib.util
 import logging
+import os
 import sys
 from logging.config import fileConfig
 from pathlib import Path
@@ -28,6 +29,10 @@ def _load_module_namespace(path: Path, module_name: str) -> dict:
         sys.modules.pop(module_name, None)
 
 
+@pytest.mark.skipif(
+    os.name != "posix",
+    reason="Gunicorn's native configuration validation requires POSIX modules (grp, pwd)",
+)
 def test_gunicorn_config_has_no_name_colliding_with_a_gunicorn_setting():
     """Every colliding module-level name must survive gunicorn's own validation.
 
