@@ -1,3 +1,5 @@
+"""Own runtime settings and fail-fast migration checks for account-based access."""
+
 import ipaddress
 import math
 import os
@@ -12,9 +14,8 @@ load_dotenv()
 class Config:
     """应用配置"""
 
-    # Runtime profile. Backward-compatible schema creation and disabled auth are
-    # available only in the explicit development/test profiles. Production is
-    # validated fail-closed during API/worker startup.
+    # Authentication is required in every profile. Fresh local schema creation
+    # is available only in development/test; production validates fail-closed.
     # Omission is production, not development. Local compatibility must be an
     # explicit APP_ENV=development/test choice (the checked-in env examples do
     # this), so direct image/Gunicorn/server.py entrypoints also fail closed.
@@ -70,15 +71,10 @@ class Config:
         os.getenv("PLANNER_STRUCTURED_OUTPUT_ENABLED", "true").lower() == "true"
     )
 
-    # Authentication
-    AUTH_ENABLED = os.getenv("AUTH_ENABLED", "false").lower() == "true"
-    AUTH_USERNAME = os.getenv("AUTH_USERNAME", "admin")
-    AUTH_PASSWORD = os.getenv("AUTH_PASSWORD", "")
+    # PostgreSQL accounts own credentials; this key signs every user session.
     AUTH_SECRET_KEY = os.getenv("AUTH_SECRET_KEY", "")
     AUTH_TOKEN_EXPIRE_MINUTES = int(os.getenv("AUTH_TOKEN_EXPIRE_MINUTES", "1440"))
-    AUTH_RESOURCE_TICKET_SECONDS = int(
-        os.getenv("AUTH_RESOURCE_TICKET_SECONDS", os.getenv("AUTH_STREAM_TICKET_SECONDS", "45"))
-    )
+    AUTH_RESOURCE_TICKET_SECONDS = int(os.getenv("AUTH_RESOURCE_TICKET_SECONDS", "45"))
     AUTH_MEDIA_TICKET_SECONDS = int(os.getenv("AUTH_MEDIA_TICKET_SECONDS", "300"))
 
     # Database
@@ -178,21 +174,35 @@ class Config:
     @classmethod
     def validate_runtime(cls) -> bool:
         """Validate process-wide deployment settings before serving work."""
+        removed = [
+            name for name in ("AUTH_ENABLED", "AUTH_USERNAME", "AUTH_PASSWORD")
+            if name in os.environ
+        ]
+        if removed:
+            raise ValueError(
+                "Authentication configuration migration required: remove "
+                + ", ".join(removed)
+                + "; authentication is always enabled and credentials belong to PostgreSQL accounts. "
+                "Register a new account or use scripts/claim_legacy_workspace.py for existing data."
+            )
+        if "AUTH_STREAM_TICKET_SECONDS" in os.environ:
+            raise ValueError(
+                "Authentication configuration migration required: remove AUTH_STREAM_TICKET_SECONDS "
+                "and use AUTH_RESOURCE_TICKET_SECONDS."
+            )
         if cls.APP_ENV not in {"development", "test", "production"}:
             raise ValueError("APP_ENV must be development, test, or production")
         if cls.SCHEMA_MANAGEMENT not in {"create", "validate"}:
             raise ValueError("SCHEMA_MANAGEMENT must be create or validate")
 
         if cls.APP_ENV != "production":
+            if not cls.AUTH_SECRET_KEY.strip():
+                raise ValueError("AUTH_SECRET_KEY is required in every runtime profile")
             return True
 
         errors: list[str] = []
         if cls.SCHEMA_MANAGEMENT != "validate":
             errors.append("production requires SCHEMA_MANAGEMENT=validate")
-        if not cls.AUTH_ENABLED:
-            errors.append("production requires AUTH_ENABLED=true")
-        if _is_unsafe_secret(cls.AUTH_PASSWORD, minimum=12, minimum_unique=8):
-            errors.append("production requires a high-entropy AUTH_PASSWORD of at least 12 characters")
         if _is_unsafe_secret(cls.AUTH_SECRET_KEY, minimum=32, minimum_unique=12):
             errors.append("production requires a high-entropy AUTH_SECRET_KEY of at least 32 characters")
         if cls.DEBUG:
@@ -223,10 +233,10 @@ class Config:
             cls.REDIS_URL, {"content_ops", "redis", "password"}
         ):
             errors.append("production REDIS_URL must include a high-entropy password of at least 16 characters")
-        secrets = [cls.AUTH_PASSWORD, cls.AUTH_SECRET_KEY, database_password, redis_password]
+        secrets = [cls.AUTH_SECRET_KEY, database_password, redis_password]
         normalized = [secret for secret in secrets if secret]
         if len(normalized) != len(set(normalized)):
-            errors.append("production authentication, signing, database, and Redis secrets must be distinct")
+            errors.append("production signing, database, and Redis secrets must be distinct")
 
         if errors:
             raise ValueError("Unsafe production configuration: " + "; ".join(errors))

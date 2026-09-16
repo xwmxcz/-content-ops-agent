@@ -1544,10 +1544,10 @@ def test_delete_content_cascades_local_records_and_files(client, store):
     with store.engine.begin() as connection:
         connection.execute(
             text(
-                "INSERT INTO content_metrics (content_id, platform, views, likes, comments, shares) "
-                "VALUES (:content_id, :platform, 10, 2, 1, 0)"
+                "INSERT INTO content_metrics (user_id, content_id, platform, views, likes, comments, shares) "
+                "VALUES (:user_id, :content_id, :platform, 10, 2, 1, 0)"
             ),
-            {"content_id": content_id, "platform": "xiaohongshu"},
+            {"user_id": store.user_id, "content_id": content_id, "platform": "xiaohongshu"},
         )
 
     response = client.delete(f"/api/content/{content_id}")

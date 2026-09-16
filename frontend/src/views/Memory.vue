@@ -137,18 +137,19 @@ onMounted(() => {
 <template>
   <div class="memory-page">
     <header class="page-header">
-      <h2>记忆管理</h2>
-      <p class="subtitle">Hermes 风格 4 层记忆:MEMORY.md(Agent 笔记) + USER.md(用户画像) + 会话全文检索 + 上下文压缩</p>
+      <h1>让每次创作，更懂你。</h1>
+      <p class="subtitle">记下品牌口径与写作偏好，让内容助手保持一致的表达。</p>
     </header>
 
     <el-tabs v-model="activeTab" class="mem-tabs">
-      <el-tab-pane label="编辑" name="edit">
+      <el-tab-pane label="长期记忆" name="edit">
         <div class="edit-grid">
           <section v-loading="agentLoading" class="pane">
             <div class="pane-head">
               <div>
-                <h3>MEMORY.md</h3>
-                <p class="pane-subtitle">Agent 自己的笔记 — 项目惯例、工具坑、品牌口径</p>
+                <span class="file-label">MEMORY.md</span>
+                <h3>工作笔记</h3>
+                <p class="pane-subtitle">项目惯例、品牌口径，以及值得记住的经验。</p>
               </div>
               <span :class="['count', { over: agentOver }]">{{ agentCount }} / {{ agentMeta.char_limit }}</span>
             </div>
@@ -157,7 +158,7 @@ onMounted(() => {
               type="textarea"
               :rows="18"
               resize="none"
-              placeholder="例如:&#10;# 品牌口径&#10;简洁口语化中文,不堆砌 emoji&#10;§&#10;# 工具坑&#10;refine_content 时务必先 view_content 确认 id"
+              placeholder="# 品牌口径&#10;用简洁、自然的中文表达。&#10;&#10;# 项目约定&#10;在这里记录内容规范与工作经验…"
             />
             <div class="pane-actions">
               <el-button :icon="Refresh" plain @click="loadAgent">重新加载</el-button>
@@ -170,8 +171,9 @@ onMounted(() => {
           <section v-loading="userLoading" class="pane">
             <div class="pane-head">
               <div>
-                <h3>USER.md</h3>
-                <p class="pane-subtitle">用户画像 — 称呼、语言、风格偏好</p>
+                <span class="file-label">USER.md</span>
+                <h3>我的偏好</h3>
+                <p class="pane-subtitle">如何称呼你，你喜欢的语言与写作风格。</p>
               </div>
               <span :class="['count', { over: userOver }]">{{ userCount }} / {{ userMeta.char_limit }}</span>
             </div>
@@ -180,7 +182,7 @@ onMounted(() => {
               type="textarea"
               :rows="18"
               resize="none"
-              placeholder="例如:&#10;偏好简洁口语化中文&#10;§&#10;不喜欢 emoji&#10;§&#10;主理品牌叫 TechFlow"
+              placeholder="# 关于我&#10;我负责的品牌是…&#10;&#10;# 写作偏好&#10;喜欢简洁口语化的表达，少用表情符号。"
             />
             <div class="pane-actions">
               <el-button :icon="Refresh" plain @click="loadUser">重新加载</el-button>
@@ -193,10 +195,11 @@ onMounted(() => {
 
         <div class="freeze-banner">
           <p>
-            两份文件在每个对话开始时被加载到 system prompt 后冻结。修改后,新开对话才会生效。
+            <strong>保存后，新会话会自动使用这些记忆。</strong>
+            <span>若要更新已有会话，点击右侧按钮；下一条消息会重新加载。</span>
           </p>
           <el-button :icon="DocumentCopy" size="small" plain @click="invalidateAllSnapshots">
-            立即清空所有冻结快照
+            更新已有会话记忆
           </el-button>
         </div>
       </el-tab-pane>
@@ -205,29 +208,29 @@ onMounted(() => {
         <div class="search-form">
           <el-input
             v-model="searchQuery"
-            placeholder="跨会话搜索消息(支持 ≥ 3 字中文,2 字走 LIKE)"
+            placeholder="搜索曾经聊过的内容…"
             :prefix-icon="Search"
             clearable
-            style="flex: 1"
+            class="search-keyword"
             @keyup.enter="runSearch"
           />
           <el-input
             v-model="searchThread"
-            placeholder="限定 thread_id(可选)"
+            placeholder="会话 ID（可选）"
             clearable
-            style="width: 220px"
+            class="search-thread"
             @keyup.enter="runSearch"
           />
           <el-button type="primary" :loading="searching" @click="runSearch">搜索</el-button>
         </div>
 
         <div v-loading="searching" class="search-results">
-          <div v-if="!searchTouched && !searching" class="empty-state">输入关键词后按回车开始检索</div>
-          <div v-else-if="searchResults.length === 0 && !searching" class="empty-state">没有命中任何消息</div>
+          <div v-if="!searchTouched && !searching" class="empty-state"><strong>让过去的想法，再次派上用场。</strong><span>输入关键词，找回聊过的选题、草稿与灵感。</span></div>
+          <div v-else-if="searchResults.length === 0 && !searching" class="empty-state"><strong>还没有找到相关消息</strong><span>试试更短的关键词，或清除会话 ID 后搜索。</span></div>
           <div v-for="hit in searchResults" :key="hit.id" class="hit-card">
             <div class="hit-meta">
-              <el-tag size="small" :type="hit.role === 'user' ? 'info' : 'success'">{{ hit.role }}</el-tag>
-              <span class="thread">thread: {{ hit.thread_id }}</span>
+              <el-tag size="small" :type="hit.role === 'user' ? 'info' : 'success'">{{ hit.role === 'user' ? '我' : '内容助手' }}</el-tag>
+              <span class="thread">会话 {{ hit.thread_id }}</span>
               <span v-if="hit.created_at" class="date">{{ hit.created_at.slice(0, 16).replace('T', ' ') }}</span>
             </div>
             <div class="hit-content">{{ hit.content }}</div>
@@ -240,142 +243,315 @@ onMounted(() => {
 
 <style scoped>
 .memory-page {
-  width: min(100%, 1240px);
+  width: min(100%, 1440px);
   margin: 0 auto;
-  padding: 28px 32px 40px;
-  background: var(--c-bg);
+  padding: 32px;
 }
 
-.memory-page .page-header {
-  display: grid;
-  gap: 6px;
-  margin-bottom: 18px;
+.page-header {
+  display: block;
+  margin-bottom: 28px;
 }
 
-.page-header h2 {
-  margin: 0 0 4px;
+.page-header h1 {
+  margin: 0 0 10px;
   color: var(--c-text);
+  font-family: var(--font-display);
   font-size: var(--fs-h1);
-  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -.04em;
 }
 
 .subtitle {
   color: var(--c-text-secondary);
   margin: 0;
   font-size: 13px;
-  line-height: 1.6;
-}
-
-.mem-tabs {
-  margin-top: 12px;
-  padding: 18px 20px 20px;
-  border: 1px solid var(--c-border);
-  border-radius: 6px;
-  background: var(--c-surface);
-  box-shadow: var(--shadow-panel);
+  line-height: 1.8;
 }
 
 .mem-tabs :deep(.el-tabs__header) {
-  margin-bottom: 16px;
+  margin-bottom: 24px;
+}
+
+.mem-tabs :deep(.el-tabs__nav-wrap::after) {
+  height: 1px;
+  background: var(--c-border);
+}
+
+.mem-tabs :deep(.el-tabs__item) {
+  height: 46px;
+  padding-inline: 24px;
+  font-size: 14px;
+}
+
+.mem-tabs :deep(.el-tabs__active-bar) {
+  height: 3px;
+  border-radius: var(--r-pill);
 }
 
 .edit-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 24px;
 }
-@media (max-width: 1000px) {
-  .edit-grid { grid-template-columns: 1fr; }
-}
+
 .pane {
-  border: 1px solid var(--c-border);
-  border-radius: 6px;
-  padding: 16px;
-  background: #fbfcfe;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-card);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-panel);
+  overflow: hidden;
 }
 .pane-head {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
+  gap: 12px;
+  padding: 24px 26px 20px;
+  border-bottom: 1px solid var(--c-border-soft);
 }
+
+.file-label {
+  color: var(--c-text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: .06em;
+}
+
 .pane-head h3 {
-  margin: 0;
-  font-size: 15px;
+  margin: 6px 0 8px;
   color: var(--c-text);
+  font-family: var(--font-editorial);
+  font-size: 23px;
+  font-weight: 500;
 }
+
 .pane-subtitle {
-  margin: 4px 0 0;
-  font-size: 12px;
+  margin: 0;
   color: var(--c-text-secondary);
+  font-size: 12px;
+  line-height: 1.7;
 }
+
 .count {
-  font-size: 12px;
-  color: var(--c-text-secondary);
+  flex-shrink: 0;
+  margin-top: 4px;
+  padding: 4px 8px;
+  border-radius: var(--r-pill);
+  background: var(--c-bg-soft);
+  color: var(--c-text-tertiary);
+  font-size: 10px;
   font-variant-numeric: tabular-nums;
 }
+
 .count.over {
-  color: #e54d4d;
+  background: var(--c-fail-soft);
+  color: var(--c-fail);
   font-weight: 600;
 }
-.pane-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
+
+.pane :deep(.el-textarea) {
+  padding: 16px 12px 0;
 }
-.freeze-banner {
-  margin-top: 18px;
-  padding: 12px 16px;
-  border: 1px dashed var(--c-border);
-  border-radius: 6px;
-  background: #fbfcfe;
+
+.pane :deep(.el-textarea__inner) {
+  padding: 10px 14px;
+  border-radius: var(--r-control);
+  box-shadow: none;
+  color: var(--c-text-secondary);
+  background: var(--c-surface);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.9;
+}
+.pane :deep(.el-textarea__inner:focus) {
+  box-shadow: 0 0 0 1px var(--c-accent) inset;
+}
+
+.pane-actions {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 13px;
+  gap: 8px;
+  padding: 16px 24px 22px;
+}
+
+.pane-actions :deep(.el-button--primary) {
+  min-width: 92px;
+}
+
+.freeze-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 24px;
+  margin-top: 24px;
+  padding: 18px 22px;
+  border-radius: var(--r-control);
+  background: var(--c-accent-soft);
   color: var(--c-text-secondary);
 }
+
 .freeze-banner p {
+  display: grid;
+  gap: 5px;
   margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
 }
+
+.freeze-banner strong {
+  color: var(--c-accent);
+  font-weight: 500;
+}
+
+.freeze-banner span {
+  color: var(--c-text-secondary);
+  font-size: 11px;
+}
+
+.freeze-banner :deep(.el-button) {
+  flex-shrink: 0;
+}
+
 .search-form {
   display: flex;
-  gap: 8px;
-  margin-bottom: 16px;
-}
-.search-results {
-  min-height: 200px;
-}
-.empty-state {
-  text-align: center;
-  padding: 60px 20px;
-  color: var(--c-text-secondary);
-}
-.hit-card {
+  gap: 12px;
+  padding: 20px;
   border: 1px solid var(--c-border);
-  border-radius: 6px;
-  padding: 12px 14px;
-  margin-bottom: 10px;
+  border-radius: var(--r-card);
   background: var(--c-surface);
 }
-.hit-card:hover {
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+
+.search-keyword {
+  flex: 1;
 }
+
+.search-thread {
+  width: 220px;
+}
+
+.search-results {
+  min-height: 320px;
+  margin-top: 20px;
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 12px;
+  min-height: 320px;
+  padding: 40px 20px;
+  color: var(--c-text-tertiary);
+  text-align: center;
+}
+
+.empty-state strong {
+  color: var(--c-text-secondary);
+  font-family: var(--font-editorial);
+  font-size: 22px;
+  font-weight: 500;
+}
+
+.empty-state span {
+  font-size: 13px;
+}
+
+.hit-card {
+  padding: 22px 24px;
+  margin-bottom: 14px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-card);
+  background: var(--c-surface);
+}
+
 .hit-meta {
   display: flex;
-  gap: 12px;
+  flex-wrap: wrap;
   align-items: center;
-  font-size: 12px;
-  color: var(--c-text-secondary);
-  margin-bottom: 6px;
+  gap: 8px 14px;
+  margin-bottom: 14px;
+  color: var(--c-text-tertiary);
+  font-size: 11px;
 }
-.thread { font-family: 'JetBrains Mono', monospace; }
+
+.thread {
+  overflow-wrap: anywhere;
+}
+
+.date {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
 .hit-content {
-  font-size: 14px;
-  line-height: 1.6;
   color: var(--c-text);
+  font-size: 14px;
+  line-height: 1.85;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+
+@media (max-width: 1100px) {
+  .edit-grid {
+    gap: 16px;
+  }
+
+  .pane-head {
+    flex-wrap: wrap;
+    padding: 20px;
+  }
+
+  .pane-actions {
+    padding: 16px 20px 20px;
+  }
+
+}
+
+@media (max-width: 820px) {
+  .memory-page {
+    padding: 20px 16px;
+  }
+
+  .edit-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .freeze-banner {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 14px;
+    padding: 18px;
+  }
+
+  .search-form {
+    flex-wrap: wrap;
+    padding: 16px;
+    gap: 10px;
+  }
+
+  .search-keyword {
+    flex-basis: 100%;
+  }
+
+  .search-thread {
+    flex: 1;
+    width: auto;
+    min-width: 0;
+  }
+
+  .hit-card {
+    padding: 18px;
+  }
+
+  .date {
+    margin-left: 0;
+  }
+
 }
 </style>

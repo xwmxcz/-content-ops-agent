@@ -5,7 +5,12 @@ Verifies:
   2. The tool-calling loop completes and returns non-empty text.
 
 Run:
+    # Set TEST_DATABASE_URL to a disposable PostgreSQL database only.
+    # Requires DEEPSEEK_API_KEY; this script makes billable model calls.
     python tests/manual_deepseek_researcher.py
+
+Creates/reuses the manual_researcher account only in TEST_DATABASE_URL and runs
+the researcher within that account's workspace; DATABASE_URL is never a fallback.
 """
 from __future__ import annotations
 
@@ -25,6 +30,8 @@ load_dotenv(ROOT / ".env")
 from src.api.schemas.agent import SubAgentId  # noqa: E402
 from src.api.services.sub_agents import SUB_AGENTS, SubAgentRunner  # noqa: E402
 from src.storage import ContentStore  # noqa: E402
+from src.storage.account_store import AccountStore  # noqa: E402
+from src.api.passwords import hash_password  # noqa: E402
 from src.utils import config  # noqa: E402
 
 
@@ -42,7 +49,12 @@ async def main() -> int:
     if not test_db_url:
         print("[skip] TEST_DATABASE_URL not set (need a scratch PostgreSQL database)")
         return 0
-    store = ContentStore(database_url=test_db_url)
+    system_store = ContentStore(database_url=test_db_url)
+    accounts = AccountStore(system_store)
+    user = accounts.get_user_by_username("manual_researcher") or accounts.create_user(
+        "manual_researcher", hash_password("Manual-researcher-test-only-2026"),
+    )
+    store = system_store.for_user(user["id"])
     runner = SubAgentRunner(store=store)
 
     tool_events: list[tuple[str, dict]] = []

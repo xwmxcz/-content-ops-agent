@@ -33,7 +33,8 @@ test.beforeAll(async () => {
 
 async function login(page: Page) {
   await page.goto('/login')
-  await page.getByPlaceholder('请输入管理员密码').fill(process.env.E2E_PASSWORD!)
+  await page.getByPlaceholder('请输入用户名').fill(fixtures.username)
+  await page.getByPlaceholder('请输入密码', { exact: true }).fill(process.env.E2E_PASSWORD!)
   await page.getByRole('button', { name: '进入工作台' }).click()
   await expect(page).toHaveURL(new URL('/', process.env.E2E_BASE_URL!).href)
 }
@@ -115,12 +116,13 @@ test('logout clears resource cookie and blocks new media and stream requests', a
     const token = localStorage.getItem('content_ops_agent_auth_token')
     const response = await fetch('/api/auth/logout', { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
     localStorage.removeItem('content_ops_agent_auth_token')
-    return response.status
+    return { status: response.status, token }
   })
-  expect(result).toBe(204)
+  expect(result.status).toBe(204)
   expect((await context.cookies()).some(item => item.name === cookieName)).toBe(false)
   expect(await status(page, `/api/media/${fixtures.media_id}/file`)).toBe(401)
   expect(await status(page, '/api/agent/runs/e2e_auth/stream')).toBe(401)
+  expect(await status(page, '/api/content', { Authorization: `Bearer ${result.token}` })).toBe(401)
 })
 
 test('heartbeat prevents false stale state after a sequenced event', async ({ page }) => {

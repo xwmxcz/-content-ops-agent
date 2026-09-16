@@ -2,18 +2,18 @@
   <div class="page history-page">
     <section class="history-hero">
       <div>
-        <span class="hero-kicker">内容库</span>
         <h1 class="page-title">历史内容</h1>
-        <p class="page-subtitle">查看内容、补充素材、发起小红书发布，并管理归档或删除本地记录。</p>
+        <p class="page-subtitle">从草稿到成稿，整理、打磨并发布你的内容。</p>
       </div>
       <div class="hero-actions">
         <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
+        <router-link to="/" class="create-link"><el-icon><Plus /></el-icon>新建内容</router-link>
       </div>
     </section>
 
     <section class="section filter-section">
       <div class="filter-grid">
-        <el-input v-model="query" placeholder="搜索标题或正文" />
+        <el-input v-model="query" :prefix-icon="Search" placeholder="搜索标题或正文" />
         <el-select v-model="filters.content_type" clearable placeholder="内容类型">
           <el-option v-for="item in CONTENT_TYPE_OPTIONS" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
@@ -25,7 +25,7 @@
           <el-option label="已归档" value="archived" />
           <el-option label="Agent 成稿" value="agent_final" />
         </el-select>
-        <el-button type="primary" @click="load">筛选</el-button>
+        <el-button @click="load">筛选</el-button>
       </div>
     </section>
 
@@ -33,12 +33,10 @@
       <div class="section list-section">
         <div class="section-head">
           <div>
-            <span class="section-kicker">列表</span>
-            <h2>内容列表</h2>
+            <h2>全部内容 <span class="inline-count">{{ filteredItems.length }}</span></h2>
           </div>
           <div class="list-actions">
-            <span class="section-pill">{{ filteredItems.length }} 条</span>
-            <el-button v-if="!selectionMode" @click="enterSelectionMode">批量选择</el-button>
+            <el-button v-if="!selectionMode" text size="small" @click="enterSelectionMode">批量选择</el-button>
             <el-button v-else @click="exitSelectionMode">退出选择</el-button>
           </div>
         </div>
@@ -79,7 +77,7 @@
             v-for="item in filteredItems"
             :key="item.id"
             class="library-entry"
-            :class="{ selected: isSelected(item.id), selectable: selectionMode }"
+            :class="{ selected: isSelected(item.id), current: selected?.id === item.id, selectable: selectionMode }"
           >
             <label v-if="selectionMode" class="card-checkbox" @click.stop>
               <el-checkbox :model-value="isSelected(item.id)" @change="onSelectionChange(item.id, $event)" />
@@ -99,23 +97,24 @@
       <div class="section detail-section">
         <div class="section-head">
           <div>
-            <span class="section-kicker">详情</span>
-            <h2>{{ selected?.title || '内容详情' }}</h2>
+            <span class="section-kicker">{{ selected ? `稿件 ${String(selected.id).padStart(3, '0')}` : '内容预览' }}</span>
+            <h2 v-if="selected">{{ selected.title || '未命名内容' }}</h2>
           </div>
-          <div class="detail-actions">
-            <el-button :icon="Edit" :disabled="!selected || selectionMode" @click="goRefine">去打磨</el-button>
-            <el-button :icon="DocumentCopy" :disabled="!selected?.content" @click="copyContent">复制</el-button>
-            <el-button :icon="FolderDelete" :disabled="!selected || selectionMode" @click="archiveSelectedSingle">归档</el-button>
-            <el-button type="danger" :icon="Delete" :disabled="!selected || selectionMode" @click="deleteSelectedSingle">
+          <div v-if="selected" class="detail-actions">
+            <el-button type="primary" plain :icon="Edit" :disabled="!selected || selectionMode" @click="goRefine">去打磨</el-button>
+            <el-button text :icon="DocumentCopy" :disabled="!selected?.content" @click="copyContent">复制</el-button>
+            <el-button text :icon="FolderDelete" :disabled="!selected || selectionMode" @click="archiveSelectedSingle">归档</el-button>
+            <el-button text type="danger" :icon="Delete" :disabled="!selected || selectionMode" @click="deleteSelectedSingle">
               删除本地内容
             </el-button>
           </div>
         </div>
 
-        <el-empty
-          v-if="!selected"
-          :description="selectionMode ? '批量选择模式下，点击左侧卡片可选中或取消选中。' : '点击左侧内容查看详情'"
-        />
+        <div v-if="!selected" class="detail-empty">
+          <div class="empty-paper" aria-hidden="true"><el-icon><Document /></el-icon><i></i><i></i><i></i></div>
+          <h3>{{ selectionMode ? '批量整理，让内容井然有序' : '挑选一份内容，继续创作' }}</h3>
+          <p>{{ selectionMode ? '点击左侧卡片选择需要处理的内容。' : '在左侧选择稿件，阅读全文、补充素材，或继续打磨。' }}</p>
+        </div>
         <div v-else class="detail-shell">
           <div class="detail-meta">
             <div class="meta-card">
@@ -137,7 +136,6 @@
           <section class="detail-block">
             <div class="block-head">
               <div>
-                <span class="section-kicker">素材</span>
                 <h3>素材管理</h3>
               </div>
               <div class="upload-actions">
@@ -176,24 +174,23 @@
             </div>
           </section>
 
-          <section class="detail-block">
-            <div class="block-head">
+          <details class="detail-block publish-disclosure">
+            <summary class="block-head">
               <div>
-                <span class="section-kicker">发布</span>
                 <h3>小红书发布</h3>
               </div>
               <span class="login-badge" :class="{ offline: !loginStatus?.connected }">
                 {{ loginStatusLabel }}
               </span>
-            </div>
+            </summary>
 
             <div class="publish-panel">
               <div class="publish-grid">
                 <div class="field">
                   <span>发布类型</span>
                   <el-radio-group v-model="publishForm.publish_type">
-                    <el-radio-button label="image_post">图文</el-radio-button>
-                    <el-radio-button label="video_post">视频</el-radio-button>
+                    <el-radio-button value="image_post">图文</el-radio-button>
+                    <el-radio-button value="video_post">视频</el-radio-button>
                   </el-radio-group>
                 </div>
 
@@ -261,7 +258,7 @@
               </article>
               <el-empty v-if="!publications.length" description="暂无发布记录" />
             </div>
-          </section>
+          </details>
         </div>
       </div>
     </section>
@@ -284,7 +281,7 @@ import 'element-plus/es/components/date-picker/style/css'
 import 'element-plus/es/components/empty/style/css'
 import 'element-plus/es/components/message-box/style/css'
 import 'element-plus/es/components/radio/style/css'
-import { Clock, Delete, DocumentCopy, Edit, FolderDelete, Promotion, Refresh, UploadFilled, VideoPlay } from '@element-plus/icons-vue'
+import { Clock, Delete, Document, DocumentCopy, Edit, FolderDelete, Plus, Promotion, Refresh, Search, UploadFilled, VideoPlay } from '@element-plus/icons-vue'
 import ContentCard from '../components/ContentCard.vue'
 import { archiveContent, deleteContentLocal, getContent, getContents, type ContentItem } from '../api/content'
 import { deleteMedia, getContentMedia, uploadMedia, type MediaAsset } from '../api/media'
@@ -707,426 +704,102 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.history-page {
-  display: grid;
-  gap: 20px;
-  padding: 24px 32px;
-  background: var(--c-bg);
-}
-
-.history-hero {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.hero-kicker,
-.section-kicker {
-  display: inline-block;
-  color: var(--c-text-tertiary);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.history-hero .page-title {
-  margin-top: 6px;
-  font-size: var(--fs-h1);
-  font-weight: 600;
-  letter-spacing: 0;
-  line-height: 1.15;
-}
-
-.history-hero .page-subtitle {
-  color: var(--c-text-secondary);
-  font-size: 14px;
-}
-
-.filter-section {
-  padding: 16px 20px;
-}
-
-.filter-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.5fr) repeat(2, minmax(180px, 220px)) auto;
-  gap: 12px;
-}
-
-.results-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.05fr) minmax(420px, 0.95fr);
-  gap: 16px;
-  align-items: start;
-}
-
-.list-section,
-.detail-section {
-  padding: 20px;
-  max-height: calc(100vh - 240px);
-  min-height: 480px;
-  display: flex;
-  flex-direction: column;
-}
-
-.section-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-
-.section-head h2,
-.block-head h3 {
-  margin: 4px 0 0;
-  color: var(--c-text);
-  font-size: 18px;
-  font-weight: 600;
-  letter-spacing: 0;
-}
-
-.list-actions,
-.selection-actions,
-.detail-actions,
-.upload-actions,
-.publish-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.section-pill {
-  display: inline-flex;
-  align-items: center;
-  height: 22px;
-  padding: 0 8px;
-  border: 1px solid var(--c-border);
-  border-radius: 999px;
-  color: var(--c-text-secondary);
-  background: var(--c-surface);
-  font-size: 11px;
-  font-family: var(--font-mono);
-  letter-spacing: 0;
-}
-
-.selection-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 16px;
-  padding: 12px 14px;
-  border: 1px solid var(--c-border);
-  border-radius: 4px;
-  background: var(--c-bg-soft);
-}
-
-.selection-copy {
-  display: grid;
-  gap: 2px;
-}
-
-.selection-copy strong {
-  color: var(--c-text);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.selection-copy span {
-  color: var(--c-text-tertiary);
-  font-size: 11.5px;
-  font-family: var(--font-mono);
-}
-
-.library-grid,
-.detail-shell,
-.publication-list {
-  display: grid;
-  gap: 12px;
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  padding-right: 4px;
-}
-
-.library-grid::-webkit-scrollbar,
-.detail-shell::-webkit-scrollbar,
-.publication-list::-webkit-scrollbar {
-  width: 8px;
-}
-
-.library-grid::-webkit-scrollbar-thumb,
-.detail-shell::-webkit-scrollbar-thumb,
-.publication-list::-webkit-scrollbar-thumb {
-  background: var(--c-border);
-  border-radius: 4px;
-}
-
-.library-grid::-webkit-scrollbar-thumb:hover,
-.detail-shell::-webkit-scrollbar-thumb:hover,
-.publication-list::-webkit-scrollbar-thumb:hover {
-  background: var(--c-text-tertiary);
-}
-
-.library-entry {
-  position: relative;
-}
-
-.library-entry.selectable .library-card {
-  cursor: pointer;
-}
-
-.library-entry.selected :deep(.content-card) {
-  border-color: var(--c-accent);
-  box-shadow: 0 0 0 1px var(--c-accent);
-}
-
-.card-checkbox {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  z-index: 2;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 4px;
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-}
-
-.library-card {
-  width: 100%;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-}
-
-.detail-meta {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.meta-card,
-.detail-block,
-.publication-card {
-  padding: 14px;
-  border: 1px solid var(--c-border);
-  border-radius: 4px;
-  background: var(--c-surface);
-}
-
-.meta-card {
-  background: var(--c-bg-soft);
-}
-
-.meta-card span,
-.field span {
-  display: block;
-  color: var(--c-text-tertiary);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-}
-
-.meta-card strong {
-  display: block;
-  margin-top: 4px;
-  color: var(--c-text);
-  font-size: 13px;
-  font-weight: 500;
-  font-family: var(--font-mono);
-}
-
-.content-preview {
-  padding: 16px;
-  border: 1px solid var(--c-border);
-  border-radius: 4px;
-  background: var(--c-surface);
-  color: var(--c-text);
-  font-size: 13.5px;
-  line-height: 1.7;
-  white-space: pre-wrap;
-}
-
-.block-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 14px;
-}
-
-.upload-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 32px;
-  padding: 0 12px;
-  border: 1px solid var(--c-border);
-  border-radius: 4px;
-  background: var(--c-surface);
-  color: var(--c-text);
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 500;
-  transition: border-color 100ms ease;
-}
-
-.upload-trigger:hover {
-  border-color: var(--c-border-strong);
-}
-
-.hidden-input {
-  display: none;
-}
-
-.media-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 10px;
-}
-
-.media-card {
-  display: grid;
-  gap: 8px;
-  padding: 10px;
-  border: 1px solid var(--c-border);
-  border-radius: 4px;
-  background: var(--c-surface);
-}
-
-.media-preview {
-  overflow: hidden;
-  border-radius: 4px;
-  background: var(--c-bg-code);
-}
-
-.media-preview img,
-.media-preview video {
-  display: block;
-  width: 100%;
-  max-height: 180px;
-  object-fit: cover;
-}
-
-.media-copy {
-  display: grid;
-  gap: 2px;
-}
-
-.media-copy strong {
-  color: var(--c-text);
-  font-size: 13px;
-  font-weight: 500;
-  font-family: var(--font-mono);
-  word-break: break-word;
-}
-
-.media-copy span,
-.publication-card small {
-  color: var(--c-text-tertiary);
-  font-size: 11.5px;
-  font-family: var(--font-mono);
-}
-
-.publish-panel {
-  display: grid;
-  gap: 12px;
-}
-
-.publish-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.field {
-  display: grid;
-  gap: 6px;
-}
-
-.field-wide {
-  grid-column: 1 / -1;
-}
-
-.login-badge {
-  display: inline-flex;
-  align-items: center;
-  height: 22px;
-  padding: 0 8px;
-  border: 1px solid var(--c-ok);
-  border-radius: 999px;
-  color: var(--c-ok);
-  background: var(--c-ok-soft);
-  font-size: 11px;
-  font-weight: 500;
-  font-family: var(--font-mono);
-  letter-spacing: 0;
-}
-
-.login-badge.offline {
-  color: var(--c-fail);
-  border-color: var(--c-fail);
-  background: var(--c-fail-soft);
-}
-
-.publication-topline {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 6px;
-}
-
-.publication-topline strong {
-  color: var(--c-text);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.publication-topline span {
-  color: var(--c-text-secondary);
-  font-size: 11.5px;
-  font-family: var(--font-mono);
-}
-
-.publication-card p {
-  margin: 0 0 6px;
-  color: var(--c-text);
-  font-size: 13px;
-  line-height: 1.55;
-}
-
-.error-copy {
-  color: var(--c-fail) !important;
-}
-
-@media (max-width: 1120px) {
-  .history-page {
-    padding: 16px;
-  }
-
-  .results-grid,
-  .publish-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .filter-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .selection-toolbar {
-    align-items: flex-start;
-    flex-direction: column;
-  }
+.history-page { display: grid; gap: 24px; }
+.history-hero { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+.hero-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.create-link { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 9px 16px; border-radius: var(--r-control); color: var(--c-text-inverse); background: var(--c-accent); font-size: 13px; text-decoration: none; transition: background .15s; }
+.create-link:hover { background: var(--c-accent-hover); }
+.filter-section { padding: 0; background: none; border: 0; box-shadow: none; }
+.filter-grid { display: grid; grid-template-columns: minmax(0, 1fr) 160px 140px auto; gap: 10px; }
+.results-grid { display: grid; grid-template-columns: minmax(260px, 330px) minmax(0, 1fr); align-items: stretch; overflow: hidden; background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--r-card); box-shadow: var(--shadow-panel); }
+.list-section, .detail-section { min-width: 0; display: flex; flex-direction: column; border: 0; border-radius: 0; box-shadow: none; }
+.list-section { padding: 22px 14px; border-right: 1px solid var(--c-border); background: var(--c-bg); }
+.detail-section { padding: 30px 32px; min-height: 600px; max-height: calc(100vh - 240px); }
+.section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 22px; }
+.section-head h2 { margin: 0; font-size: 14px; font-weight: 600; }
+.list-section > .section-head { padding: 0 6px; }
+.inline-count { display: inline-block; margin-left: 7px; color: var(--c-text-tertiary); font-family: var(--font-display); font-size: 13px; font-weight: 400; }
+.detail-section > .section-head { align-items: flex-start; flex-direction: column; gap: 18px; margin-bottom: 0; }
+.detail-section .section-head h2 { margin: 12px 0 0; font-family: var(--font-editorial); font-size: 25px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.section-kicker { color: var(--c-text-tertiary); font-size: 11px; letter-spacing: 1px; }
+.list-actions, .selection-actions, .detail-actions, .upload-actions, .publish-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.detail-actions { width: 100%; padding-bottom: 18px; border-bottom: 1px solid var(--c-border-soft); }
+.detail-actions :deep(.el-button) { font-size: 12px; height: 32px; padding: 8px 10px; }
+.detail-actions :deep(.el-button:last-child) { margin-left: auto; }
+.selection-toolbar { display: grid; gap: 12px; margin-bottom: 16px; padding: 14px; border-radius: var(--r-control); background: var(--c-accent-soft); }
+.selection-copy { display: grid; gap: 4px; }
+.selection-copy strong { font-size: 13px; font-weight: 500; }
+.selection-copy span { color: var(--c-text-tertiary); font-size: 11px; }
+.selection-actions :deep(.el-button) { height: 28px; font-size: 11px; padding: 6px 8px; }
+.library-grid { display: flex; flex-direction: column; gap: 10px; max-height: calc(100vh - 334px); min-height: 320px; overflow-y: auto; padding: 2px; }
+.library-entry { position: relative; }
+.library-entry.current :deep(.content-card), .library-entry.selected :deep(.content-card) { border-color: var(--c-accent); background: var(--c-surface); box-shadow: 0 2px 8px var(--c-accent-ring); }
+.card-checkbox { position: absolute; top: 12px; right: 12px; z-index: 2; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 6px; background: var(--c-surface); border: 1px solid var(--c-border); }
+.library-entry.selectable :deep(.card-topline) { padding-right: 25px; }
+.library-card { width: 100%; padding: 0; border: 0; border-radius: 12px; background: transparent; text-align: left; cursor: pointer; }
+.detail-shell { display: flex; flex-direction: column; gap: 0; min-height: 0; overflow-y: auto; padding-right: 8px; }
+.detail-meta { display: flex; flex-wrap: wrap; gap: 24px; padding: 18px 0; }
+.meta-card { display: flex; gap: 8px; align-items: baseline; }
+.meta-card span, .field > span { color: var(--c-text-tertiary); font-size: 11px; }
+.meta-card strong { color: var(--c-text-secondary); font-size: 12px; font-weight: 500; }
+.content-preview { padding: 8px 0 30px; font-size: 14px; line-height: 2.05; white-space: pre-wrap; overflow-wrap: anywhere; }
+.detail-empty { flex: 1; display: flex; align-items: center; justify-content: center; flex-direction: column; padding: 56px 20px; text-align: center; }
+.detail-empty h3 { margin: 26px 0 8px; font-family: var(--font-display); font-size: 19px; font-weight: 500; }
+.detail-empty p { max-width: 260px; margin: 0; font-size: 12px; line-height: 1.9; color: var(--c-text-tertiary); }
+.empty-paper { display: grid; gap: 8px; width: 80px; padding: 15px; border: 1px solid var(--c-border); border-radius: 10px; background: var(--c-surface); box-shadow: 6px 6px 0 var(--c-bg-soft); transform: rotate(-5deg); }
+.empty-paper :deep(.el-icon) { color: var(--c-accent); font-size: 25px; margin-bottom: 8px; }
+.empty-paper i { display: block; height: 3px; border-radius: 3px; background: var(--c-border); }
+.empty-paper i:last-child { width: 70%; }
+.detail-block { padding: 24px 0; border-top: 1px solid var(--c-border-soft); }
+.block-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+.block-head h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.upload-trigger { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 1px solid var(--c-border); border-radius: var(--r-control); background: var(--c-surface); color: var(--c-text-secondary); cursor: pointer; font-size: 11px; transition: border-color .15s; }
+.upload-trigger:hover { border-color: var(--c-accent); color: var(--c-accent); }
+.upload-trigger:focus-within { outline: 3px solid var(--c-accent-ring); outline-offset: 2px; }
+.hidden-input { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); }
+.media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
+.media-card { display: grid; gap: 8px; padding: 8px; border: 1px solid var(--c-border-soft); border-radius: 12px; }
+.media-preview { overflow: hidden; border-radius: 8px; background: var(--c-bg-soft); }
+.media-preview img, .media-preview video { display: block; width: 100%; max-height: 150px; object-fit: cover; }
+.media-copy { display: grid; gap: 2px; padding: 0 4px; }
+.media-copy strong { font-size: 11px; font-weight: 500; overflow-wrap: anywhere; }
+.media-copy span, .publication-card small { color: var(--c-text-tertiary); font-size: 11px; }
+.media-card :deep(.el-button) { justify-self: start; height: 26px; padding: 4px; font-size: 11px; }
+.publish-disclosure > summary { cursor: pointer; list-style: none; margin: 0; }
+.publish-disclosure > summary::-webkit-details-marker { display: none; }
+.publish-disclosure > summary::after { content: '+'; color: var(--c-text-tertiary); font-size: 20px; }
+.publish-disclosure[open] > summary { margin-bottom: 20px; }
+.publish-disclosure[open] > summary::after { content: '−'; }
+.publish-disclosure .login-badge { margin-left: auto; }
+.publish-panel { display: grid; gap: 16px; }
+.publish-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.field { display: grid; gap: 8px; min-width: 0; }
+.field :deep(.el-date-editor) { width: 100%; }
+.field-wide { grid-column: 1 / -1; }
+.login-badge { padding: 3px 8px; border-radius: 6px; color: var(--c-ok); background: var(--c-ok-soft); font-size: 10px; }
+.login-badge.offline { color: var(--c-text-tertiary); background: var(--c-bg-soft); }
+.publication-list { display: grid; gap: 10px; margin-top: 20px; }
+.publication-card { padding: 14px; border: 1px solid var(--c-border-soft); border-radius: var(--r-control); }
+.publication-topline { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.publication-topline strong { font-size: 12px; font-weight: 500; }
+.publication-topline span { color: var(--c-text-secondary); font-size: 11px; }
+.publication-card p { margin: 0 0 6px; font-size: 13px; }
+.error-copy { color: var(--c-fail) !important; }
+@media (max-width: 1200px) { .results-grid { grid-template-columns: 270px minmax(0, 1fr); } .detail-section { padding: 24px; } .filter-grid { grid-template-columns: minmax(0, 1fr) 140px 110px auto; } }
+@media (max-width: 760px) {
+  .history-hero { align-items: flex-start; flex-direction: column; gap: 18px; }
+  .hero-actions { width: 100%; justify-content: space-between; }
+  .filter-grid { grid-template-columns: 1fr 1fr auto; }
+  .filter-grid > :first-child { grid-column: 1 / -1; }
+  .results-grid { grid-template-columns: 1fr; }
+  .list-section { border-right: 0; border-bottom: 1px solid var(--c-border); }
+  .library-grid { max-height: 360px; min-height: 0; }
+  .detail-section { padding: 24px 20px; max-height: none; min-height: 360px; }
+  .detail-shell { overflow: visible; }
+  .detail-section .section-head h2 { font-size: 22px; }
+  .detail-actions :deep(.el-button:last-child) { margin-left: 0; }
+  .publish-grid { grid-template-columns: 1fr; }
+  .block-head { flex-wrap: wrap; }
+  .detail-meta { gap: 14px; }
 }
 </style>

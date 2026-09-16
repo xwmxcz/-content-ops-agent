@@ -1,12 +1,17 @@
-"""内容存储 - SQLAlchemy ORM + CRUD"""
+"""Account metadata and user-scoped content persistence on PostgreSQL.
+
+TenantSession owns workspace filtering and write validation. Stores returned by
+for_user share the engine, not mutable request identity; existing databases are
+upgraded only by Alembic.
+"""
 import json
-from datetime import datetime, date, timedelta
+import re
+from datetime import datetime, date, timedelta, timezone
 from typing import Optional, List, Dict, Any
 from uuid import uuid4
 
 from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, create_engine, func, inspect, or_, text
 from sqlalchemy.engine import make_url
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
 
@@ -14,13 +19,41 @@ import logging
 
 from src.utils import metrics
 from src.utils.structured_logging import log_idempotency_event, log_capability_event
+from src.storage.tenancy import OwnedMixin, TenantSession
 
 logger = logging.getLogger(__name__)
 
 Base = declarative_base()
 
 
-class Content(Base):
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(String(32), primary_key=True, default=lambda: uuid4().hex)
+    username = Column(String(32), nullable=False, unique=True)
+    password_hash = Column(Text, nullable=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class AuthSession(Base):
+    __tablename__ = "auth_sessions"
+
+    id = Column(String(32), primary_key=True, default=lambda: uuid4().hex)
+    user_id = Column(String(32), ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class AuthRateLimit(Base):
+    __tablename__ = "auth_rate_limits"
+
+    key = Column(String(64), primary_key=True)
+    window_started_at = Column(DateTime(timezone=True), nullable=False)
+    attempts = Column(Integer, nullable=False, default=0)
+
+
+class Content(OwnedMixin, Base):
     """内容记录表"""
     __tablename__ = "contents"
 
@@ -47,7 +80,7 @@ Index("ix_contents_status", Content.status)
 Index("ix_contents_content_type", Content.content_type)
 
 
-class CalendarEvent(Base):
+class CalendarEvent(OwnedMixin, Base):
     """内容日历表"""
     __tablename__ = "calendar_events"
 
@@ -63,7 +96,7 @@ class CalendarEvent(Base):
 Index("ix_calendar_events_scheduled_date", CalendarEvent.scheduled_date)
 
 
-class ContentMetrics(Base):
+class ContentMetrics(OwnedMixin, Base):
     """内容效果表"""
     __tablename__ = "content_metrics"
 
@@ -77,7 +110,7 @@ class ContentMetrics(Base):
     recorded_at = Column(DateTime, default=datetime.now)
 
 
-class MediaAsset(Base):
+class MediaAsset(OwnedMixin, Base):
     """Persisted uploaded or generated media tied to content."""
 
     __tablename__ = "media_assets"
@@ -98,7 +131,7 @@ class MediaAsset(Base):
 Index("ix_media_assets_content_created", MediaAsset.content_id, MediaAsset.created_at)
 
 
-class PlatformPublication(Base):
+class PlatformPublication(OwnedMixin, Base):
     """Persisted publication requests sent to an external platform."""
 
     __tablename__ = "platform_publications"
@@ -124,7 +157,7 @@ Index("ix_platform_publications_content_status", PlatformPublication.content_id,
 Index("ix_platform_publications_platform_created", PlatformPublication.platform, PlatformPublication.created_at)
 
 
-class AgentThread(Base):
+class AgentThread(OwnedMixin, Base):
     """Persisted Agent chat thread."""
 
     __tablename__ = "agent_threads"
@@ -145,7 +178,7 @@ Index("ix_agent_threads_pinned_updated", AgentThread.pinned, AgentThread.updated
 Index("ix_agent_threads_archived", AgentThread.archived)
 
 
-class AgentMessage(Base):
+class AgentMessage(OwnedMixin, Base):
     """Persisted Agent chat message."""
 
     __tablename__ = "agent_messages"
@@ -166,7 +199,7 @@ class AgentMessage(Base):
 Index("ix_agent_messages_thread_created", AgentMessage.thread_id, AgentMessage.created_at)
 
 
-class Job(Base):
+class Job(OwnedMixin, Base):
     """Persisted background job state."""
 
     __tablename__ = "jobs"
@@ -204,7 +237,7 @@ Index("ix_jobs_provider_status", Job.provider, Job.status)
 Index("ix_jobs_lease_expires_at", Job.status, Job.lease_expires_at)
 
 
-class RunStep(Base):
+class RunStep(OwnedMixin, Base):
     """Durable per-step checkpoint so a retry resumes instead of restarting.
 
     Without this, a job that dies after step 3 of 5 replays steps 1-3 on retry
@@ -232,7 +265,7 @@ class RunStep(Base):
 Index("ix_run_steps_run_status", RunStep.run_id, RunStep.status)
 
 
-class AgentRun(Base):
+class AgentRun(OwnedMixin, Base):
     """Dynamic-pipeline run record."""
 
     __tablename__ = "agent_runs"
@@ -260,7 +293,7 @@ class AgentRun(Base):
 Index("ix_agent_runs_thread_created", AgentRun.thread_id, AgentRun.created_at)
 
 
-class AgentRunEvent(Base):
+class AgentRunEvent(OwnedMixin, Base):
     """Append-only event log for a pipeline run; SSE bridge reads this table."""
 
     __tablename__ = "agent_run_events"
@@ -279,7 +312,7 @@ class AgentRunEvent(Base):
 Index("ix_agent_run_events_run_seq", AgentRunEvent.run_id, AgentRunEvent.seq)
 
 
-class ProposedAction(Base):
+class ProposedAction(OwnedMixin, Base):
     """Durable one-time capability for a model-proposed write.
 
     A write tool is never authorized by model text. The executor persists the
@@ -315,7 +348,7 @@ Index("ix_proposed_actions_status_expires", ProposedAction.status, ProposedActio
 PROPOSED_ACTION_STATUSES = ("proposed", "confirmed", "consumed", "cancelled", "expired")
 
 
-class IdempotencyRecord(Base):
+class IdempotencyRecord(OwnedMixin, Base):
     """Durable ledger making a keyed write replayable instead of repeatable.
 
     One logical request can span several statements and tables: a refine is an
@@ -326,14 +359,13 @@ class IdempotencyRecord(Base):
     repost, a retry of a failed publish job) and turn recoverable errors into
     ``IntegrityError``.
 
-    ``scope`` is part of the unique key so the same key value used for a content
-    create and a calendar commit does not collide. ``result_json`` is what lets a
-    retry return the *same* result rather than doing the work again.
+    ``user_id`` and ``scope`` isolate keys between users and operations.
+    ``result_json`` lets a retry return the same result rather than repeat work.
     """
 
     __tablename__ = "idempotency_records"
     __table_args__ = (
-        UniqueConstraint("scope", "idempotency_key", name="uq_idempotency_records_scope_key"),
+        UniqueConstraint("user_id", "scope", "idempotency_key", name="uq_idempotency_records_user_scope_key"),
     )
 
     id = Column(Integer, primary_key=True)
@@ -361,12 +393,8 @@ class ContentStore:
         database_url: str | None = None,
         initialize_schema: bool = True,
     ):
-        # `initialize_schema=False` skips create_all + legacy-column ALTERs. Job
-        # runners and pipeline workers spin up a fresh ContentStore per task
-        # (fork-safe), so re-running DDL every time was pure overhead and, with
-        # multiple workers, a concurrent-DDL race. The schema is built once per
-        # process at startup instead (see main.py lifespan and worker.py).
-        # Defaults to True so tests and first-run setups still work.
+        # Only fresh development/test databases may use create_all. Existing
+        # databases, API processes, and worker processes use Alembic's schema.
         from src.utils import config
 
         if database_url is None:
@@ -380,6 +408,7 @@ class ContentStore:
             )
 
         self.database_url = database_url
+        self._user_id = None
         self.engine = create_engine(
             database_url,
             echo=False,
@@ -389,50 +418,33 @@ class ContentStore:
             pool_pre_ping=True,
         )
         if initialize_schema:
+            inspector = inspect(self.engine)
+            for name in set(inspector.get_table_names()) & set(Base.metadata.tables):
+                existing = {column["name"] for column in inspector.get_columns(name)}
+                if set(Base.metadata.tables[name].columns.keys()) - existing:
+                    self.engine.dispose()
+                    raise RuntimeError("Existing database requires `alembic upgrade head`")
             Base.metadata.create_all(self.engine)
-            self._ensure_legacy_columns()
-        self.SessionLocal = sessionmaker(bind=self.engine)
+        self.SessionLocal = sessionmaker(bind=self.engine, class_=TenantSession)
 
-    def _ensure_legacy_columns(self) -> None:
-        # Additive migrations for databases created before these columns existed.
-        # On a fresh DB `create_all` already builds every column, so the inspect
-        # check inside _safe_add_columns short-circuits and nothing runs here.
-        self._safe_add_columns("agent_messages", [
-            ("intent", "ALTER TABLE agent_messages ADD COLUMN intent TEXT"),
-            ("plan", "ALTER TABLE agent_messages ADD COLUMN plan TEXT"),
-        ])
-        self._safe_add_columns("agent_threads", [
-            ("pinned", "ALTER TABLE agent_threads ADD COLUMN pinned BOOLEAN NOT NULL DEFAULT false"),
-            ("archived", "ALTER TABLE agent_threads ADD COLUMN archived BOOLEAN NOT NULL DEFAULT false"),
-            ("title_pinned", "ALTER TABLE agent_threads ADD COLUMN title_pinned BOOLEAN NOT NULL DEFAULT false"),
-        ])
-        self._safe_add_columns("jobs", [
-            ("token_usage", "ALTER TABLE jobs ADD COLUMN token_usage INTEGER DEFAULT 0"),
-            ("cost_estimate", "ALTER TABLE jobs ADD COLUMN cost_estimate FLOAT DEFAULT 0"),
-        ])
+    @property
+    def user_id(self) -> str | None:
+        return self._user_id
 
-    def _safe_add_columns(self, table: str, columns: list[tuple[str, str]]) -> None:
-        existing = {col["name"] for col in inspect(self.engine).get_columns(table)}
-        for name, ddl in columns:
-            if name in existing:
-                continue
-            try:
-                with self.engine.begin() as connection:
-                    connection.execute(text(ddl))
-            except SQLAlchemyError as exc:
-                # Multiple processes (e.g. several gunicorn workers all running
-                # the startup schema build at once) can race here: each inspects
-                # the pre-migration table and each issues the ALTER. The losers
-                # get a "duplicate column" / "already exists" error, which is safe
-                # to swallow since the column now exists. Anything else is a real
-                # failure and re-raises.
-                message = str(exc).lower()
-                if "duplicate column" in message or "already exists" in message:
-                    continue
-                raise
+    def for_user(self, user_id: str) -> "ContentStore":
+        if not isinstance(user_id, str) or re.fullmatch(r"[0-9a-f]{32}", user_id) is None:
+            raise ValueError("Workspace owner must be a canonical user ID")
+        scoped = object.__new__(type(self))
+        scoped.database_url = self.database_url
+        scoped.engine = self.engine
+        scoped.SessionLocal = sessionmaker(
+            bind=self.engine, class_=TenantSession, info={"user_id": user_id},
+        )
+        scoped._user_id = user_id
+        return scoped
 
     def _get_session(self) -> Session:
-        return self.SessionLocal()
+        return self.SessionLocal(info={"user_id": self.user_id})
 
     def save_content(
         self,
@@ -1655,6 +1667,7 @@ class ContentStore:
                     last_model=model,
                 )
                 session.add(thread)
+                session.flush()
             elif role == "user" and not thread.title and not thread.title_pinned:
                 thread.title = self._make_thread_title(content)
 
@@ -2029,7 +2042,7 @@ class ContentStore:
         args: Dict[str, Any],
         external_request_id: str | None = None,
     ) -> Dict[str, Any]:
-        """Claim ``(scope, key)`` for one attempt, or report the prior outcome.
+        """Claim ``(user_id, scope, key)`` or report this user's prior outcome.
 
         The claim is an INSERT guarded by the unique constraint, so two racing
         requests cannot both win: PostgreSQL rejects the loser, which then reads
@@ -2522,6 +2535,7 @@ class ContentStore:
     def _agent_run_to_dict(run: AgentRun) -> Dict[str, Any]:
         return {
             "id": run.id,
+            "user_id": run.user_id,
             "thread_id": run.thread_id,
             "topic": run.topic,
             "content_type": run.content_type,
@@ -2642,6 +2656,7 @@ class ContentStore:
     def _job_to_dict(job: Job) -> Dict[str, Any]:
         return {
             "id": job.id,
+            "user_id": job.user_id,
             "job_type": job.job_type,
             "status": job.status,
             "payload": json.loads(job.payload) if job.payload else {},

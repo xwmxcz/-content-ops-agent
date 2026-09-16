@@ -10,7 +10,7 @@
 
 AI Content Ops Agent 是一个围绕内容运营工作流构建的 AI 全栈原型。它把
 FastAPI、Vue 3、LiteLLM、LangChain 工具调用、SQLAlchemy 存储、Docker
-部署和单管理员登录保护组合成一个可以演示、可以运行、也方便审查的产品表面。
+部署与 PostgreSQL 注册登录、用户工作区隔离组合成一个可以演示、可以运行、也方便审查的产品表面。
 
 这个仓库更适合作为 AI 全栈工程作品集项目：它展示的是产品思考、API 契约、
 Agent 编排、后台任务、前端工作流和部署工程，而不是声称自己已经是成熟的
@@ -96,7 +96,7 @@ LLM_PROVIDER=deepseek
 DEEPSEEK_API_KEY=your_deepseek_key_here
 ```
 
-必须替换 `.env.docker.example` 中全部 `CHANGE_ME` 凭据。Docker 默认使用 fail-closed 生产模式，要求启用鉴权、独立强随机的管理员/签名/PostgreSQL/Redis 密钥、迁移校验和明确的 HTTPS 公网来源；网页搜索 key 仍是可选项。对外暴露前必须在前端之前配置 TLS。详见 [`docs/PHASE0_SECURITY_AND_MIGRATIONS.md`](docs/PHASE0_SECURITY_AND_MIGRATIONS.md)。
+必须替换 `.env.docker.example` 中全部 `CHANGE_ME` 凭据。Docker 默认使用 fail-closed 生产模式，鉴权始终开启，要求独立强随机的签名/PostgreSQL/Redis 密钥、迁移校验和明确的 HTTPS 公网来源；账号密码在注册时设置；网页搜索 key 仍是可选项。对外暴露前必须在前端之前配置 TLS。详见 [`docs/PHASE0_SECURITY_AND_MIGRATIONS.md`](docs/PHASE0_SECURITY_AND_MIGRATIONS.md)。
 
 3. 启动完整栈：
 
@@ -155,7 +155,8 @@ docker compose up -d --build frontend
 | --- | --- |
 | 调用真实 LLM | 至少填写一个 provider key，例如 `DEEPSEEK_API_KEY`、`ANTHROPIC_API_KEY`、`SILICONFLOW_API_KEY`、`MOONSHOT_API_KEY` 或 `NEWAPI_API_KEY`。 |
 | 稳定网页调研 | 填写 `SERPER_API_KEY`、`TAVILY_API_KEY` 或 `BRAVE_SEARCH_API_KEY` 任意一个。不填时会退回无 key HTML 搜索，可能被搜索引擎反爬。 |
-| 生产安全 | 启用鉴权；配置相互独立的管理员/签名/PostgreSQL/Redis 强密钥；设置 `SCHEMA_MANAGEMENT=validate` 与准确的 HTTPS `CORS_ORIGINS`。不安全默认值会拒绝启动。 |
+| 所有环境 | 填写非空 `AUTH_SECRET_KEY`，在登录页注册独立账号。 |
+| 生产安全 | 配置相互独立的签名/PostgreSQL/Redis 强密钥；设置 `SCHEMA_MANAGEMENT=validate` 与准确的 HTTPS `CORS_ORIGINS`。不安全默认值会拒绝启动。 |
 | 小红书发布演示 | 保持或修改 `XHS_MCP_URL`，指向本机 MCP 服务。 |
 
 Docker 会自动读取根目录 `.env`。如果是宿主机开发，复制 `.env.postgres-rq`，
@@ -199,7 +200,7 @@ cd ..
 docker compose up -d postgres
 ```
 
-默认的 `DATABASE_URL` 已指向该实例。宿主机本地开发必须通过 `.env.example` 或环境变量显式设置 `APP_ENV=development`、`SCHEMA_MANAGEMENT=create`；未设置 `APP_ENV` 时默认进入 fail-closed production，而不是自动开放开发模式。
+启动前填写非空 `AUTH_SECRET_KEY`，可用 `python -c "import secrets; print(secrets.token_hex(32))"` 生成；本地开发同样需要登录。默认的 `DATABASE_URL` 已指向该实例。宿主机本地开发必须通过 `.env.example` 或环境变量显式设置 `APP_ENV=development`、`SCHEMA_MANAGEMENT=create`；未设置 `APP_ENV` 时默认进入 fail-closed production，而不是自动开放开发模式。
 
 ### 默认模式：进程内任务
 
@@ -258,13 +259,21 @@ npm run dev
 
 Windows 下 `worker.py` 会自动使用 RQ `SimpleWorker`，因为默认 fork 型 worker 依赖 Unix `os.fork()`。
 
+## 账号与已有数据升级
+
+在登录页注册个人账号，新账号会获得空白、独立的工作区。密码以 Argon2id 哈希保存在 PostgreSQL 中，不再使用环境变量里的共享管理员账号。
+
+升级已有实例时，先停止 API/worker，备份 PostgreSQL 和应用数据卷，删除旧鉴权环境变量，再执行 `alembic upgrade head`。升级前的会话会失效，需要重新登录。旧业务数据暂归不可登录的 legacy 用户，首个注册者不会自动获得旧数据。请在服务器运行 `python scripts/claim_legacy_workspace.py --username YOUR_USERNAME`，通过隐藏输入设置密码，并认领业务数据、迁移旧记忆文件。
+
+账号规则、API 字段、废弃配置和完整操作顺序统一见[账号与迁移契约](docs/PHASE0_SECURITY_AND_MIGRATIONS.md#postgresql-accounts-and-workspace-migration)。
+
 ## 长期记忆
 
 Chat Agent 内置了一个参考 Hermes agent-curated memory 思路的四层记忆系统。
 
 | 层 | 位置 | 行为 |
 | ---: | --- | --- |
-| 1 | `data/memory/MEMORY.md` 和 `data/memory/USER.md` | 小型 markdown 文件，带硬字符上限。`MEMORY.md` 存项目和工具笔记，`USER.md` 存用户偏好。 |
+| 1 | `data/memory/<user_id>/MEMORY.md` 和 `data/memory/<user_id>/USER.md` | 小型 markdown 文件，带硬字符上限。`MEMORY.md` 存项目和工具笔记，`USER.md` 存用户偏好。 |
 | 2 | Chat Agent prompt | 每个 thread 开始时读取一次并冻结到系统 prompt。写入操作下个 session 才生效。 |
 | 3 | `src/agent/memory_curator.py` | 删除 thread 时可触发 curator，提出 add、replace、remove 操作。 |
 | 4 | `src/agent/context_compressor.py` | 长会话会被压缩成结构化 checkpoint，同时保护 tool-call/result 配对不被切开。 |
@@ -281,7 +290,7 @@ CONTEXT_COMPRESS_TRIGGER_MESSAGES=30
 MEMORY_CURATOR_ENABLED=true
 ```
 
-前端的记忆管理页可以直接编辑 `MEMORY.md` 和 `USER.md`，显示字符预算，并刷新 frozen snapshot。
+前端的记忆管理页仅编辑当前登录用户的 `MEMORY.md` 和 `USER.md`，显示字符预算，并刷新 frozen snapshot。
 
 ## 验证命令
 
@@ -318,7 +327,8 @@ docker compose ps
 
 已经包含：
 
-- 单管理员登录保护
+- PostgreSQL 注册登录、Argon2id 密码哈希与可撤销会话
+- 内容、对话、任务、日历、素材与记忆的用户级隔离
 - 本地 Docker 部署
 - PostgreSQL 存储
 - Redis/RQ worker 模式
@@ -328,9 +338,8 @@ docker compose ps
 
 暂不包含：
 
-- 团队账号和 RBAC
+- 团队共享工作区和 RBAC
 - 计费
-- 多租户隔离
 - 生产级社交账号运营
 - 云部署托管清单
 - 企业审计日志

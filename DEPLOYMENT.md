@@ -16,7 +16,7 @@ This project supports a production-style topology for higher concurrency:
 docker compose up -d postgres redis
 ```
 
-Use an **explicit development profile** for a local run. The example passwords are rejected in production:
+Use an **explicit development profile** for a local run. Set a non-empty `AUTH_SECRET_KEY` in your private environment file first; generate it with `python -c "import secrets; print(secrets.token_hex(32))"`. Register individual accounts on the login page. The example database passwords are rejected in production:
 
 ```bash
 APP_ENV=development
@@ -27,6 +27,12 @@ REDIS_URL=redis://:content_ops@localhost:6379/0
 JOB_QUEUE_NAME=content_ops
 MAX_PROVIDER_INFLIGHT_JOBS=8
 ```
+
+## Account Migration for Existing Installations
+
+Back up PostgreSQL and the application data volume before upgrading. Stop API/workers, remove the obsolete environment-managed account settings, and run `alembic upgrade head`. The account migration places old records under a non-login legacy owner; public registration always starts an empty workspace and never claims those records.
+
+Use `python scripts/claim_legacy_workspace.py --username YOUR_USERNAME` (or the Compose equivalent in the operations guide) to claim the old workspace and copy its memory files into the user directory while retaining the originals as backups. The CLI prompts privately for a password. Restart services and sign in again: old sessions are invalid after migration. See the [single account/API migration contract](docs/PHASE0_SECURITY_AND_MIGRATIONS.md#postgresql-accounts-and-workspace-migration) for removed settings, account rules, and verification steps.
 
 ## API and Worker
 
@@ -76,7 +82,7 @@ what the compose healthcheck polls.
 
 ## Security and Tuning
 
-- **Fail-closed settings**: omitted `APP_ENV` defaults to production for direct application/image entrypoints. Production requires enabled auth, strong independent admin/signing/PostgreSQL/Redis secrets, `DEBUG=false`, `SCHEMA_MANAGEMENT=validate`, and an exact public HTTPS CORS origin. Local compatibility requires explicit `APP_ENV=development`. Defaults exist only so `docker compose up postgres redis` remains useful locally; migrate/API/worker production startup rejects unsafe settings.
+- **Fail-closed settings**: omitted `APP_ENV` defaults to production for direct application/image entrypoints. Authentication is always enabled. Every environment needs `AUTH_SECRET_KEY`; production requires strong independent signing/PostgreSQL/Redis secrets, `DEBUG=false`, `SCHEMA_MANAGEMENT=validate`, and an exact public HTTPS CORS origin. Local compatibility requires explicit `APP_ENV=development`. Defaults exist only so `docker compose up postgres redis` remains useful locally; migrate/API/worker production startup rejects unsafe settings.
 - **Migrations**: the one-shot `migrate` service validates production settings before DDL and must complete before API/worker. Existing pre-Alembic databases require backup, schema verification, `alembic stamp 0001_baseline`, then `alembic upgrade head`; never stamp an unverified schema. Startup checks revision plus ORM type/nullability/foreign-key/index/constraint drift.
 - **Browser resource auth**: reusable bearer values are header-only. In production, login sets a `HttpOnly; Secure; SameSite=Strict` cookie that is accepted only for pipeline-stream and numeric media-file paths; it never authorizes general REST APIs. Exact-path `access_ticket` query credentials are development/test compatibility only and are rejected in production. The production Nginx edge rejects `access_ticket`/`access_token` query parameters before proxying and logs `$uri` without query-bearing request targets or Referer.
 - **TLS proxy trust**: `X-Forwarded-Proto` is ignored unless the immediate peer is in `TRUSTED_PROXY_CIDRS`; direct entrypoints default to no trusted forwarding proxies. Compose limits trust to its private bridge. Keep this range minimal and make the outer TLS proxy overwrite client forwarding headers.

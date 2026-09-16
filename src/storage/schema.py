@@ -34,6 +34,7 @@ def _expected_schema_columns() -> dict[str, set[str]]:
 # indexes. Validate the correctness-critical event invariant and the indexes
 # that pre-Alembic ``create_all`` installations could not add retroactively.
 REQUIRED_SCHEMA_INDEXES: dict[str, set[tuple[str, ...]]] = {
+    "auth_sessions": {("user_id",), ("expires_at",)},
     "agent_threads": {
         ("updated_at",),
         ("pinned", "updated_at"),
@@ -64,8 +65,9 @@ REQUIRED_SCHEMA_INDEXES: dict[str, set[tuple[str, ...]]] = {
 # check-then-write: without the unique constraint two racing claims both see no
 # row and both proceed.
 REQUIRED_UNIQUE_CONSTRAINTS: dict[str, set[tuple[str, ...]]] = {
+    "users": {("username",)},
     "agent_run_events": {("run_id", "seq")},
-    "idempotency_records": {("scope", "idempotency_key")},
+    "idempotency_records": {("user_id", "scope", "idempotency_key")},
     # Without this, a retry that re-checkpoints a step inserts a second row and
     # the resume point can no longer be derived from the step set.
     "run_steps": {("run_id", "step_index")},

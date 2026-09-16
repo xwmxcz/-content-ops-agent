@@ -1,5 +1,7 @@
 """REST API routes for the Hermes-style 4-layer memory system.
 
+Files and frozen prompt snapshots belong to the authenticated user's workspace.
+
 Endpoints (relative to `/api/memory`):
 
   GET  /agent              → read MEMORY.md (agent notes)
@@ -128,6 +130,8 @@ def search_messages(
 
 
 @router.post("/refresh-snapshot")
-def refresh_snapshot(req: RefreshSnapshotRequest):
-    ChatAgentService.invalidate_frozen(req.thread_id)
+def refresh_snapshot(req: RefreshSnapshotRequest, store: ContentStore = Depends(get_store)):
+    if req.thread_id and not store.get_agent_thread(req.thread_id):
+        raise HTTPException(status_code=404, detail="Thread not found")
+    ChatAgentService.invalidate_frozen(req.thread_id, user_id=store.user_id)
     return {"refreshed": True, "thread_id": req.thread_id}

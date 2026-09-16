@@ -1,7 +1,11 @@
 """Test add_to_calendar date validation.
 
 Run:
+    # Set TEST_DATABASE_URL to a disposable PostgreSQL database only.
     python tests/manual_calendar_validation.py
+
+Creates/reuses manual_calendar in that test database and scopes all business
+writes to its workspace. DATABASE_URL is never used as a fallback.
 """
 from __future__ import annotations
 
@@ -14,6 +18,8 @@ sys.path.insert(0, str(ROOT))
 
 from src.storage import ContentStore  # noqa: E402
 from src.storage.content_store import Content  # noqa: E402
+from src.storage.account_store import AccountStore  # noqa: E402
+from src.api.passwords import hash_password  # noqa: E402
 
 
 def main() -> int:
@@ -22,7 +28,12 @@ def main() -> int:
     if not test_db_url:
         print("[skip] TEST_DATABASE_URL not set (need a scratch PostgreSQL database)")
         return 0
-    store = ContentStore(database_url=test_db_url)
+    system_store = ContentStore(database_url=test_db_url)
+    accounts = AccountStore(system_store)
+    user = accounts.get_user_by_username("manual_calendar") or accounts.create_user(
+        "manual_calendar", hash_password("Manual-calendar-test-only-2026"),
+    )
+    store = system_store.for_user(user["id"])
     try:
 
         # Seed a test content item

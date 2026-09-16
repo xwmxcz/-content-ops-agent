@@ -11,7 +11,7 @@
 AI Content Ops Agent is a full-stack content operations prototype built around
 LLM agents, durable content workflows, and a practical Vue workspace. It combines
 FastAPI, Vue 3, LiteLLM, LangChain tool calling, SQLAlchemy storage, Docker
-deployment, and a single-admin auth gate into a demo-ready product surface.
+deployment, and PostgreSQL-backed registration/login with isolated user workspaces into a demo-ready product surface.
 
 The repository is designed as an AI full-stack engineering portfolio project. It
 shows product thinking, API contracts, agent orchestration, background jobs,
@@ -101,11 +101,9 @@ LLM_PROVIDER=deepseek
 DEEPSEEK_API_KEY=your_deepseek_key_here
 ```
 
-Replace every `CHANGE_ME` credential in `.env.docker.example`; Docker uses the fail-closed production profile. Auth, strong independent admin/signing/PostgreSQL/Redis secrets, migration validation, and an explicit HTTPS public origin are required. Stable web-search keys remain optional.
+Replace every `CHANGE_ME` credential in `.env.docker.example`; Docker uses the fail-closed production profile. Authentication is always required. Strong independent signing/PostgreSQL/Redis secrets, migration validation, and an explicit HTTPS public origin are required; account passwords are set during registration. Stable web-search keys remain optional.
 
 ```env
-AUTH_ENABLED=true
-AUTH_PASSWORD=<random 12+ characters>
 AUTH_SECRET_KEY=<random 32+ characters>
 POSTGRES_PASSWORD=<independent random value>
 REDIS_PASSWORD=<independent random value>
@@ -172,7 +170,8 @@ Copy one env template to `.env`, then fill in the keys you need.
 | --- | --- |
 | Live LLM calls | Set at least one provider key, for example `DEEPSEEK_API_KEY`, `ANTHROPIC_API_KEY`, `SILICONFLOW_API_KEY`, `MOONSHOT_API_KEY`, or `NEWAPI_API_KEY`. |
 | Stable web research | Set one of `SERPER_API_KEY`, `TAVILY_API_KEY`, or `BRAVE_SEARCH_API_KEY`. Without a key, the app falls back to keyless HTML search that may be blocked. |
-| Production security | Auth enabled; strong independent admin/signing/PostgreSQL/Redis secrets; `SCHEMA_MANAGEMENT=validate`; exact HTTPS `CORS_ORIGINS`. Unsafe defaults fail startup. |
+| All environments | Set a non-empty `AUTH_SECRET_KEY`; register individual accounts on the login page. |
+| Production security | Strong independent signing/PostgreSQL/Redis secrets; `SCHEMA_MANAGEMENT=validate`; exact HTTPS `CORS_ORIGINS`. Unsafe defaults fail startup. |
 | Xiaohongshu publishing demo | Keep or adjust `XHS_MCP_URL` to point at your local MCP server. |
 
 Docker reads `.env` automatically. For host-based development, copy
@@ -217,7 +216,7 @@ PostgreSQL is required (SQLite is no longer supported). Start it with Docker:
 docker compose up -d postgres
 ```
 
-The default `DATABASE_URL` targets this instance. Host development must explicitly set `APP_ENV=development` and `SCHEMA_MANAGEMENT=create` via `.env.example` or the environment. Omitting `APP_ENV` now selects fail-closed production; production must use Alembic and `SCHEMA_MANAGEMENT=validate`.
+Set a non-empty `AUTH_SECRET_KEY` before starting the application; generate it with `python -c "import secrets; print(secrets.token_hex(32))"`. Authentication stays enabled locally. The default `DATABASE_URL` targets this instance. Host development must explicitly set `APP_ENV=development` and `SCHEMA_MANAGEMENT=create` via `.env.example` or the environment. Omitting `APP_ENV` now selects fail-closed production; production must use Alembic and `SCHEMA_MANAGEMENT=validate`.
 
 ### Default Mode: In-Process Jobs
 
@@ -278,6 +277,14 @@ npm run dev
 On Windows, `worker.py` automatically uses RQ `SimpleWorker` because the
 default fork-based RQ worker requires Unix `os.fork()`.
 
+## Accounts and Existing Data
+
+Open the login page to register an individual account. New accounts start with an empty, isolated workspace. Credentials are stored in PostgreSQL as Argon2id password hashes; there is no environment-based shared administrator account.
+
+When upgrading an existing installation, stop API/workers, back up PostgreSQL and the application data volume, remove obsolete auth environment settings, and run `alembic upgrade head`. Old sessions expire across this migration. Existing data is assigned to a non-login legacy account, never to the first registrant; claim it using `python scripts/claim_legacy_workspace.py --username YOUR_USERNAME`, which prompts privately for a password and migrates the old memory files.
+
+Follow the [account API and migration contract](docs/PHASE0_SECURITY_AND_MIGRATIONS.md#postgresql-accounts-and-workspace-migration) for exact request fields, account rules, removed settings, and the complete rollout sequence.
+
 ## Long-Term Memory
 
 The Chat Agent includes a four-layer memory system inspired by the Hermes
@@ -285,7 +292,7 @@ agent-curated memory pattern.
 
 | Layer | Location | Behavior |
 | ---: | --- | --- |
-| 1 | `data/memory/MEMORY.md` and `data/memory/USER.md` | Small markdown files with hard char limits. `MEMORY.md` stores project and tool notes; `USER.md` stores user preferences. |
+| 1 | `data/memory/<user_id>/MEMORY.md` and `data/memory/<user_id>/USER.md` | Small markdown files with hard char limits. `MEMORY.md` stores project and tool notes; `USER.md` stores user preferences. |
 | 2 | Chat Agent prompt | Files are loaded once at the start of a thread and frozen for that session. Writes take effect in the next session. |
 | 3 | `src/agent/memory_curator.py` | Deleted threads can trigger a curator pass that proposes add, replace, or remove operations. |
 | 4 | `src/agent/context_compressor.py` | Long threads can be compressed into structured checkpoints while preserving tool-call/result pairs. |
@@ -302,7 +309,7 @@ CONTEXT_COMPRESS_TRIGGER_MESSAGES=30
 MEMORY_CURATOR_ENABLED=true
 ```
 
-The frontend Memory page directly edits `MEMORY.md` and `USER.md`, shows char
+The frontend Memory page edits only the signed-in user's `MEMORY.md` and `USER.md`, shows char
 budgets, and can refresh frozen snapshots.
 
 ## Verification
@@ -344,7 +351,8 @@ This is a demo-ready prototype, not a fully hardened commercial SaaS.
 
 Included:
 
-- Single-admin login gate
+- PostgreSQL registration/login, Argon2id password hashes, and revocable sessions
+- Per-user isolation for content, chat, jobs, calendar, media, and memory
 - Local Docker deployment
 - PostgreSQL storage
 - Redis/RQ worker mode
@@ -354,9 +362,8 @@ Included:
 
 Not included:
 
-- Team accounts and RBAC
+- Shared team workspaces and RBAC
 - Billing
-- Multi-tenant isolation
 - Production social-account operations
 - Managed cloud deployment manifests
 - Enterprise audit logging

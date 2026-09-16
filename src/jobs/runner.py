@@ -1,4 +1,4 @@
-"""Job runner shared by FastAPI background tasks and RQ workers."""
+"""Background/RQ runners restore the persisted owner's scope before executing work."""
 from __future__ import annotations
 
 import asyncio
@@ -41,7 +41,9 @@ def run_job(job_id: str, database_url: str | None = None) -> None:
     """Run one persisted job. RQ imports this function by dotted path."""
     store = ContentStore(database_url=database_url or config.DATABASE_URL, initialize_schema=False)
     try:
-        asyncio.run(run_job_async(job_id, store))
+        job = store.get_job(job_id)
+        if job:
+            asyncio.run(run_job_async(job_id, store.for_user(job["user_id"])))
     finally:
         store.engine.dispose()
 
@@ -56,7 +58,9 @@ def run_pipeline_job(run_id: str, request_data: dict[str, Any], database_url: st
     """
     store = ContentStore(database_url=database_url or config.DATABASE_URL, initialize_schema=False)
     try:
-        asyncio.run(_run_pipeline_job_async(run_id, request_data, store))
+        run = store.get_run(run_id)
+        if run:
+            asyncio.run(_run_pipeline_job_async(run_id, request_data, store.for_user(run["user_id"])))
     finally:
         store.engine.dispose()
 

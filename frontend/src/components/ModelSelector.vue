@@ -28,18 +28,18 @@
         {{ activeProvider?.configured ? '已配置' : '未配置' }}
       </span>
       <span class="selector-status-meta">
-        {{ activeModels.length }} 个可用 · 默认 {{ activeProvider?.default_model || '未设置' }}
+        {{ activeModels.length }} 个可选模型
       </span>
     </div>
 
     <div class="selector-grid compact">
       <div class="selector-field">
-        <span>Temperature</span>
+        <span title="值越高，表达越多样">创意程度</span>
         <el-slider v-model="local.temperature" :min="0" :max="1" :step="0.1" />
       </div>
 
       <div class="selector-field">
-        <span>Max Tokens</span>
+        <span title="单次模型回复的最大 token 数">输出上限</span>
         <el-input-number v-model="local.max_tokens" :min="128" :max="8192" :step="256" />
       </div>
     </div>
@@ -107,104 +107,17 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.model-selector {
-  display: grid;
-  gap: 12px;
-}
-
-.selector-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 12px;
-}
-
-.selector-grid.compact {
-  align-items: start;
-}
-
-.selector-field {
-  display: grid;
-  gap: 6px;
-}
-
-.selector-field > span {
-  color: var(--c-text-secondary);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.selector-field-caption {
-  /* Long model ids (e.g. NewAPI's `qwen3.7-plus-preview-thinking`) overflow the
-     el-select input. Show the full id below in mono so users can verify what
-     they actually picked, even if the collapsed input truncates it. */
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  font-weight: 400;
-  color: var(--c-text-tertiary);
-  overflow-wrap: anywhere;
-  line-height: 1.4;
-}
-
-.selector-status {
-  display: flex;
-  align-items: flex-start;
-  flex-wrap: wrap;
-  gap: 4px 8px;
-  padding: 8px 12px;
-  border: 1px solid var(--c-border);
-  border-radius: 6px;
-  background: var(--c-bg-soft);
-  font-size: 12px;
-}
-
-.selector-status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  margin-top: 6px;
-}
-
-.selector-status-dot.ready {
-  background: var(--c-ok);
-}
-
-.selector-status-dot.warn {
-  background: var(--c-warn);
-}
-
-.selector-status-text {
-  font-weight: 600;
-  color: var(--c-text);
-  letter-spacing: 0;
-}
-
-.selector-status-meta {
-  flex: 1;
-  min-width: 0;
-  color: var(--c-text-tertiary);
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  text-align: right;
-  /* Long model ids should wrap rather than be silently ellipsised — the default
-     model name is informational and getting cut off hides which provider/model
-     is currently active. */
-  overflow-wrap: anywhere;
-}
-
-@media (max-width: 900px) {
-  .selector-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .selector-status {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 4px;
-  }
-
-  .selector-status-meta {
-    text-align: left;
-  }
-}
+.model-selector { display: grid; gap: 16px; min-width: 0; }
+.selector-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+.selector-grid.compact { align-items: start; }
+.selector-field { display: grid; gap: 8px; min-width: 0; align-content: start; }
+.selector-field > span { color: var(--c-text-secondary); font-size: 11px; font-weight: 500; }
+.selector-field .selector-field-caption { font-family: var(--font-mono); font-size: 10px; font-weight: 400; color: var(--c-text-tertiary); overflow-wrap: anywhere; line-height: 1.5; }
+.selector-status { display: flex; align-items: center; gap: 7px; padding: 0; font-size: 11px; }
+.selector-status-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+.selector-status-dot.ready { background: var(--c-ok); }
+.selector-status-dot.warn { background: var(--c-warn); }
+.selector-status-text { color: var(--c-text-secondary); }
+.selector-status-meta { margin-left: auto; color: var(--c-text-tertiary); font-size: 10px; }
+@media (max-width: 480px) { .selector-grid { grid-template-columns: 1fr; } .selector-grid.compact { grid-template-columns: 1fr 1fr; } }
 </style>

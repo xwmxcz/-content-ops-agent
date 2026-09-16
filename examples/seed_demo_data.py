@@ -3,7 +3,12 @@
 Generates ~50 content rows across 6 topical domains plus realistic engagement
 metrics (exponential distribution: a few hits, lots of average) so the chat
 Agent's analyze_content_performance / propose_topics tools have real signal
-to work with. Idempotent: deletes only rows tagged with the demo provider.
+to work with. Requires an existing account; all writes and demo-row cleanup
+stay inside that user's workspace. No account or legacy-data claim is created.
+
+Run after registering an account and applying migrations:
+    python examples/seed_demo_data.py --username YOUR_USERNAME
+    python examples/seed_demo_data.py --username YOUR_USERNAME --database-url POSTGRESQL_DSN
 """
 from __future__ import annotations
 
@@ -28,6 +33,7 @@ from src.storage.content_store import (  # noqa: E402
     ContentMetrics,
     ContentStore,
 )
+from src.storage.account_store import AccountStore  # noqa: E402
 from src.utils import config  # noqa: E402
 
 
@@ -253,15 +259,25 @@ SPECS: list[dict[str, Any]] = [
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Seed demo data for the Content Ops prototype.")
+    parser.add_argument("--username", required=True, help="Existing account that owns the demo workspace.")
     parser.add_argument("--database-url", default=None)
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducible metrics.")
     return parser.parse_args()
 
 
 def build_store(args: argparse.Namespace) -> ContentStore:
-    if args.database_url:
-        return ContentStore(database_url=args.database_url)
-    return ContentStore(database_url=config.DATABASE_URL)
+    system_store = ContentStore(
+        database_url=args.database_url or config.DATABASE_URL, initialize_schema=False,
+    )
+    user = AccountStore(system_store).get_user_by_username(args.username)
+    if not user or not user["is_active"]:
+        system_store.engine.dispose()
+        raise SystemExit("An active account with this username is required. Register it before seeding.")
+    return system_store.for_user(user["id"])
+
+
+def demo_thread_id(store: ContentStore) -> str:
+    return f"{DEMO_THREAD_ID}-{store.user_id}"
 
 
 def reset_demo_rows(store: ContentStore) -> None:
@@ -282,8 +298,8 @@ def reset_demo_rows(store: ContentStore) -> None:
             )
             session.query(Content).filter(Content.id.in_(demo_content_ids)).delete(synchronize_session=False)
 
-        session.query(AgentMessage).filter(AgentMessage.thread_id == DEMO_THREAD_ID).delete(synchronize_session=False)
-        session.query(AgentThread).filter(AgentThread.id == DEMO_THREAD_ID).delete(synchronize_session=False)
+        session.query(AgentMessage).filter(AgentMessage.thread_id == demo_thread_id(store)).delete(synchronize_session=False)
+        session.query(AgentThread).filter(AgentThread.id == demo_thread_id(store)).delete(synchronize_session=False)
         session.commit()
     finally:
         session.close()
@@ -417,7 +433,7 @@ def seed_agent_thread(store: ContentStore) -> None:
     session = store._get_session()
     try:
         thread = AgentThread(
-            id=DEMO_THREAD_ID,
+            id=demo_thread_id(store),
             title="Demo: 选题建议 + 周排期",
             last_provider=DEMO_PROVIDER,
             last_model=DEMO_MODEL,
@@ -427,12 +443,12 @@ def seed_agent_thread(store: ContentStore) -> None:
         session.add(thread)
         session.add_all([
             AgentMessage(
-                thread_id=DEMO_THREAD_ID, role="user",
+                thread_id=demo_thread_id(store), role="user",
                 content="看一下我们最近 30 天发的内容表现，给我推 5 个下周该写的选题。",
                 provider=DEMO_PROVIDER, model=DEMO_MODEL, status="completed", created_at=now,
             ),
             AgentMessage(
-                thread_id=DEMO_THREAD_ID, role="assistant",
+                thread_id=demo_thread_id(store), role="assistant",
                 content=(
                     "我先用 analyze_content_performance 看了过去 30 天 35 篇带数据的内容，"
                     "再用 propose_topics 拿到选题情报。综合下来 5 个建议（详见 markdown 表）。"

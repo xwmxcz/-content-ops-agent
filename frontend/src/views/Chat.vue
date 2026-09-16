@@ -2,9 +2,8 @@
   <div class="page chat-page">
     <section class="chat-topline">
       <div>
-        <span class="hero-kicker">工具型 Agent</span>
-        <h1 class="page-title">Agent 对话</h1>
-        <p class="page-subtitle">多轮会话、模型切换和内容工具调用都会记录在当前 thread。</p>
+        <h1 class="page-title">把想法，聊成内容。</h1>
+        <p class="page-subtitle">从选题到成稿，和你的内容助手一起推进。</p>
       </div>
       <div class="hero-actions">
         <el-button :icon="Refresh" :loading="chat.threadsLoading" @click="refreshThreads">刷新</el-button>
@@ -15,7 +14,7 @@
     <section class="chat-workbench">
       <aside class="thread-panel">
         <div class="panel-head">
-          <span>Threads</span>
+          <span>我的会话</span>
           <strong>{{ chat.threads.length }}</strong>
         </div>
 
@@ -51,7 +50,7 @@
             >
               <span class="thread-title">{{ threadLabel(hit.thread_id) }}</span>
               <small class="search-snippet">{{ snippet(hit.content) }}</small>
-              <small>{{ hit.role === 'user' ? 'You' : 'Agent' }} · {{ formatTime(hit.created_at) }}</small>
+              <small>{{ hit.role === 'user' ? '我' : '内容助手' }} · {{ formatTime(hit.created_at) }}</small>
             </button>
           </div>
 
@@ -69,7 +68,7 @@
                   <span v-if="thread.archived" class="archive-mark" title="已归档">🗄</span>
                   {{ thread.title || thread.id }}
                 </span>
-                <small>{{ thread.message_count }} 条消息 · {{ thread.last_model || '自动模型' }}</small>
+                <small>{{ thread.message_count }} 条消息</small>
               </button>
               <div class="thread-actions" @click.stop>
                 <el-button text size="small" :icon="Edit" aria-label="重命名" @click="renameThread(thread)" />
@@ -117,6 +116,27 @@
           </div>
         </div>
 
+        <aside class="control-panel" aria-label="会话设置">
+          <details class="model-settings">
+            <summary>
+              <span>模型设置</span>
+              <small :title="modelConfig.model">{{ modelConfig.model || '自动模型' }}</small>
+            </summary>
+            <div class="settings-body">
+              <ModelSelector
+                :model-value="modelConfig"
+                @update:model-value="Object.assign(modelConfig, $event)"
+              />
+            </div>
+          </details>
+          <details class="tool-panel">
+            <summary>可用工具 <small>{{ tools.length }}</small></summary>
+            <div class="tool-grid">
+              <span v-for="tool in tools" :key="tool">{{ tool }}</span>
+            </div>
+          </details>
+        </aside>
+
         <div ref="logRef" class="chat-log">
           <button
             v-if="chat.hasMoreMessages"
@@ -129,8 +149,10 @@
           </button>
 
           <div v-if="!chat.messages.length" class="chat-empty">
-            <strong>开始一次运营对话</strong>
-            <p>可以让 Agent 查询内容库、生成草稿、打磨内容或安排发布日历。</p>
+            <span class="empty-label">留一页，给下一个好想法</span>
+            <strong>今天，想写点什么？</strong>
+            <p>说说你的选题，或把一段需要打磨的草稿交给我。</p>
+            <div class="empty-capabilities"><span>寻找内容</span><span>生成草稿</span><span>打磨表达</span><span>安排日历</span></div>
           </div>
 
           <article
@@ -141,7 +163,7 @@
           >
             <div class="message-bubble">
               <div class="message-meta">
-                <span>{{ message.role === 'user' ? 'You' : 'Agent' }}</span>
+                <span>{{ message.role === 'user' ? '我' : '内容助手' }}</span>
                 <small v-if="message.model">{{ message.provider }} / {{ message.model }}</small>
                 <small v-else-if="message.pending">发送中</small>
               </div>
@@ -158,19 +180,19 @@
                   v-if="message.intent.route_surface === 'studio'"
                   class="studio-suggestion"
                 >
-                  <span>这类请求更适合在 Studio 的研究型 Pipeline 中运行。</span>
+                  <span>前往创作工作台，进行资料研究与分步创作。</span>
                   <el-button
                     type="primary"
                     size="small"
                     @click="openInStudio(messageIndex, message.intent)"
                   >
-                    在 Studio 中打开
+                    在创作工作台打开
                   </el-button>
                 </div>
               </section>
 
               <section v-if="message.plan?.length" class="plan-board">
-                <div class="plan-head">Agent 计划</div>
+                <div class="plan-head">执行计划</div>
                 <ol>
                   <li v-for="step in message.plan" :key="step.index" :class="step.status">
                     <span class="plan-marker">{{ planMarker(step.status) }}</span>
@@ -184,7 +206,7 @@
 
               <div v-if="message.tool_events?.length" class="tool-events">
                 <div class="tool-events-head">
-                  <span>Tool calls</span>
+                  <span>工具执行记录</span>
                   <strong>{{ message.tool_events.length }}</strong>
                 </div>
                 <details
@@ -197,7 +219,7 @@
                     <span class="tool-event-index">#{{ index + 1 }}</span>
                     <span class="tool-event-name">{{ event.name }}</span>
                     <span v-if="(event.attempt ?? 1) > 1" class="tool-event-attempt">
-                      attempt {{ event.attempt }}
+                      第 {{ event.attempt }} 次尝试
                     </span>
                     <span class="tool-event-badge" :class="event.status">
                       {{ eventStatusLabel(event.status) }}
@@ -206,15 +228,15 @@
                   </summary>
                   <div class="tool-event-body">
                     <div v-if="hasArgs(event.args)" class="tool-event-section">
-                      <div class="tool-event-label">args</div>
+                      <div class="tool-event-label">输入参数</div>
                       <pre>{{ prettyArgs(event.args) }}</pre>
                     </div>
                     <div v-if="event.status !== 'failed'" class="tool-event-section">
-                      <div class="tool-event-label">{{ event.status === 'proposed' ? 'approval proposal' : 'output' }}</div>
-                      <pre>{{ prettyOutput(event.output) || '(empty)' }}</pre>
+                      <div class="tool-event-label">{{ event.status === 'proposed' ? '待确认操作' : '执行结果' }}</div>
+                      <pre>{{ prettyOutput(event.output) || '暂无输出' }}</pre>
                     </div>
                     <div v-else class="tool-event-section error">
-                      <div class="tool-event-label">error</div>
+                      <div class="tool-event-label">错误详情</div>
                       <pre>{{ event.error || event.output || 'Unknown error' }}</pre>
                     </div>
                   </div>
@@ -228,34 +250,18 @@
           <el-input
             v-model="input"
             type="textarea"
-            :rows="4"
+            :rows="3"
             resize="none"
-            placeholder="让 Agent 帮你处理内容运营任务"
+            placeholder="描述你的想法，或粘贴需要打磨的内容…"
             @keydown.ctrl.enter="send"
           />
           <div class="composer-actions">
-            <span>{{ modelConfig.provider || '自动提供商' }} / {{ modelConfig.model || '自动模型' }}</span>
+            <span>Ctrl + Enter 发送 · 支持多轮对话</span>
             <el-button type="primary" :icon="Position" :loading="chat.sending" @click="send">发送</el-button>
           </div>
         </div>
       </main>
 
-      <aside class="control-panel">
-        <ModelSelector
-          :model-value="modelConfig"
-          @update:model-value="Object.assign(modelConfig, $event)"
-        />
-
-        <section class="tool-panel">
-          <div class="panel-head">
-            <span>Tools</span>
-            <strong>11</strong>
-          </div>
-          <div class="tool-grid">
-            <span v-for="tool in tools" :key="tool">{{ tool }}</span>
-          </div>
-        </section>
-      </aside>
     </section>
   </div>
 </template>
@@ -305,7 +311,7 @@ const searchInput = ref('')
 
 const isSearchActive = computed(() => Boolean(chat.searchQuery))
 const currentThreadLabel = computed(() => {
-  if (!chat.activeThreadId) return 'New thread'
+  if (!chat.activeThreadId) return '新会话'
   return chat.activeThread?.title || chat.activeThreadId
 })
 
@@ -598,378 +604,399 @@ onMounted(async () => {
 
 <style scoped>
 .chat-page {
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  height: calc(100dvh - 68px);
   gap: 20px;
   padding: 24px 32px;
-  background: var(--c-bg);
   color: var(--c-text);
 }
 
-.chat-topline {
+.chat-topline, .hero-actions, .panel-head, .dialog-head, .dialog-head-actions,
+.composer-actions, .message-meta, .intent-head, .studio-suggestion {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
+  gap: 12px;
+}
+
+.chat-topline, .panel-head, .dialog-head, .composer-actions, .message-meta,
+.studio-suggestion {
   justify-content: space-between;
-  gap: 16px;
 }
 
-.hero-kicker,
-.panel-kicker {
-  display: inline-block;
-  color: var(--c-text-tertiary);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.chat-topline .page-title {
-  margin-top: 6px;
-  font-size: var(--fs-h1);
-  font-weight: 600;
-  letter-spacing: 0;
-  line-height: 1.15;
-}
-
-.chat-topline .page-subtitle {
-  margin-top: 6px;
-  color: var(--c-text-secondary);
-  font-size: 14px;
+.chat-topline {
+  align-items: flex-end;
+  flex-shrink: 0;
 }
 
 .hero-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   flex-wrap: wrap;
+  gap: 8px;
 }
+
+.panel-kicker {
+  color: var(--c-text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .08em;
+}
+.chat-topline .page-title {
+  margin: 0 0 8px;
+  font-family: var(--font-display);
+  font-size: var(--fs-h1);
+  line-height: 1.3;
+  letter-spacing: -.04em;
+}
+.chat-topline .page-subtitle {
+  margin: 0;
+  color: var(--c-text-secondary);
+  font-size: 13px;
+}
+
 
 .chat-workbench {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr) 340px;
-  gap: 16px;
-  min-height: 680px;
-  height: calc(100vh - 200px);
-  max-height: 920px;
-}
-
-.thread-panel,
-.dialog-panel,
-.control-panel,
-.tool-panel {
-  border: 1px solid var(--c-border);
-  border-radius: 6px;
-  background: var(--c-surface);
-  box-shadow: none;
-  backdrop-filter: none;
-}
-
-.thread-panel,
-.control-panel {
-  display: grid;
-  gap: 12px;
-  padding: 16px;
-}
-
-.control-panel {
-  align-self: start;
-}
-
-.thread-panel {
-  /* Header / search / toggle stay put; only .thread-list (the last row) scrolls. */
-  align-self: stretch;
-  overflow: hidden;
+  flex: 1;
+  grid-template-columns: 236px minmax(0, 1fr);
+  gap: 20px;
   min-height: 0;
+}
+.thread-panel, .dialog-panel {
+  min-width: 0;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-card);
+  background: var(--c-surface);
+}
+.thread-panel {
+  display: grid;
   grid-template-rows: auto auto auto minmax(0, 1fr);
+  align-self: stretch;
+  gap: 16px;
+  padding: 20px 12px 12px;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--c-bg-soft);
+}
+.panel-head, .thread-search, .thread-toggle {
+  margin: 0 6px;
+}
+
+.panel-head span {
+  color: var(--c-text-secondary);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.panel-head strong {
+  padding: 1px 8px;
+  border-radius: var(--r-pill);
+  background: var(--c-surface);
+  color: var(--c-text-tertiary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.thread-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--c-text-tertiary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.thread-toggle input {
+  margin: 0;
+  accent-color: var(--c-accent);
+}
+
+.thread-list, .search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .thread-list {
   min-height: 0;
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding-right: 2px;
-}
-
-.dialog-panel {
-  min-width: 0;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  overflow: hidden;
-}
-
-.panel-head,
-.dialog-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.dialog-head-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.panel-head span {
-  color: var(--c-text-tertiary);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.panel-head strong {
-  color: var(--c-text);
-  font-family: var(--font-mono);
-  font-size: 13px;
-  font-weight: 500;
-  font-feature-settings: 'tnum';
-  font-variant-numeric: tabular-nums;
-}
-
-.thread-search {
-  /* Sits between the header and the thread list. */
-}
-
-.thread-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--c-text-secondary);
-  cursor: pointer;
-  user-select: none;
-}
-
-.thread-toggle input {
-  margin: 0;
-  cursor: pointer;
 }
 
 .thread-empty {
-  display: grid;
-  min-height: 120px;
-  place-items: center;
+  padding: 42px 12px;
   color: var(--c-text-tertiary);
+  text-align: center;
   font-size: 13px;
 }
 
-.search-results {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-/* Thread list items ----------------------------------------------------- */
-
 .thread-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
+  grid-template-columns: minmax(0, 1fr);
   gap: 4px;
-  width: 100%;
   flex-shrink: 0;
-  padding: 6px 8px 6px 12px;
+  width: 100%;
+  padding: 12px 12px 6px;
   border: 1px solid transparent;
-  border-radius: 4px;
-  color: var(--c-text);
+  border-radius: var(--r-control);
   background: transparent;
+  color: var(--c-text);
   text-align: left;
-  transition: background-color 80ms ease, border-color 80ms ease;
+  transition: background-color 120ms ease, border-color 120ms ease;
 }
-
 .thread-item:hover {
-  background: var(--c-bg-soft);
+  background: var(--c-surface);
 }
 
 .thread-item.active {
-  border-color: var(--c-accent);
-  background: var(--c-accent-soft);
+  background: var(--c-surface);
+  border-color: var(--c-border);
+  box-shadow: inset 3px 0 var(--c-accent);
 }
 
 .thread-item.archived {
-  opacity: 0.65;
+  opacity: .65;
 }
 
 .thread-item-body {
   display: grid;
-  gap: 4px;
-  padding: 4px 0;
-  width: 100%;
+  gap: 7px;
   min-width: 0;
+  width: 100%;
+  padding: 0;
   border: 0;
   background: transparent;
   color: inherit;
   text-align: left;
   cursor: pointer;
 }
-
 .thread-title {
-  display: flex;
-  align-items: center;
-  gap: 4px;
   overflow: hidden;
-  font-weight: 600;
   font-size: 13px;
-  letter-spacing: 0;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.pin-mark,
-.archive-mark {
-  font-size: 12px;
-  flex-shrink: 0;
+.pin-mark, .archive-mark {
+  font-size: 11px;
 }
 
 .thread-item small {
   overflow: hidden;
   color: var(--c-text-tertiary);
   font-size: 11px;
-  font-family: var(--font-mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .thread-actions {
-  display: none;
+  /* Keep this row reserved so revealing actions never moves the title target. */
+  display: flex;
+  visibility: hidden;
+  justify-content: flex-end;
   align-items: center;
   gap: 2px;
-  flex-shrink: 0;
 }
-
 .thread-item:hover .thread-actions,
+.thread-item:focus-within .thread-actions,
 .thread-item.active .thread-actions {
-  display: flex;
+  visibility: visible;
 }
 
 .thread-actions :deep(.el-button) {
   padding: 4px 5px;
   height: 24px;
+  margin: 0;
 }
 
 .thread-actions :deep(.is-active) {
   color: var(--c-accent);
 }
 
-.thread-load-more {
-  width: 100%;
-  flex-shrink: 0;
-  padding: 8px;
-  margin-top: 4px;
-  border: 1px dashed var(--c-border);
-  border-radius: 4px;
-  background: transparent;
+.thread-load-more, .load-older {
+  padding: 7px 14px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-control);
+  background: var(--c-surface);
   color: var(--c-text-secondary);
-  cursor: pointer;
   font-size: 12px;
-  transition: border-color 100ms ease;
+  cursor: pointer;
 }
-
-.thread-load-more:hover:not(:disabled) {
-  border-color: var(--c-accent);
+.thread-load-more:hover:not(:disabled), .load-older:hover:not(:disabled) {
   color: var(--c-accent);
+  border-color: var(--c-accent);
 }
 
-.thread-load-more:disabled {
+.thread-load-more:disabled, .load-older:disabled {
+  opacity: .6;
   cursor: not-allowed;
-  opacity: 0.6;
 }
 
 .search-snippet {
-  color: var(--c-text-secondary) !important;
-  font-family: var(--font-ui) !important;
+  color: var(--c-text-secondary);
 }
 
+
+.dialog-panel {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  overflow: hidden;
+  box-shadow: var(--shadow-panel);
+}
 .dialog-head {
-  padding: 14px 20px;
-  border-bottom: 1px solid var(--c-border);
+  padding: 19px 26px;
+}
+
+.dialog-head > div:first-child {
+  min-width: 0;
 }
 
 .dialog-head strong {
   display: block;
   margin-top: 4px;
-  color: var(--c-text);
-  font-family: var(--font-mono);
-  font-size: 13px;
-  font-weight: 500;
-  word-break: break-word;
+  font-size: 15px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
 }
+
+.dialog-head-actions {
+  gap: 0;
+  flex-shrink: 0;
+}
+
+.control-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0 24px;
+  padding: 0 26px;
+  border-block: 1px solid var(--c-border-soft);
+  background: var(--c-bg-soft);
+  max-height: min(32dvh, 260px);
+  overflow-y: auto;
+}
+.model-settings, .tool-panel {
+  min-width: 0;
+}
+
+.control-panel summary {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 42px;
+  color: var(--c-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+.control-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.control-panel summary::after {
+  content: '⌄';
+  color: var(--c-text-tertiary);
+}
+
+.control-panel details[open] > summary::after {
+  transform: rotate(180deg);
+}
+
+.control-panel summary > span {
+  flex-shrink: 0;
+}
+
+.control-panel summary small {
+  color: var(--c-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-body {
+  padding: 5px 0 20px;
+}
+
+.tool-grid {
+  display: grid;
+  gap: 8px;
+  padding: 8px 0 20px;
+}
+
+.tool-grid span {
+  color: var(--c-text-tertiary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
 
 .chat-log {
   min-height: 0;
-  padding: 20px;
+  max-height: none;
+  padding: 28px;
   overflow-y: auto;
-  background: var(--c-bg-soft);
   border: 0;
   border-radius: 0;
+  box-shadow: none;
   scroll-behavior: smooth;
-}
-
-.chat-log::-webkit-scrollbar {
-  width: 8px;
-}
-
-.chat-log::-webkit-scrollbar-thumb {
-  background: var(--c-border);
-  border-radius: 4px;
-}
-
-.chat-log::-webkit-scrollbar-thumb:hover {
-  background: var(--c-text-tertiary);
 }
 
 .load-older {
   display: block;
-  margin: 0 auto 12px;
-  padding: 4px 14px;
-  border: 1px solid var(--c-border);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--c-text-secondary);
-  cursor: pointer;
-  font-size: 12px;
-  font-family: var(--font-mono);
-  transition: border-color 100ms ease;
-}
-
-.load-older:hover:not(:disabled) {
-  border-color: var(--c-accent);
-  color: var(--c-accent);
-}
-
-.load-older:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
+  margin: 0 auto 24px;
+  border-radius: var(--r-pill);
 }
 
 .chat-empty {
-  display: grid;
-  gap: 6px;
-  min-height: 360px;
-  place-items: center;
-  color: var(--c-text-tertiary);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  min-height: 100%;
+  gap: 12px;
+  padding: 24px 16px;
   text-align: center;
+}
+.empty-label {
+  padding: 7px 13px;
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+  border-radius: var(--r-pill);
+  font-size: 11px;
 }
 
 .chat-empty strong {
-  color: var(--c-text);
-  font-size: 18px;
-  font-weight: 600;
-  letter-spacing: 0;
+  font-family: var(--font-editorial);
+  font-size: clamp(25px, 2.5vw, 34px);
+  font-weight: 500;
+  letter-spacing: -.03em;
 }
 
 .chat-empty p {
+  max-width: 330px;
   margin: 0;
   color: var(--c-text-secondary);
   font-size: 13px;
+  line-height: 1.8;
+}
+
+.empty-capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 18px;
+  margin-top: 12px;
+  color: var(--c-text-tertiary);
+  font-size: 11px;
+}
+
+.empty-capabilities span::before {
+  content: '·';
+  margin-right: 8px;
+  color: var(--c-accent);
 }
 
 .message-row {
   display: flex;
-  margin-bottom: 16px;
+  margin-bottom: 26px;
 }
 
 .message-row.user {
@@ -977,38 +1004,33 @@ onMounted(async () => {
 }
 
 .message-bubble {
-  width: min(78%, 720px);
-  padding: 14px 16px;
-  border: 1px solid var(--c-border);
-  border-radius: 6px;
-  color: var(--c-text);
-  background: var(--c-surface);
+  width: 100%;
+  min-width: 0;
+  padding: 6px 0;
 }
 
 .message-row.user .message-bubble {
-  background: var(--c-bg-soft);
+  width: auto;
+  max-width: 88%;
+  padding: 16px 20px;
+  border-radius: 16px 16px 4px 16px;
+  background: var(--c-accent-soft);
 }
 
 .message-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .message-meta span {
-  color: var(--c-text);
-  font-weight: 600;
   font-size: 12px;
-  letter-spacing: 0;
+  font-weight: 600;
+  color: var(--c-accent);
 }
 
 .message-meta small {
   overflow: hidden;
   color: var(--c-text-tertiary);
-  font-size: 11px;
-  font-family: var(--font-mono);
+  font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1017,102 +1039,71 @@ onMounted(async () => {
   margin: 0;
   color: var(--c-text);
   font-size: 14px;
-  line-height: 1.65;
+  line-height: 1.85;
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .intent-board {
   display: grid;
-  gap: 8px;
+  gap: 10px;
   margin-bottom: 14px;
 }
 
 .intent-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
   flex-wrap: wrap;
-  color: var(--c-text-secondary);
-  font-size: 12px;
+  gap: 9px;
+  color: var(--c-text-tertiary);
+  font-size: 11px;
 }
 
 .intent-chip {
-  display: inline-flex;
-  align-items: center;
-  min-height: 24px;
-  padding: 0 10px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--c-accent) 10%, white);
-  color: var(--c-accent);
-  font-size: 12px;
-  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: var(--r-pill);
+  background: var(--c-bg-soft);
+  color: var(--c-text-secondary);
+  font-size: 11px;
 }
 
 .studio-suggestion {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--c-accent) 24%, transparent);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--c-accent) 6%, white);
+  padding: 12px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-control);
+  background: var(--c-accent-soft);
   color: var(--c-text-secondary);
-  font-size: 13px;
-}
-
-.tool-events {
-  display: grid;
-  gap: 6px;
-  margin-top: 14px;
+  font-size: 12px;
 }
 
 .plan-board {
-  margin-bottom: 14px;
-  padding: 12px 14px;
-  border: 1px solid var(--c-border);
-  border-radius: 4px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border-left: 2px solid var(--c-border);
   background: var(--c-bg-soft);
+  border-radius: 0 var(--r-control) var(--r-control) 0;
 }
 
-.plan-head {
+.plan-head, .tool-events-head {
   margin-bottom: 8px;
   color: var(--c-text-tertiary);
   font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  font-family: var(--font-mono);
+  font-weight: 600;
 }
 
 .plan-board ol {
   display: grid;
-  gap: 4px;
+  gap: 6px;
   margin: 0;
   padding: 0;
   list-style: none;
-  counter-reset: plan-step;
 }
 
 .plan-board li {
   display: grid;
-  grid-template-columns: 16px 16px minmax(0, 1fr) auto;
+  grid-template-columns: 16px minmax(0, 1fr);
   align-items: baseline;
-  gap: 8px;
-  padding: 3px 0;
-  font-size: 13px;
-  font-family: var(--font-mono);
+  gap: 3px 8px;
+  font-size: 12px;
   color: var(--c-text-secondary);
-  counter-increment: plan-step;
-}
-
-.plan-board li::before {
-  content: counter(plan-step, decimal-leading-zero);
-  color: var(--c-text-tertiary);
-  font-size: 11px;
-  font-weight: 500;
-  text-align: right;
 }
 
 .plan-board li.completed {
@@ -1133,93 +1124,58 @@ onMounted(async () => {
 }
 
 .plan-marker {
-  display: inline-block;
-  width: 16px;
-  flex-shrink: 0;
   text-align: center;
-  font-size: 13px;
-  font-family: var(--font-mono);
-}
-
-.plan-board li.running .plan-marker {
-  animation: marker-pulse 1.2s ease-in-out infinite;
-}
-
-@keyframes marker-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-
-.plan-desc {
-  flex: 1;
-  font-family: var(--font-ui);
-  font-size: 13px;
-  color: inherit;
 }
 
 .plan-board small {
+  grid-column: 2;
   color: var(--c-text-tertiary);
-  font-size: 11px;
   font-family: var(--font-mono);
-  white-space: nowrap;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.tool-events {
+  display: grid;
+  gap: 6px;
+  margin-top: 18px;
 }
 
 .tool-events-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 4px;
-  color: var(--c-text-tertiary);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  font-family: var(--font-mono);
+  gap: 8px;
+  margin: 0 0 2px;
 }
 
 .tool-events-head strong {
-  color: var(--c-text);
-  font-size: 12px;
-  font-family: var(--font-mono);
-  font-feature-settings: 'tnum';
-  font-variant-numeric: tabular-nums;
+  font-weight: 500;
 }
 
 .tool-event {
   border: 1px solid var(--c-border);
-  border-radius: 4px;
-  background: var(--c-surface);
+  border-radius: var(--r-control);
   overflow: hidden;
-  font-family: var(--font-mono);
-  transition: border-color 100ms ease;
-}
-
-.tool-event:hover {
-  border-color: var(--c-border-strong);
+  background: var(--c-bg-soft);
 }
 
 .tool-event.failed {
   border-color: var(--c-fail);
-  background: var(--c-fail-soft);
 }
 
 .tool-event.proposed {
   border-color: var(--c-warn);
-  background: var(--c-warn-soft);
 }
 
 .tool-event > summary {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px 10px;
-  padding: 8px 12px;
+  gap: 5px 8px;
+  padding: 10px 12px;
   cursor: pointer;
   list-style: none;
-  user-select: none;
-  font-size: 12px;
-  line-height: 1.4;
+  font-size: 11px;
 }
 
 .tool-event > summary::-webkit-details-marker {
@@ -1228,69 +1184,29 @@ onMounted(async () => {
 
 .tool-event > summary::before {
   content: '›';
-  flex-shrink: 0;
   color: var(--c-text-tertiary);
   font-size: 14px;
-  font-weight: 600;
-  width: 12px;
-  display: inline-block;
-  transition: transform 0.12s ease;
 }
 
 .tool-event[open] > summary::before {
   transform: rotate(90deg);
 }
 
-.tool-event-index {
-  flex-shrink: 0;
+.tool-event-index, .tool-event-summary {
   color: var(--c-text-tertiary);
-  font-size: 11px;
-  font-weight: 500;
-  font-family: var(--font-mono);
-  font-feature-settings: 'tnum';
-  font-variant-numeric: tabular-nums;
-  min-width: 28px;
+  font-size: 10px;
 }
 
 .tool-event-name {
-  color: var(--c-text);
-  font-size: 12.5px;
-  font-weight: 500;
+  color: var(--c-text-secondary);
   font-family: var(--font-mono);
-  letter-spacing: 0;
-  word-break: break-all;
-  flex-shrink: 0;
+  overflow-wrap: anywhere;
 }
 
-.tool-event.failed .tool-event-name {
-  color: var(--c-fail);
-}
-
-.tool-event.proposed .tool-event-name {
-  color: var(--c-warn);
-}
-
-.tool-event-badge {
-  flex-shrink: 0;
-  padding: 1px 6px;
-  border-radius: 3px;
+.tool-event-badge, .tool-event-attempt {
+  padding: 2px 6px;
+  border-radius: var(--r-pill);
   font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  font-family: var(--font-mono);
-}
-
-.tool-event-attempt {
-  flex-shrink: 0;
-  padding: 1px 6px;
-  border-radius: 3px;
-  background: var(--c-warn-soft);
-  color: var(--c-warn);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  font-family: var(--font-mono);
 }
 
 .tool-event-badge.completed {
@@ -1299,166 +1215,194 @@ onMounted(async () => {
 }
 
 .tool-event-badge.failed {
-  color: #ffffff;
-  background: var(--c-fail);
+  color: var(--c-fail);
+  background: var(--c-fail-soft);
 }
 
-.tool-event-badge.proposed {
+.tool-event-badge.proposed, .tool-event-attempt {
   color: var(--c-warn);
   background: var(--c-warn-soft);
 }
 
 .tool-event-summary {
-  flex: 1 1 200px;
+  flex: 1 1 180px;
   min-width: 0;
   overflow: hidden;
-  color: var(--c-text-tertiary);
-  font-size: 11.5px;
-  font-family: var(--font-mono);
-  line-height: 1.45;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .tool-event-body {
   display: grid;
-  gap: 10px;
-  padding: 0 12px 12px;
+  gap: 12px;
+  padding: 12px;
   border-top: 1px solid var(--c-border);
-  padding-top: 10px;
 }
 
 .tool-event-section {
+  min-width: 0;
   display: grid;
-  gap: 4px;
+  gap: 5px;
 }
 
 .tool-event-label {
   color: var(--c-text-tertiary);
   font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  font-family: var(--font-mono);
 }
 
 .tool-event-section pre {
-  margin: 0;
-  padding: 10px 12px;
-  border-radius: 4px;
-  background: var(--c-bg-code);
-  border: 1px solid var(--c-border);
-  color: var(--c-text);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.55;
+  max-width: 100%;
   max-height: 240px;
   overflow: auto;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-control);
+  background: var(--c-surface);
+  color: var(--c-text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.65;
   white-space: pre-wrap;
-  word-break: break-word;
   overflow-wrap: anywhere;
-  max-width: 100%;
 }
 
 .tool-event-section.error pre {
-  background: var(--c-fail-soft);
   color: var(--c-fail);
-  border-color: var(--c-fail);
+  background: var(--c-fail-soft);
 }
 
 .composer {
   display: grid;
-  gap: 10px;
-  padding: 14px 20px 16px;
-  border-top: 1px solid var(--c-border);
-  background: var(--c-surface);
-  min-width: 0;
-}
-
-.composer-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
   gap: 12px;
   min-width: 0;
+  padding: 18px 24px 20px;
+  border-top: 1px solid var(--c-border-soft);
+}
+
+.composer :deep(.el-textarea__inner) {
+  padding: 14px 16px;
+  line-height: 1.7;
+  background: var(--c-bg-soft);
 }
 
 .composer-actions span {
-  flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
   color: var(--c-text-tertiary);
-  font-size: 11.5px;
-  font-family: var(--font-mono);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.tool-panel {
-  display: grid;
-  gap: 12px;
-  padding: 16px;
-}
-
-.tool-grid {
-  display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
-}
-
-.tool-grid span {
-  display: inline-flex;
-  align-items: center;
-  height: 22px;
-  padding: 0 8px;
-  border: 1px solid var(--c-border);
-  border-radius: 999px;
-  color: var(--c-text-secondary);
-  background: var(--c-surface);
   font-size: 11px;
-  font-family: var(--font-mono);
-  letter-spacing: 0;
 }
 
-@media (max-width: 1180px) {
+.composer-actions :deep(.el-button) {
+  min-width: 94px;
+}
+
+.thread-item-body:focus-visible, summary:focus-visible, .load-older:focus-visible, .thread-load-more:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 3px;
+  border-radius: var(--r-control);
+}
+
+
+@media (max-width: 1100px) {
   .chat-workbench {
-    grid-template-columns: 240px minmax(0, 1fr);
-    min-height: 0;
+    grid-template-columns: 210px minmax(0, 1fr);
+    gap: 14px;
+  }
+
+  .chat-log {
+    padding: 22px;
   }
 
   .control-panel {
+    padding: 0 20px;
+    gap: 12px;
+  }
+
+  .model-settings[open] {
     grid-column: 1 / -1;
+  }
+
+  .tool-panel[open] {
+    grid-column: 1 / -1;
+  }
+
+  .tool-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+}
+
+@media (min-width: 821px) and (max-width: 980px) {
+  .chat-page {
+    height: calc(100dvh - 118px);
+  }
+}
+
+@media (min-width: 821px) and (max-height: 600px) {
+  .chat-page {
+    height: auto;
+  }
+
+  .chat-workbench {
+    flex: none;
+    height: 520px;
   }
 }
 
 @media (max-width: 820px) {
   .chat-page {
-    padding: 16px;
+    height: auto;
+    padding: 20px 16px;
+    gap: 20px;
   }
 
   .chat-topline {
     align-items: flex-start;
     flex-direction: column;
+    gap: 18px;
   }
 
   .chat-workbench {
+    flex: none;
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .thread-panel {
-    order: 2;
+    height: auto;
+    max-height: none;
   }
 
   .dialog-panel {
     order: 1;
+    min-height: 670px;
+    grid-template-rows: auto auto minmax(280px, 1fr) auto;
+  }
+
+  .thread-panel {
+    order: 2;
+    max-height: 350px;
+  }
+
+  .thread-actions {
+    visibility: visible;
+  }
+
+  .dialog-head {
+    padding: 16px 18px;
+  }
+
+  .chat-log {
+    padding: 20px 18px;
+    max-height: 60vh;
+  }
+
+  .message-row.user .message-bubble {
+    max-width: 95%;
   }
 
   .control-panel {
-    order: 3;
+    padding: 0 18px;
   }
 
-  .message-bubble {
-    width: 100%;
+  .composer {
+    padding: 16px 18px;
   }
 
   .studio-suggestion {
@@ -1466,13 +1410,41 @@ onMounted(async () => {
     flex-direction: column;
   }
 
-  .composer-actions {
-    align-items: stretch;
-    flex-direction: column;
+}
+
+@media (max-width: 480px) {
+  .control-panel {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
   }
 
-  .thread-actions {
-    display: flex; /* Touch devices have no hover. */
+  .tool-panel > summary {
+    min-height: 32px;
   }
+
+  .composer-actions span {
+    max-width: 150px;
+    line-height: 1.6;
+  }
+
+  .chat-empty {
+    padding-inline: 0;
+  }
+
+  .tool-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-log {
+    scroll-behavior: auto;
+  }
+
+  .thread-item {
+    transition: none;
+  }
+
 }
 </style>

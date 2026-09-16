@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from src.api.request_context import RequestContextMiddleware
 from src.api.middleware.metrics_middleware import MetricsMiddleware
@@ -10,6 +11,7 @@ from src.api.routes import agent, auth, calendar, content, health, jobs, media, 
 from src.api.security import AuthMiddleware, HttpsEnforcementMiddleware
 from src.utils import config
 from src.utils.structured_logging import configure_logging
+from src.storage.tenancy import TenantAccessError
 
 
 @asynccontextmanager
@@ -21,10 +23,10 @@ async def lifespan(app: FastAPI):
     # Production startup is fail-closed and validation-only: migrations are a
     # separate deployment step. Explicit development/test profiles may retain
     # create_all for a fresh local database.
-    from src.api.dependencies import get_store
+    from src.api.dependencies import get_system_store
 
     config.validate_runtime()
-    get_store()
+    get_system_store()
     yield
 
 
@@ -34,6 +36,11 @@ app = FastAPI(
     description="REST API for content generation, refinement, scheduling, and analytics.",
     lifespan=lifespan,
 )
+
+
+@app.exception_handler(TenantAccessError)
+async def workspace_access_error(request, exc):
+    return JSONResponse(status_code=404, content={"detail": "Resource not found"})
 
 app.add_middleware(AuthMiddleware)
 app.add_middleware(RequestContextMiddleware)

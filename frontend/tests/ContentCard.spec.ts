@@ -62,4 +62,21 @@ describe('ContentCard', () => {
 
     expect(wrapper.text()).toContain('-')
   })
+
+  it('shows a readable excerpt without repeating the leading markdown heading', () => {
+    const wrapper = mount(ContentCard, {
+      props: { item: item({ content: '# 春季新品种草\n\n这是一段**重点内容**。' }) }
+    })
+
+    expect(wrapper.find('.card-body').text()).toBe('这是一段重点内容。')
+    expect(wrapper.find('.card-title').text()).toBe('春季新品种草')
+  })
+
+  it('keeps markup in excerpts as text rather than rendering HTML', () => {
+    const content = '<img src=x onerror=alert(1)>测试正文'
+    const wrapper = mount(ContentCard, { props: { item: item({ content }) } })
+
+    expect(wrapper.find('.card-body').text()).toBe(content)
+    expect(wrapper.find('img').exists()).toBe(false)
+  })
 })

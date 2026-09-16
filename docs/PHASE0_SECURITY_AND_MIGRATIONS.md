@@ -4,19 +4,54 @@
 
 `APP_ENV` must be one of `development`, `test`, or `production`. If it is omitted, the application and Docker image default to `production`; local compatibility therefore requires an explicit profile.
 
-- `development` / `test`: auth may be disabled. `SCHEMA_MANAGEMENT=create` is allowed only as a compatibility path for a **fresh local database**.
-- `production`: startup requires `SCHEMA_MANAGEMENT=validate`, enabled auth, a 12+ character non-example admin password, a 32+ character non-example signing secret, non-example PostgreSQL/Redis passwords, `DEBUG=false`, and explicit HTTPS non-local CORS origins.
+- `development` / `test`: authentication is always required, and `AUTH_SECRET_KEY` must be non-empty. `SCHEMA_MANAGEMENT=create` is allowed only for a **fresh local database**.
+- `production`: startup requires `SCHEMA_MANAGEMENT=validate`, a high-entropy 32+ character signing secret, high-entropy PostgreSQL/Redis passwords, `DEBUG=false`, enforced HTTPS, and explicit HTTPS non-local CORS origins. Signing, database, and Redis credentials must be distinct.
 
 The Compose migration job validates the production profile before running DDL; API and worker validate again before accepting work. In production API/worker do not run DDL and verify PostgreSQL at Alembic head with schema-drift checks. Compose defaults intentionally contain unusable/weak placeholders, so an unconfigured production deployment fails closed. Frontend and API host ports bind to loopback. API middleware accepts `X-Forwarded-Proto: https` only when the immediate peer belongs to explicit `TRUSTED_PROXY_CIDRS`; the default is empty for direct entrypoints, while Compose sets its private bridge range. The outer TLS proxy must overwrite forwarding headers, and non-health plain HTTP receives `426`.
 
 Generate independent credentials, for example:
 
 ```bash
-openssl rand -base64 24   # AUTH_PASSWORD / database / Redis (use separate values)
+openssl rand -base64 24   # database / Redis (use separate values)
 openssl rand -hex 32      # AUTH_SECRET_KEY
 ```
 
 Do not use values containing `CHANGE_ME`, `replace-with`, `example`, or `password`; production validation rejects example-like values.
+
+## PostgreSQL accounts and workspace migration
+
+This section documents the account API and upgrade contract. Runtime configuration is owned by `src/utils/config.py`; account persistence is owned by `src/storage/account_store.py`, and password hashing by `src/api/passwords.py`.
+
+Authentication is mandatory in all environments. Accounts live in PostgreSQL `users`, with Argon2id password hashes rather than environment-managed passwords. Each account has its own content, jobs, chat history, research runs, calendar, media records, and memory directory (`MEMORY_DIR/<user_id>/`). Creating an account creates an empty workspace; being the first registered user grants no existing data or elevated privileges. Team membership, shared workspaces, and RBAC are outside this account model.
+
+### HTTP contract
+
+- `POST /api/auth/register` and `POST /api/auth/login` accept JSON `{ "username": "writer", "password": "..." }`.
+- Usernames contain 3–32 ASCII letters, digits, or underscores and are canonicalized to lowercase. Passwords contain 12–128 characters.
+- Successful registration/login returns `{ "access_token": "...", "token_type": "bearer", "expires_at": 1893456000, "user": { "id": "...", "username": "writer" } }`.
+- `expires_at` is a Unix timestamp in seconds (the value above is illustrative).
+- `GET /api/auth/status` returns `{ "authenticated": true, "user": { "id": "...", "username": "writer" } }` for a valid session, or `{ "authenticated": false, "user": null }` otherwise.
+- `POST /api/auth/logout` revokes the stored session and clears the resource cookie. A revoked bearer token is no longer valid.
+
+Account passwords are entered on the registration/login page, not placed in application environment files. `AUTH_SECRET_KEY` signs sessions and is required even during local development. Generate it with `python -c "import secrets; print(secrets.token_hex(32))"` and keep it private.
+
+### Upgrade an existing workspace
+
+1. Stop API and workers. Back up PostgreSQL **and** the application data volume, including media and memory files; verify that the backup can be restored.
+2. Remove `AUTH_ENABLED`, `AUTH_USERNAME`, and `AUTH_PASSWORD` from environment files, shell exports, service units, and container configuration. Their presence, even with an empty value, is a startup migration error. Remove `AUTH_STREAM_TICKET_SECONDS` and use `AUTH_RESOURCE_TICKET_SECONDS` instead. Set a non-empty `AUTH_SECRET_KEY` and retain the production hardening above.
+3. Run `alembic upgrade head` (for a pre-Alembic database, follow the verified-baseline procedure below first). Revision `0009` assigns existing business records to the non-login legacy user `00000000000000000000000000000001`; it does not hand data to the first registrant.
+4. Before restoring normal traffic, claim that legacy workspace from the server CLI:
+
+   ```bash
+   python scripts/claim_legacy_workspace.py --username YOUR_USERNAME
+   # Compose, against the same database and app_data volume:
+   docker compose run --rm --no-deps api python scripts/claim_legacy_workspace.py --username YOUR_USERNAME
+   ```
+
+   The command prompts for the account password using `getpass`, assigns legacy records to the chosen account, and copies old root-level memory files into that account's directory and retains the originals as backups. Keep passwords out of shell arguments and process logs. Run the host or Compose command that matches your deployment, not both.
+5. Start API and workers, then sign in again. Pre-migration sessions are invalid; users must obtain new account-bound sessions. Confirm the claimed account sees the existing workspace and a separately registered account starts empty.
+
+Do not skip backup/claim steps or change ownership with the public registration endpoint. Keep the backup until both database ownership and memory-file migration are verified.
 
 ## Browser stream authentication migration
 
@@ -24,7 +59,7 @@ Reusable bearer tokens are accepted only in the `Authorization` header. `?access
 
 Native `EventSource`, `<img>`, and `<video>` cannot attach that header. Login therefore also sets a `HttpOnly; SameSite=Strict` resource-session cookie (`Secure` in production), scoped to `/api`. The authentication middleware accepts that cookie only for narrow read-only pipeline-stream and numeric media-file paths; it never authorizes general REST APIs or writes. The frontend sends credentials without placing bearer or ticket material in URLs.
 
-The legacy exact-path `access_ticket` helper remains development/test compatibility only. Production returns `410` from its issuance endpoint and rejects `access_ticket` query credentials. The production Nginx edge rejects both `access_ticket` and `access_token` query parameters before proxying. Its sanitized access format uses `$uri`, not `$request`/`$request_uri`, and omits Referer, so query credentials are not copied into access logs. Stateless development tickets remain replayable on the same path until expiry when the backend is run directly outside the production Nginx image. Login rate limiting/lockout and a general browser cookie + CSRF migration are not claimed by this Phase 0 change; normal mutating REST calls continue to use the Authorization header.
+The exact-path `access_ticket` helper is restricted to development/test and requires the current versioned database user/session claims. Production returns `410` from its issuance endpoint and rejects `access_ticket` query credentials. The production Nginx edge rejects both `access_ticket` and `access_token` query parameters before proxying. Its sanitized access format uses `$uri`, not `$request`/`$request_uri`, and omits Referer, so query credentials are not copied into access logs. Development tickets authorize only their exact path and live database session; logout, session expiry, or ticket expiry invalidates them. Account endpoints apply PostgreSQL-backed request throttling. A general browser cookie + CSRF migration is outside this account contract; normal mutating REST calls continue to use the Authorization header.
 
 ## Server-side Chat tool policy
 

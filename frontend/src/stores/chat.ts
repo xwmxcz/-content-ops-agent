@@ -1,4 +1,6 @@
+// Owns chat state; message responses only update the context that requested them.
 import { defineStore } from 'pinia'
+import { readActiveThreadFromStorage, writeActiveThreadToStorage } from '../workspaceSession'
 import {
   chat,
   deleteAgentThread,
@@ -27,32 +29,15 @@ export type UiMessage = Partial<AgentMessage> & {
   plan?: PlanStep[]
 }
 
-const ACTIVE_THREAD_STORAGE_KEY = 'chat:activeThreadId'
 const THREAD_PAGE_SIZE = 30
 const MESSAGE_PAGE_SIZE = 200
-
-function readActiveThreadFromStorage(): string | undefined {
-  try {
-    return sessionStorage.getItem(ACTIVE_THREAD_STORAGE_KEY) || undefined
-  } catch {
-    return undefined
-  }
-}
-
-function writeActiveThreadToStorage(threadId: string | undefined) {
-  try {
-    if (threadId) sessionStorage.setItem(ACTIVE_THREAD_STORAGE_KEY, threadId)
-    else sessionStorage.removeItem(ACTIVE_THREAD_STORAGE_KEY)
-  } catch {
-    // sessionStorage may be unavailable in private mode; ignore.
-  }
-}
 
 export const useChatStore = defineStore('chat', {
   state: () => ({
     threads: [] as AgentThread[],
     activeThreadId: readActiveThreadFromStorage() as string | undefined,
     messages: [] as UiMessage[],
+    messageContextVersion: 0,
     threadsLoading: false,
     messagesLoading: false,
     sending: false,
@@ -109,33 +94,37 @@ export const useChatStore = defineStore('chat', {
       await this.loadThreads({ reset: true })
     },
     async selectThread(threadId: string | undefined) {
+      const contextVersion = ++this.messageContextVersion
       this.activeThreadId = threadId
       writeActiveThreadToStorage(threadId)
+      this.messages = []
+      this.hasMoreMessages = false
+      this.messagesLoading = Boolean(threadId)
       if (!threadId) {
-        this.messages = []
-        this.hasMoreMessages = false
         return
       }
-      this.messagesLoading = true
       try {
         const rows = await getAgentMessages(threadId, { limit: MESSAGE_PAGE_SIZE })
+        if (contextVersion !== this.messageContextVersion) return
         this.messages = rows as UiMessage[]
         // If we got a full page back, there *might* be older history to load.
         this.hasMoreMessages = rows.length === MESSAGE_PAGE_SIZE
       } finally {
-        this.messagesLoading = false
+        if (contextVersion === this.messageContextVersion) this.messagesLoading = false
       }
     },
     async loadOlderMessages() {
       if (!this.activeThreadId || !this.hasMoreMessages || this.messagesLoading) return
       const firstId = this.messages.find(m => typeof m.id === 'number')?.id as number | undefined
       if (!firstId) return
+      const contextVersion = this.messageContextVersion
       this.messagesLoading = true
       try {
         const older = await getAgentMessages(this.activeThreadId, {
           limit: MESSAGE_PAGE_SIZE,
           before_id: firstId
         })
+        if (contextVersion !== this.messageContextVersion) return
         if (!older.length) {
           this.hasMoreMessages = false
           return
@@ -143,17 +132,20 @@ export const useChatStore = defineStore('chat', {
         this.messages = [...(older as UiMessage[]), ...this.messages]
         this.hasMoreMessages = older.length === MESSAGE_PAGE_SIZE
       } finally {
-        this.messagesLoading = false
+        if (contextVersion === this.messageContextVersion) this.messagesLoading = false
       }
     },
     startNewThread() {
+      this.messageContextVersion += 1
       this.activeThreadId = undefined
       writeActiveThreadToStorage(undefined)
       this.messages = []
       this.hasMoreMessages = false
+      this.messagesLoading = false
     },
     async sendMessage(payload: Omit<ChatPayload, 'thread_id'>) {
       if (this.sending) return
+      const contextVersion = this.messageContextVersion
       const localMessage: UiMessage = {
         local_id: `local-${Date.now()}`,
         role: 'user',
@@ -168,20 +160,22 @@ export const useChatStore = defineStore('chat', {
       try {
         const result: ChatResponse = await chat({ ...payload, thread_id: this.activeThreadId })
         localMessage.pending = false
-        this.activeThreadId = result.thread_id
-        writeActiveThreadToStorage(result.thread_id)
-        this.messages.push({
-          id: result.message_id,
-          thread_id: result.thread_id,
-          role: 'assistant',
-          content: result.response,
-          provider: result.provider,
-          model: result.model,
-          intent: result.intent,
-          tool_events: result.tool_events,
-          plan: result.plan,
-          status: 'completed'
-        })
+        if (contextVersion === this.messageContextVersion) {
+          this.activeThreadId = result.thread_id
+          writeActiveThreadToStorage(result.thread_id)
+          this.messages.push({
+            id: result.message_id,
+            thread_id: result.thread_id,
+            role: 'assistant',
+            content: result.response,
+            provider: result.provider,
+            model: result.model,
+            intent: result.intent,
+            tool_events: result.tool_events,
+            plan: result.plan,
+            status: 'completed'
+          })
+        }
         // Refresh the thread list so message counts and last_model reflect the new turn.
         await this.loadThreads({ reset: true })
       } catch (error) {

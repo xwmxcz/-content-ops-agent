@@ -40,6 +40,7 @@ RUN python -m pip install \
 COPY src ./src
 COPY migrations ./migrations
 COPY examples ./examples
+COPY scripts/claim_legacy_workspace.py ./scripts/claim_legacy_workspace.py
 COPY alembic.ini server.py worker.py gunicorn.conf.py ./
 
 # Run as an unprivileged user. chown the whole /app tree (including the data dir

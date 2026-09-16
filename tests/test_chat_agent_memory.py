@@ -144,7 +144,7 @@ class TestFrozenSystemPrompt:
         svc, factory = service
         await svc.chat(ChatRequest(message="hi", thread_id="t1"))
         file_memory.add(AGENT, "新规则:always quote dates as YYYY-MM-DD")
-        ChatAgentService.invalidate_frozen("t1")
+        ChatAgentService.invalidate_frozen("t1", user_id=svc.store.user_id)
         await svc.chat(ChatRequest(message="hi", thread_id="t1"))
         run2_sys = factory.agent_runs()[-1][0].content
         assert "新规则" in run2_sys

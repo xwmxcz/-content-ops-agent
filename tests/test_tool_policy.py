@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage, ToolMessage
@@ -299,6 +300,8 @@ def test_confirmed_capability_authorizes_exactly_one_invocation():
 @pytest.mark.asyncio
 async def test_large_schedule_proposal_survives_executor_event_persistence():
     class _ScheduleStore:
+        user_id = "11111111111111111111111111111111"
+
         @staticmethod
         def get_content(content_id):
             return {
@@ -346,7 +349,7 @@ async def test_executor_does_not_invoke_denied_write_tool(tmp_path):
     memory = FileMemory(tmp_path / "memory")
     model = _OneToolModel("memory_add", {"target": "user", "text": "blocked"})
     service = ChatAgentService(
-        store=object(),
+        store=SimpleNamespace(user_id="11111111111111111111111111111111"),
         model_factory=lambda *args: model,
         file_memory=memory,
         context_engine=None,
@@ -378,6 +381,8 @@ async def test_executor_invokes_only_exact_persisted_confirmation(tmp_path):
 
     class _CapabilityStore:
         """Minimal store exposing only the capability seam the executor uses."""
+
+        user_id = "11111111111111111111111111111111"
 
         def __init__(self):
             self.claims = []

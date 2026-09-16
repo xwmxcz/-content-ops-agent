@@ -30,8 +30,8 @@ def test_alembic_upgrades_empty_postgres_to_current_schema(pg_engine):
         # at the database level rather than merely unlikely in application code.
         ledger_constraints = inspector.get_unique_constraints("idempotency_records")
         assert any(
-            item.get("name") == "uq_idempotency_records_scope_key"
-            and tuple(item.get("column_names") or []) == ("scope", "idempotency_key")
+            item.get("name") == "uq_idempotency_records_user_scope_key"
+            and tuple(item.get("column_names") or []) == ("user_id", "scope", "idempotency_key")
             for item in ledger_constraints
         )
         ledger_indexes = {
@@ -64,7 +64,7 @@ def test_alembic_upgrades_empty_postgres_to_current_schema(pg_engine):
         with pg_engine.connect() as connection:
             assert (
                 MigrationContext.configure(connection).get_current_revision()
-                == "0008_job_lease_and_checkpoints"
+                == "0009_user_workspaces"
             )
         assert_schema_current(pg_engine)
         # Metadata and the migration head must remain in sync; otherwise a

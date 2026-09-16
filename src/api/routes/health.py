@@ -2,7 +2,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
-from src.api.dependencies import get_store
+from src.api.dependencies import get_system_store
 from src.utils import config
 
 
@@ -26,7 +26,7 @@ def readiness_check() -> JSONResponse:
     healthy = True
 
     try:
-        with get_store().engine.connect() as connection:
+        with get_system_store().engine.connect() as connection:
             connection.execute(text("SELECT 1"))
         checks["database"] = "ok"
     except Exception as exc:  # noqa: BLE001 - any failure means not-ready

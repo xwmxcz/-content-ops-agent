@@ -1,9 +1,9 @@
 import os
 
-# Runtime defaults are deliberately production/fail-closed. Tests opt into the
-# compatibility profile explicitly before importing application configuration.
+# Tests use disposable PostgreSQL and an explicit development signing key.
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("SCHEMA_MANAGEMENT", "create")
+os.environ.setdefault("AUTH_SECRET_KEY", "test-signing-key-with-at-least-32-characters")
 
 import pytest
 
@@ -24,8 +24,19 @@ _requires_pg = pytest.mark.skipif(
 
 
 @pytest.fixture(autouse=True)
-def disable_auth_by_default(monkeypatch):
-    monkeypatch.setattr(config, "AUTH_ENABLED", False)
+def authenticated_fixture_user(monkeypatch, request):
+    monkeypatch.setattr(config, "AUTH_SECRET_KEY", "test-signing-key-with-at-least-32-characters")
+    if request.node.get_closest_marker("real_auth"):
+        return
+    # Business tests authenticate one fixture user without exercising login.
+    # Account/permission tests opt out and use real database sessions.
+    from src.api import security
+
+    monkeypatch.setattr(security, "authenticate_request", lambda request: {
+        "id": "11111111111111111111111111111111",
+        "username": "fixture_user",
+        "session_id": "22222222222222222222222222222222",
+    })
 
 
 @pytest.fixture(scope="session")
@@ -50,17 +61,23 @@ def store(pg_engine, monkeypatch):
     `config.DATABASE_URL` is redirected and the cached singleton cleared so the
     app lifespan and request-time `get_store()` share this same database.
     """
-    from src.storage.content_store import Base, ContentStore
-    from src.api.dependencies import get_store
+    from src.storage.content_store import Base, ContentStore, User
+    from src.api.dependencies import get_system_store, _file_memory_for
 
     monkeypatch.setattr(config, "DATABASE_URL", TEST_DATABASE_URL)
     Base.metadata.drop_all(pg_engine)
     Base.metadata.create_all(pg_engine)
 
-    get_store.cache_clear()
-    s = ContentStore(database_url=TEST_DATABASE_URL, initialize_schema=False)
+    get_system_store.cache_clear()
+    _file_memory_for.cache_clear()
+    system = ContentStore(database_url=TEST_DATABASE_URL, initialize_schema=False)
+    with system._get_session() as session:
+        session.add(User(id="11111111111111111111111111111111", username="fixture_user", password_hash="!", is_active=True))
+        session.commit()
+    s = system.for_user("11111111111111111111111111111111")
     try:
         yield s
     finally:
         s.engine.dispose()
-        get_store.cache_clear()
+        get_system_store.cache_clear()
+        _file_memory_for.cache_clear()

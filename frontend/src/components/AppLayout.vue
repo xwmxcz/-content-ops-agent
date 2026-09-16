@@ -2,10 +2,10 @@
   <div class="shell">
     <aside class="shell-sidebar">
       <div class="brand-block">
-        <div class="brand-mark">CO</div>
+        <WorkspaceMark />
         <div class="brand-copy">
-          <strong>Content Ops Agent</strong>
-          <span>Content command center</span>
+          <strong>Content Ops</strong>
+          <span>内容创作工作台</span>
         </div>
       </div>
 
@@ -40,22 +40,24 @@
       </nav>
 
       <div class="sidebar-foot">
-        <span class="foot-kicker">运行状态</span>
-        <strong>Workspace Ready</strong>
-        <p>API、内容库、排期流程已连接</p>
+        <span class="workspace-avatar" aria-hidden="true">{{ user?.username.charAt(0).toUpperCase() || '·' }}</span>
+        <div>
+          <strong>{{ user?.username || '个人工作区' }}</strong>
+          <p>你的专属内容与对话空间</p>
+        </div>
       </div>
     </aside>
 
     <div class="shell-main">
       <header class="shell-topbar">
         <div class="topbar-copy">
-          <span class="topbar-kicker">Workspace</span>
+          <span class="topbar-kicker">工作区</span>
+          <span class="breadcrumb-divider" aria-hidden="true">/</span>
           <strong>{{ currentPage.label }}</strong>
         </div>
         <div class="topbar-pills">
-          <span class="topbar-pill live">就绪</span>
-          <span class="topbar-pill">Production UI</span>
-          <el-button v-if="canLogout" class="logout-button" text @click="handleLogout">
+          <span class="workspace-label">{{ user?.username }}</span>
+          <el-button class="logout-button" text :loading="loggingOut" @click="handleLogout">
             <el-icon><SwitchButton /></el-icon>
             退出
           </el-button>
@@ -82,7 +84,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+// Displays workspace navigation and server-confirmed account identity.
+import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   Calendar,
@@ -94,7 +97,9 @@ import {
   Tickets,
   TrendCharts
 } from '@element-plus/icons-vue'
-import { hasAuthToken, logout } from '../api/auth'
+import { ElMessage } from 'element-plus/es/components/message/index'
+import { getAuthStatus, logout, type AuthUser } from '../api/auth'
+import WorkspaceMark from './WorkspaceMark.vue'
 
 interface NavItem {
   to: string
@@ -125,320 +130,74 @@ const currentPage = computed(() => {
   return navItems.find(item => isActive(item.to, item.exact)) ?? workspaceNav[0]
 })
 
-const canLogout = computed(() => hasAuthToken())
+const user = ref<AuthUser | null>(null)
+const loggingOut = ref(false)
+
+onMounted(async () => {
+  try {
+    const status = await getAuthStatus()
+    user.value = status.authenticated ? status.user : null
+  } catch {
+    ElMessage.error('账号信息加载失败，请刷新重试')
+  }
+})
 
 function isActive(path: string, exact = false) {
   return exact ? route.path === path : route.path === path || route.path.startsWith(`${path}/`)
 }
 
-function handleLogout() {
-  logout()
+async function handleLogout() {
+  if (loggingOut.value) return
+  loggingOut.value = true
+  try {
+    await logout()
+  } catch {
+    ElMessage.warning('已退出本机登录，服务端会话撤销未确认')
+  } finally {
+    loggingOut.value = false
+  }
 }
 </script>
 
 <style scoped>
-.shell {
-  display: grid;
-  grid-template-columns: 248px minmax(0, 1fr);
-  min-height: 100vh;
-  background: var(--c-bg);
-}
-
-.shell-sidebar {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-  padding: 20px 16px;
-  color: var(--c-sidebar-text);
-  background: var(--c-sidebar);
-  border-right: 1px solid var(--c-sidebar-border);
-}
-
-.brand-block {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 4px 8px 18px;
-  border-bottom: 1px solid var(--c-sidebar-border);
-}
-
-.brand-mark {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
-  color: #ffffff;
-  font-weight: 600;
-  font-size: 12px;
-  letter-spacing: 0;
-  background: linear-gradient(135deg, #2563eb, #38bdf8);
-}
-
-.brand-copy {
-  min-width: 0;
-}
-
-.brand-copy strong {
-  display: block;
-  color: var(--c-sidebar-text);
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0;
-}
-
-.brand-copy span {
-  display: block;
-  margin-top: 2px;
-  color: var(--c-sidebar-muted);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.sidebar-foot strong {
-  display: block;
-  color: var(--c-sidebar-text);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.sidebar-foot p {
-  display: block;
-  margin: 4px 0 0;
-  color: var(--c-sidebar-muted);
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.sidebar-nav {
-  display: grid;
-  gap: 20px;
-}
-
-.nav-section {
-  display: grid;
-  gap: 2px;
-}
-
-.nav-caption,
-.foot-kicker,
-.topbar-kicker {
-  padding: 0 8px;
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--c-sidebar-muted);
-  margin-bottom: 4px;
-}
-
-.nav-link {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 30px;
-  padding: 0 8px;
-  border-radius: 4px;
-  color: #d1d5db;
-  text-decoration: none;
-  font-size: 13px;
-  font-weight: 500;
-  position: relative;
-  transition:
-    background-color 80ms ease,
-    color 80ms ease;
-}
-
-.nav-link :deep(.el-icon) {
-  font-size: 15px;
-  color: var(--c-sidebar-muted);
-}
-
-.nav-link:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--c-sidebar-text);
-}
-
-.nav-link:hover :deep(.el-icon) {
-  color: var(--c-sidebar-text);
-}
-
-.nav-link.active {
-  color: #ffffff;
-  background: rgba(37, 99, 235, 0.26);
-}
-
-.nav-link.active :deep(.el-icon) {
-  color: var(--c-accent);
-}
-
-.nav-link.active::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 7px;
-  bottom: 7px;
-  width: 2px;
-  border-radius: 999px;
-  background: var(--c-accent);
-}
-
-.sidebar-foot {
-  margin-top: auto;
-  padding: 12px;
-  border: 1px solid var(--c-sidebar-border);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.06);
-}
-
-.foot-kicker {
-  padding: 0;
-  margin-bottom: 6px;
-  color: var(--c-sidebar-muted);
-}
-
-.shell-main {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.shell-topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 32px;
-  border-bottom: 1px solid var(--c-border);
-  background: #ffffff;
-  min-height: 60px;
-  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
-}
-
-.topbar-copy {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-}
-
-.topbar-copy strong {
-  display: inline;
-  color: var(--c-text);
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: 0;
-}
-
-.topbar-kicker {
-  padding: 0;
-  margin: 0;
-  color: var(--c-text-tertiary);
-}
-
-.topbar-pills {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.topbar-pill {
-  display: inline-flex;
-  align-items: center;
-  height: 22px;
-  padding: 0 8px;
-  border: 1px solid var(--c-border);
-  border-radius: 999px;
-  color: var(--c-text-secondary);
-  background: var(--c-surface);
-  font-size: 11px;
-  font-weight: 500;
-  font-family: var(--font-mono);
-  letter-spacing: 0;
-}
-
-.topbar-pill.live {
-  color: var(--c-ok);
-  border-color: var(--c-ok);
-  background: var(--c-ok-soft);
-  position: relative;
-  padding-left: 18px;
-}
-
-.topbar-pill.live::before {
-  content: '';
-  position: absolute;
-  left: 8px;
-  top: 50%;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--c-ok);
-  transform: translateY(-50%);
-}
-
-.logout-button {
-  margin-left: 2px;
-  color: var(--c-text-secondary);
-}
-
-.logout-button :deep(.el-icon) {
-  margin-right: 4px;
-}
-
-.mobile-nav {
-  display: none;
-}
-
-.shell-content {
-  position: relative;
-  min-width: 0;
-  padding: 0;
-  background: var(--c-bg);
-}
-
+.shell { display: grid; grid-template-columns: 224px minmax(0, 1fr); min-height: 100vh; background: var(--c-bg); }
+.shell-sidebar { position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 36px; padding: 27px 16px 20px; color: var(--c-sidebar-text); background: var(--c-sidebar); border-right: 1px solid var(--c-sidebar-border); }
+.brand-block { display: flex; align-items: center; gap: 9px; padding: 0 8px; }
+.brand-copy { min-width: 0; }
+.brand-copy strong { display: block; font-family: var(--font-display); color: var(--c-sidebar-text); font-size: 19px; font-weight: 600; letter-spacing: -.4px; line-height: 1.4; }
+.brand-copy span { display: block; margin-top: 2px; color: var(--c-sidebar-muted); font-size: 10px; letter-spacing: 1.2px; }
+.sidebar-nav { display: grid; gap: 30px; }
+.nav-section { display: grid; gap: 5px; }
+.nav-caption { padding: 0 14px; margin-bottom: 8px; font-size: 11px; letter-spacing: .8px; color: var(--c-sidebar-muted); }
+.nav-link { display: flex; align-items: center; gap: 11px; min-height: 42px; padding: 0 14px; border-radius: 10px; color: var(--c-text-secondary); text-decoration: none; font-size: 13px; font-weight: 500; transition: background-color .15s, color .15s; }
+.nav-link :deep(.el-icon) { font-size: 17px; color: var(--c-sidebar-muted); }
+.nav-link:hover { background: var(--c-sidebar-soft); color: var(--c-accent); }
+.nav-link.active { color: var(--c-accent); background: var(--c-surface); box-shadow: 0 2px 6px var(--c-accent-ring); }
+.nav-link.active :deep(.el-icon) { color: var(--c-accent); }
+.sidebar-foot { display: flex; align-items: center; gap: 10px; margin-top: auto; padding: 18px 8px 0; border-top: 1px solid var(--c-sidebar-border); }
+.workspace-avatar { display: grid; place-items: center; flex: 0 0 32px; width: 32px; height: 32px; border: 1px solid var(--c-border-strong); border-radius: 50%; font-family: var(--font-editorial); font-size: 17px; color: var(--c-accent); }
+.sidebar-foot > div { min-width: 0; }
+.sidebar-foot strong { display: block; overflow: hidden; text-overflow: ellipsis; font-size: 12px; font-weight: 500; white-space: nowrap; }
+.sidebar-foot p { margin: 3px 0 0; color: var(--c-sidebar-muted); font-size: 10px; }
+.shell-main { min-width: 0; display: flex; flex-direction: column; }
+.shell-topbar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 68px; padding: 12px 32px; border-bottom: 1px solid var(--c-border); background: var(--c-surface); }
+.topbar-copy { display: flex; align-items: center; gap: 14px; }
+.topbar-copy strong { font-size: 12px; font-weight: 500; }
+.topbar-kicker, .breadcrumb-divider { color: var(--c-text-tertiary); font-size: 12px; }
+.breadcrumb-divider { color: var(--c-border-strong); }
+.topbar-pills { display: flex; align-items: center; gap: 20px; }
+.workspace-label { font-size: 11px; color: var(--c-text-tertiary); }
+.logout-button { color: var(--c-text-secondary); }
+.logout-button :deep(.el-icon) { margin-right: 5px; }
+.mobile-nav { display: none; }
+.shell-content { position: relative; flex: 1; min-width: 0; min-height: calc(100vh - 68px); }
 @media (max-width: 980px) {
-  .shell {
-    grid-template-columns: 1fr;
-  }
-
-  .shell-sidebar {
-    display: none;
-  }
-
-  .shell-topbar {
-    align-items: flex-start;
-    flex-direction: column;
-    padding: 12px 16px;
-  }
-
-  .mobile-nav {
-    display: flex;
-    gap: 4px;
-    padding: 8px 16px 12px;
-    border-bottom: 1px solid var(--c-border);
-    overflow: auto;
-  }
-
-  .mobile-link {
-    flex: 0 0 auto;
-    height: 28px;
-    padding: 0 10px;
-    border: 1px solid var(--c-border);
-    border-radius: 999px;
-    color: var(--c-text-secondary);
-    background: var(--c-surface);
-    text-decoration: none;
-    font-size: 12px;
-    font-weight: 500;
-    line-height: 26px;
-    white-space: nowrap;
-  }
-
-  .mobile-link.active {
-    color: var(--c-accent);
-    border-color: var(--c-accent);
-    background: var(--c-accent-soft);
-  }
+  .shell { grid-template-columns: 1fr; }
+  .shell-sidebar { display: none; }
+  .shell-topbar { padding: 12px 20px; min-height: 60px; }
+  .mobile-nav { display: flex; gap: 6px; padding: 12px 16px; border-bottom: 1px solid var(--c-border); background: var(--c-surface); overflow: auto; }
+  .mobile-link { flex: 0 0 auto; padding: 7px 12px; border-radius: var(--r-control); color: var(--c-text-secondary); text-decoration: none; font-size: 12px; white-space: nowrap; }
+  .mobile-link.active { color: var(--c-accent); background: var(--c-accent-soft); }
 }
+@media (max-width: 540px) { .workspace-label { display: none; } .topbar-pills { gap: 8px; } }
 </style>

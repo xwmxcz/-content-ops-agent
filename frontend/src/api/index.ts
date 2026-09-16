@@ -1,4 +1,6 @@
+// Owns API transport and bearer storage; account changes and BFCache restores discard stale workspace state.
 import axios from 'axios'
+import { clearWorkspaceSession } from '../workspaceSession'
 
 const AUTH_TOKEN_STORAGE_KEY = 'content_ops_agent_auth_token'
 
@@ -24,11 +26,27 @@ export function getAuthToken() {
 }
 
 export function setAuthToken(token: string) {
+  clearWorkspaceSession()
   window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token)
 }
 
 export function clearAuthToken() {
+  clearWorkspaceSession()
   window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY)
+}
+
+export function watchAccountChanges() {
+  window.addEventListener('storage', event => {
+    if (event.storageArea === window.localStorage && event.key === AUTH_TOKEN_STORAGE_KEY && event.oldValue !== event.newValue) {
+      clearWorkspaceSession()
+      // A full navigation also disposes in-memory content, chat, and running task state.
+      window.location.replace('/login')
+    }
+  })
+  window.addEventListener('pageshow', event => {
+    // BFCache restores Vue memory without mounting again; re-run routing and server authentication.
+    if (event.persisted) window.location.reload()
+  })
 }
 
 api.interceptors.request.use(config => {
@@ -45,7 +63,7 @@ api.interceptors.response.use(
     const detail = error.response?.data?.detail
     const status = error.response?.status
     const requestUrl = error.config?.url ?? ''
-    if (status === 401 && !requestUrl.includes('/auth/login') && !requestUrl.includes('/auth/status')) {
+    if (status === 401 && !requestUrl.startsWith('/auth/')) {
       clearAuthToken()
       const next = `${window.location.pathname}${window.location.search}`
       if (!window.location.pathname.startsWith('/login')) {

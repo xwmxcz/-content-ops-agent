@@ -17,6 +17,9 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
+REMOVED_AUTH_SETTINGS = (
+    "AUTH_ENABLED", "AUTH_USERNAME", "AUTH_PASSWORD", "AUTH_STREAM_TICKET_SECONDS",
+)
 
 
 def run(args, **kwargs):
@@ -35,10 +38,11 @@ def main():
             port = listener.getsockname()[1]
         origin = f"https://content-ops.test:{port}"
         runtime = dict(os.environ)
+        for key in REMOVED_AUTH_SETTINGS:
+            runtime.pop(key, None)
         runtime.update({
             "APP_ENV": "production", "SCHEMA_MANAGEMENT": "validate",
-            "AUTH_ENABLED": "true", "AUTH_USERNAME": "admin",
-            "AUTH_PASSWORD": secrets.token_urlsafe(32),
+            "E2E_PASSWORD": secrets.token_urlsafe(32),
             "AUTH_SECRET_KEY": secrets.token_urlsafe(48),
             "POSTGRES_PASSWORD": secrets.token_urlsafe(32),
             "REDIS_PASSWORD": secrets.token_urlsafe(32),
@@ -79,6 +83,9 @@ def main():
             if name in {"api", "migrate", "worker"}:
                 service["image"] = api_image
                 service["environment"]["WEB_CONCURRENCY"] = "1"
+                service["environment"]["PYTHON_DOTENV_DISABLED"] = "1"
+                if name == "api":
+                    service["environment"]["E2E_PASSWORD"] = runtime["E2E_PASSWORD"]
                 for path in ("src", "migrations", "alembic.ini", "gunicorn.conf.py", "worker.py"):
                     service.setdefault("volumes", []).append({
                         "type": "bind", "source": str(ROOT / path),
@@ -122,9 +129,11 @@ def main():
             fixture_path = temp / "fixtures.json"
             fixture_path.write_text(seed.stdout, encoding="utf-8")
             browser_env = dict(os.environ, E2E_BASE_URL=origin,
-                               E2E_PASSWORD=runtime["AUTH_PASSWORD"],
+                               E2E_PASSWORD=runtime["E2E_PASSWORD"],
                                E2E_FIXTURES=str(fixture_path), E2E_COMPOSE=str(config_path),
                                E2E_PROJECT=project)
+            for key in REMOVED_AUTH_SETTINGS:
+                browser_env.pop(key, None)
             # The system Chrome is optional; otherwise Playwright uses its own
             # installed Chromium (npx playwright install chromium).
             if not browser_env.get("E2E_CHROMIUM_EXECUTABLE") and Path("/opt/google/chrome/chrome").exists():
@@ -142,7 +151,7 @@ def main():
             logs = subprocess.run(command + ["logs", "--no-color", "--tail", "60"],
                                   capture_output=True, text=True)
             diagnostic = logs.stdout + logs.stderr
-            for key in ("AUTH_PASSWORD", "AUTH_SECRET_KEY", "POSTGRES_PASSWORD", "REDIS_PASSWORD"):
+            for key in ("E2E_PASSWORD", "AUTH_SECRET_KEY", "POSTGRES_PASSWORD", "REDIS_PASSWORD"):
                 diagnostic = diagnostic.replace(runtime[key], "[REDACTED]")
             print(diagnostic, flush=True)
             raise

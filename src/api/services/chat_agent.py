@@ -1,4 +1,4 @@
-"""Tool-capable persistent chat Agent service for the API layer."""
+"""User-scoped persistent chat; tools and frozen memory snapshots retain workspace identity."""
 from __future__ import annotations
 
 import json
@@ -58,7 +58,7 @@ AVAILABLE_TOOL_NAMES = [
 ]
 
 
-_FROZEN_PROMPTS: dict[str, str] = {}
+_FROZEN_PROMPTS: dict[tuple[str | None, str], str] = {}
 PLANNER_SYSTEM_PROMPT = (
     "You are a planner. Given the user's request and the available tools, "
     "output a JSON array of steps.\n"
@@ -1173,7 +1173,7 @@ class ChatAgentService:
                 args=args,
                 impact_summary=self._describe_action_impact(tool_name, args),
                 ttl_seconds=config.ACTION_CAPABILITY_TTL_SECONDS,
-                requester=config.AUTH_USERNAME if config.AUTH_ENABLED else None,
+                requester=self.store.user_id,
             )
         except Exception:
             # Failing to persist the capability must not turn into an unbounded
@@ -1289,7 +1289,7 @@ class ChatAgentService:
         effect when a new thread is started (or `invalidate_frozen` is called
         externally, e.g. by the /refresh-snapshot endpoint).
         """
-        key = thread_id or "_anonymous"
+        key = (self.store.user_id, thread_id or "_anonymous")
         cached = _FROZEN_PROMPTS.get(key)
         if cached is not None:
             return cached
@@ -1299,12 +1299,11 @@ class ChatAgentService:
         return prompt
 
     @staticmethod
-    def invalidate_frozen(thread_id: str | None = None) -> None:
-        """Drop the cached system prompt for one thread or all threads."""
-        if thread_id is None:
-            _FROZEN_PROMPTS.clear()
-        else:
-            _FROZEN_PROMPTS.pop(thread_id, None)
+    def invalidate_frozen(thread_id: str | None = None, *, user_id: str) -> None:
+        """Drop only the current user's selected or complete prompt snapshots."""
+        for key in list(_FROZEN_PROMPTS):
+            if key[0] == user_id and (thread_id is None or key[1] == thread_id):
+                _FROZEN_PROMPTS.pop(key, None)
 
     @staticmethod
     def _create_chat_model(provider: str, model: str, temperature: float, max_tokens: int):

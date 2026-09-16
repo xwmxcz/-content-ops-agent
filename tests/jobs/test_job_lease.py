@@ -304,11 +304,17 @@ async def run_reaper_with_stop(store: ContentStore, stop: asyncio.Event) -> None
 class TestCheckpoints:
     """Checkpoints let a retry resume rather than replay committed work."""
 
+    @staticmethod
+    def _make_run(store: ContentStore) -> str:
+        run_id = f"run_{uuid.uuid4().hex[:8]}"
+        store.create_run(run_id, "checkpoint test", "blog", "casual")
+        return run_id
+
     def test_empty_run_resumes_at_first_step(self, store: ContentStore):
         assert checkpoint.get_resume_point(store, "run_none") == 1
 
     def test_resume_point_follows_completed_steps(self, store: ContentStore):
-        run_id = f"run_{uuid.uuid4().hex[:8]}"
+        run_id = self._make_run(store)
         checkpoint.save_step_checkpoint(store, run_id, 1, "researcher", {"facts": []})
         checkpoint.save_step_checkpoint(store, run_id, 2, "writer", {"draft": "x"})
 
@@ -316,35 +322,35 @@ class TestCheckpoints:
 
     def test_gap_is_reexecuted_not_skipped(self, store: ContentStore):
         """A hole from a failed step must be rerun, or its work is silently lost."""
-        run_id = f"run_{uuid.uuid4().hex[:8]}"
+        run_id = self._make_run(store)
         checkpoint.save_step_checkpoint(store, run_id, 1, "researcher", {"facts": []})
         checkpoint.save_step_checkpoint(store, run_id, 3, "editor", {"final": "y"})
 
         assert checkpoint.get_resume_point(store, run_id) == 2
 
     def test_running_step_does_not_count_as_completed(self, store: ContentStore):
-        run_id = f"run_{uuid.uuid4().hex[:8]}"
+        run_id = self._make_run(store)
         checkpoint.save_step_checkpoint(store, run_id, 1, "writer", None, status="running")
 
         assert checkpoint.is_step_completed(store, run_id, 1) is False
         assert checkpoint.get_resume_point(store, run_id) == 1
 
     def test_step_result_round_trips(self, store: ContentStore):
-        run_id = f"run_{uuid.uuid4().hex[:8]}"
+        run_id = self._make_run(store)
         payload = {"facts": ["a", "b"], "count": 2}
         checkpoint.save_step_checkpoint(store, run_id, 1, "researcher", payload)
 
         assert checkpoint.get_step_result(store, run_id, 1) == payload
 
     def test_incomplete_step_exposes_no_result(self, store: ContentStore):
-        run_id = f"run_{uuid.uuid4().hex[:8]}"
+        run_id = self._make_run(store)
         checkpoint.save_step_checkpoint(store, run_id, 1, "writer", {"partial": True}, status="running")
 
         assert checkpoint.get_step_result(store, run_id, 1) is None
 
     def test_resaving_a_step_does_not_duplicate_it(self, store: ContentStore):
         """UNIQUE(run_id, step_index) makes the checkpoint write itself idempotent."""
-        run_id = f"run_{uuid.uuid4().hex[:8]}"
+        run_id = self._make_run(store)
         checkpoint.save_step_checkpoint(store, run_id, 1, "writer", None, status="running")
         checkpoint.save_step_checkpoint(store, run_id, 1, "writer", {"draft": "final"})
 
@@ -354,15 +360,15 @@ class TestCheckpoints:
         assert steps[0]["result_data"] == {"draft": "final"}
 
     def test_checkpoints_are_scoped_per_run(self, store: ContentStore):
-        run_a = f"run_{uuid.uuid4().hex[:8]}"
-        run_b = f"run_{uuid.uuid4().hex[:8]}"
+        run_a = self._make_run(store)
+        run_b = self._make_run(store)
         checkpoint.save_step_checkpoint(store, run_a, 1, "writer", {"r": "a"})
 
         assert checkpoint.get_resume_point(store, run_a) == 2
         assert checkpoint.get_resume_point(store, run_b) == 1
 
     def test_completed_steps_lookup_excludes_running(self, store: ContentStore):
-        run_id = f"run_{uuid.uuid4().hex[:8]}"
+        run_id = self._make_run(store)
         checkpoint.save_step_checkpoint(store, run_id, 1, "researcher", {"r": 1})
         checkpoint.save_step_checkpoint(store, run_id, 2, "writer", None, status="running")
 
@@ -370,8 +376,8 @@ class TestCheckpoints:
         assert set(completed) == {1}
 
     def test_clear_removes_only_that_run(self, store: ContentStore):
-        run_a = f"run_{uuid.uuid4().hex[:8]}"
-        run_b = f"run_{uuid.uuid4().hex[:8]}"
+        run_a = self._make_run(store)
+        run_b = self._make_run(store)
         checkpoint.save_step_checkpoint(store, run_a, 1, "writer", {"r": "a"})
         checkpoint.save_step_checkpoint(store, run_b, 1, "writer", {"r": "b"})
 
@@ -380,7 +386,7 @@ class TestCheckpoints:
         assert checkpoint.get_resume_point(store, run_b) == 2
 
     def test_resume_summary_reports_state(self, store: ContentStore):
-        run_id = f"run_{uuid.uuid4().hex[:8]}"
+        run_id = self._make_run(store)
         checkpoint.save_step_checkpoint(store, run_id, 1, "researcher", {"r": 1})
         checkpoint.save_step_checkpoint(store, run_id, 2, "writer", {"r": 2})
 

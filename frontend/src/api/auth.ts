@@ -1,18 +1,21 @@
-import { api, clearAuthToken, getAuthToken, setAuthToken } from './index'
+// Owns account API contracts; identity always comes from the server, not browser storage.
+import { api, clearAuthToken, setAuthToken } from './index'
 
-export interface AuthStatus {
-  enabled: boolean
-  configured: boolean
-  authenticated: boolean
-  username?: string | null
+export interface AuthUser {
+  id: string
+  username: string
 }
 
-export interface LoginResponse {
+export interface AuthStatus {
+  authenticated: boolean
+  user: AuthUser | null
+}
+
+export interface AuthResponse {
   access_token: string
-  token_type: string
-  expires_at?: number | null
-  username: string
-  enabled: boolean
+  token_type: 'bearer'
+  expires_at: number
+  user: AuthUser
 }
 
 export async function getAuthStatus() {
@@ -21,20 +24,22 @@ export async function getAuthStatus() {
 }
 
 export async function login(username: string, password: string) {
-  const { data } = await api.post<LoginResponse>('/auth/login', { username, password })
-  if (data.access_token) {
-    setAuthToken(data.access_token)
-  }
+  const { data } = await api.post<AuthResponse>('/auth/login', { username, password })
+  setAuthToken(data.access_token)
   return data
 }
 
-export function logout() {
-  void api.post('/auth/logout').finally(() => {
-    clearAuthToken()
-    window.location.assign('/login')
-  })
+export async function register(username: string, password: string) {
+  const { data } = await api.post<AuthResponse>('/auth/register', { username, password })
+  setAuthToken(data.access_token)
+  return data
 }
 
-export function hasAuthToken() {
-  return Boolean(getAuthToken())
+export async function logout() {
+  try {
+    await api.post('/auth/logout')
+  } finally {
+    clearAuthToken()
+    window.location.assign('/login')
+  }
 }

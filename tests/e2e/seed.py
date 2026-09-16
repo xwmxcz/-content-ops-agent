@@ -1,19 +1,24 @@
-"""Deterministic fixtures in the isolated E2E database; no model calls."""
+"""Seed one isolated PostgreSQL account and its browser fixtures; no model calls."""
 import base64
 import json
+import os
 from pathlib import Path
 import sys
 
 from src.models.content import ContentType, GeneratedContent
+from src.api.passwords import hash_password
 from src.storage import ContentStore
+from src.storage.account_store import AccountStore
 from src.utils import config
 
 
-store = ContentStore(database_url=config.DATABASE_URL)
+system_store = ContentStore(database_url=config.DATABASE_URL)
 manifest = Path("/app/data/e2e-fixtures.json")
 png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=")
 
 if sys.argv[1] == "seed":
+    user = AccountStore(system_store).create_user("admin", hash_password(os.environ["E2E_PASSWORD"]))
+    store = system_store.for_user(user["id"])
     content_id = store.save_content(GeneratedContent(
         content="Disposable browser verification fixture", title="E2E fixture",
         content_type=ContentType.BLOG,
@@ -25,13 +30,18 @@ if sys.argv[1] == "seed":
     for run_id in ("e2e_idle", "e2e_reconnect", "e2e_auth"):
         store.create_run(run_id, "E2E", "blog", "casual", "deepseek", "fixture")
         store.append_run_event(run_id, "step_token", {"index": 1, "delta": "A"})
-    memory = Path(config.MEMORY_DIR) / "E2E_PERSISTENCE.txt"
+    memory = Path(config.MEMORY_DIR) / user["id"] / "E2E_PERSISTENCE.txt"
     memory.parent.mkdir(parents=True, exist_ok=True)
     memory.write_text("e2e-volume-marker", encoding="utf-8")
-    fixtures = {"content_id": content_id, "media_id": media["id"], "media_size": len(png)}
+    fixtures = {
+        "user_id": user["id"], "username": user["username"],
+        "content_id": content_id, "media_id": media["id"], "media_size": len(png),
+    }
     manifest.write_text(json.dumps(fixtures), encoding="utf-8")
     print(json.dumps(fixtures))
 elif sys.argv[1] == "complete":
+    fixtures = json.loads(manifest.read_text())
+    store = system_store.for_user(fixtures["user_id"])
     store.append_run_event("e2e_reconnect", "step_token", {"index": 1, "delta": "B"})
     store.transition_run_and_append_event(
         "e2e_reconnect", expected_statuses={"running"}, new_status="completed",
@@ -39,10 +49,11 @@ elif sys.argv[1] == "complete":
     )
 elif sys.argv[1] == "verify":
     fixtures = json.loads(manifest.read_text())
+    store = system_store.for_user(fixtures["user_id"])
     assert store.get_content(fixtures["content_id"])["title"] == "E2E fixture"
     asset = store.get_media_asset(fixtures["media_id"])
     assert Path(asset["file_path"]).read_bytes() == png
-    assert (Path(config.MEMORY_DIR) / "E2E_PERSISTENCE.txt").read_text() == "e2e-volume-marker"
+    assert (Path(config.MEMORY_DIR) / fixtures["user_id"] / "E2E_PERSISTENCE.txt").read_text() == "e2e-volume-marker"
     assert store.list_run_events("e2e_idle")[0]["seq"] == 1
     print("Persistence verified after container recreation: content, media bytes, memory file, run events")
 else:

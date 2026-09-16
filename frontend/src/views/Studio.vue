@@ -2,7 +2,6 @@
   <div class="studio-page">
     <section class="studio-banner">
       <div class="banner-copy">
-        <span class="banner-kicker">{{ modeKicker }}</span>
         <h1>{{ modeTitle }}</h1>
         <p>{{ modeDescription }}</p>
       </div>
@@ -10,38 +9,38 @@
     </section>
 
     <section class="run-strip">
-      <template v-if="!running">
-        <button class="ghost-action" type="button" :disabled="!hasOutput" @click="resetWorkspace">
-          <el-icon><Refresh /></el-icon>
-          <span>重置</span>
-        </button>
-        <el-button type="primary" size="large" :icon="VideoPlay" :disabled="!dynamicSourcesValid" @click="run">
-          运行
-        </el-button>
-      </template>
-      <template v-else>
-        <div class="run-progress">
-          <div class="progress-bar">
-            <div class="progress-bar-fill" :style="{ width: `${progressPercent}%` }"></div>
-          </div>
-          <div class="progress-meta">
-            <span class="progress-state">{{ statusText }}</span>
-            <span class="progress-count">{{ progressLabel }}</span>
-          </div>
+      <div class="signal-row">
+        <div class="signal-card" v-for="card in signalCards" :key="card.label" :title="card.note">
+          <span>{{ card.label }}</span>
+          <strong>{{ card.value }}</strong>
         </div>
-        <button class="stop-action" type="button" @click="stop">
-          <el-icon><CircleClose /></el-icon>
-          <span>停止</span>
-        </button>
-      </template>
-    </section>
-
-    <section class="signal-row">
-      <article class="signal-card" v-for="card in signalCards" :key="card.label">
-        <span>{{ card.label }}</span>
-        <strong>{{ card.value }}</strong>
-        <small>{{ card.note }}</small>
-      </article>
+      </div>
+      <div class="run-actions">
+        <template v-if="!running">
+          <button class="ghost-action" type="button" :disabled="!hasOutput" @click="resetWorkspace">
+            <el-icon><Refresh /></el-icon>
+            <span>重置</span>
+          </button>
+          <el-button type="primary" size="large" :icon="VideoPlay" :disabled="!dynamicSourcesValid" @click="run">
+            运行
+          </el-button>
+        </template>
+        <template v-else>
+          <div class="run-progress">
+            <div class="progress-bar">
+              <div class="progress-bar-fill" :style="{ width: `${progressPercent}%` }"></div>
+            </div>
+            <div class="progress-meta">
+              <span class="progress-state">{{ statusText }}</span>
+              <span class="progress-count">{{ progressLabel }}</span>
+            </div>
+          </div>
+          <button class="stop-action" type="button" @click="stop">
+            <el-icon><CircleClose /></el-icon>
+            <span>停止</span>
+          </button>
+        </template>
+      </div>
     </section>
 
     <div class="studio-grid">
@@ -49,7 +48,6 @@
         <section class="studio-surface">
           <div class="surface-head">
             <div>
-              <span class="surface-kicker">创作简报</span>
               <h2>创作配置</h2>
             </div>
             <span class="surface-pill">{{ platformLabel }}</span>
@@ -89,7 +87,6 @@
         <section v-if="mode === 'dynamic'" class="studio-surface research-surface">
           <div class="surface-head compact">
             <div>
-              <span class="surface-kicker">研究来源</span>
               <h2>研究来源</h2>
             </div>
             <span class="surface-pill mono">{{ activeSourceCount }}/2</span>
@@ -108,7 +105,7 @@
               <el-switch v-model="research.use_web_search" @click.stop />
               <div class="toggle-copy">
                 <strong>网页检索</strong>
-                <span>DuckDuckGo · 时事 / 横评</span>
+                <span>查找新近资料与对比信息</span>
               </div>
             </div>
             <div
@@ -124,11 +121,11 @@
               <el-switch v-model="research.use_history_search" @click.stop />
               <div class="toggle-copy">
                 <strong>历史内容库</strong>
-                <span>本地内容库 · 复用沉淀</span>
+                <span>参考已保存的内容</span>
               </div>
             </div>
           </div>
-          <p class="research-note">这些开关是硬约束: 关闭后，本轮不会调用对应来源工具。</p>
+          <p class="research-note">本次研究仅使用已开启的来源。</p>
           <el-alert
             v-if="activeSourceCount === 0"
             type="warning"
@@ -149,7 +146,6 @@
         <section class="studio-surface">
           <div class="surface-head compact">
             <div>
-              <span class="surface-kicker">执行参数</span>
               <h2>模型与执行参数</h2>
             </div>
           </div>
@@ -161,7 +157,6 @@
         <section class="studio-surface">
           <div class="surface-head">
             <div>
-              <span class="surface-kicker">{{ mode === 'dynamic' ? '执行计划' : '工作流阶段' }}</span>
               <h2>{{ pipelineTitle }}</h2>
             </div>
             <div class="surface-actions">
@@ -191,7 +186,13 @@
           </el-alert>
 
           <div v-if="!plan.length && !running" class="timeline-empty">
-            点击"运行"开始。{{ mode === 'dynamic' ? 'Planner 会先输出 JSON 计划，每步 token 实时回流。' : '4 个固定 Agent 依次执行：策略 → 初稿 → 润色 → 审核。' }}
+            <div v-if="mode === 'workflow'" class="flow-preview" aria-label="创作流程：策略、初稿、润色、审核">
+              <span><small>01</small> 策略</span>
+              <span><small>02</small> 初稿</span>
+              <span><small>03</small> 润色</span>
+              <span><small>04</small> 审核</span>
+            </div>
+            <p>{{ mode === 'dynamic' ? '填写主题并点击“运行”，自动规划研究步骤，边查证边创作。' : '填写左侧创作配置，点击“运行”开始。你可以随时查看每一步的内容。' }}</p>
           </div>
 
           <ol v-else class="timeline">
@@ -304,6 +305,12 @@
             </div>
           </div>
           <pre class="final-body">{{ finalContent.content }}</pre>
+        </section>
+        <section v-else class="studio-surface draft-placeholder">
+          <div class="draft-icon"><el-icon><DocumentCopy /></el-icon></div>
+          <h2>{{ running ? '好内容，正在成稿' : '从一个想法，写出下一篇' }}</h2>
+          <p>{{ running ? '创作完成后，最终稿件会显示在这里。' : '告诉我们你想写什么，剩下的交给创作工作流。' }}</p>
+          <span>最终稿件 · 可复制与继续打磨</span>
         </section>
       </main>
     </div>
@@ -657,20 +664,16 @@ const platformLabel = computed(
   () => contentTypeOptions.find(item => item.value === form.content_type)?.label ?? form.content_type
 )
 
-const modeKicker = computed(() =>
-  mode.value === 'dynamic' ? '研究型 Pipeline · 边查边写' : '内容生产线 · 标准 4 步'
-)
-
 const modeTitle = computed(() =>
   mode.value === 'dynamic'
-    ? '多步骤研究型内容生产线'
-    : '主题清晰、不需要外部资料时走这条线'
+    ? '研究型创作'
+    : '创作工作台'
 )
 
 const modeDescription = computed(() =>
   mode.value === 'dynamic'
-    ? 'Planner 自动规划步骤，researcher / fact_checker 按需介入。适合横评、对比、盘点类内容。'
-    : '4 步固定流程依次执行：策略 → 写作 → 润色 → 评分。节奏可预期、产出稳定，适合标准化批量产出。生成保存后，可一键跳到 Chat Agent 继续优化和安排发布日历。'
+    ? '先研究，再动笔。为横评、对比与深度内容找到可靠依据。'
+    : '从选题到成稿，让每一步创作都有条不紊。'
 )
 
 const activeSourceCount = computed(() =>
@@ -688,28 +691,28 @@ function isResearchStep(agentId: string): boolean {
 }
 
 const pipelineTitle = computed(() => {
-  if (status.value === 'planning') return '生成 Plan 中…'
+  if (status.value === 'planning') return '正在规划研究步骤…'
   if (status.value === 'running') return '执行中…'
   if (status.value === 'completed') return '执行完成'
   if (status.value === 'failed') return '执行失败'
   if (status.value === 'cancelled') return '已停止'
-  return mode.value === 'dynamic' ? '动态 Pipeline' : '4 阶段 Workflow'
+  return mode.value === 'dynamic' ? '研究与创作进度' : '创作进度'
 })
 
 const statusText = computed(() => {
   switch (status.value) {
     case 'planning':
-      return 'planning'
+      return '规划中'
     case 'running':
-      return 'running'
+      return '运行中'
     case 'completed':
-      return 'done'
+      return '已完成'
     case 'failed':
-      return 'failed'
+      return '失败'
     case 'cancelled':
-      return 'stopped'
+      return '已停止'
     default:
-      return 'idle'
+      return '待开始'
   }
 })
 
@@ -737,17 +740,17 @@ const totalToolCalls = computed(() =>
 const signalCards = computed(() => {
   if (mode.value === 'dynamic') {
     return [
-      { label: 'Mode', value: 'Research', note: 'Plan-then-Execute · 工具就位' },
-      { label: 'Plan', value: totalPlanSteps.value || '--', note: totalPlanSteps.value ? `${completedSteps.value} 已完成` : '等待计划' },
-      { label: 'Tool calls', value: totalToolCalls.value, note: totalToolCalls.value ? '研究 / 校验 工具已被调用' : '尚未调用工具' },
-      { label: 'Revisions', value: revisionCount.value, note: revisionCount.value ? 'Planner 已介入修改' : '初始 plan 直跑' }
+      { label: '模式', value: '研究型', note: '先研究，再创作' },
+      { label: '步骤', value: totalPlanSteps.value || '—', note: totalPlanSteps.value ? `${completedSteps.value} 已完成` : '等待计划' },
+      { label: '工具调用', value: totalToolCalls.value, note: totalToolCalls.value ? '研究 / 校验工具已被调用' : '尚未调用工具' },
+      { label: '计划调整', value: revisionCount.value, note: revisionCount.value ? '已调整研究计划' : '尚未调整计划' }
     ]
   }
   return [
-    { label: 'Mode', value: 'Workflow', note: 'Fixed 4-stage' },
-    { label: 'Plan', value: totalPlanSteps.value || '--', note: totalPlanSteps.value ? `${completedSteps.value} 已完成` : '等待计划' },
-    { label: 'Status', value: statusText.value, note: progressLabel.value },
-    { label: 'Saved', value: savedContentId.value ? `#${savedContentId.value}` : '--', note: savedContentId.value ? '可在 Chat 中优化' : '尚未保存' }
+    { label: '模式', value: '标准工作流', note: '策略、初稿、润色、审核四个阶段' },
+    { label: '步骤', value: totalPlanSteps.value || '—', note: totalPlanSteps.value ? `${completedSteps.value} 已完成` : '等待计划' },
+    { label: '状态', value: statusText.value, note: progressLabel.value },
+    { label: '已保存', value: savedContentId.value ? `#${savedContentId.value}` : '—', note: savedContentId.value ? '可在 Chat 中优化' : '尚未保存' }
   ]
 })
 
@@ -1052,56 +1055,42 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .studio-page {
-  padding: 24px 32px 32px;
+  max-width: 1520px;
+  margin: 0 auto;
+  padding: 32px 36px 40px;
   background: var(--c-bg);
   color: var(--c-text);
 }
 
 .studio-banner {
-  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  margin: 0 auto 16px;
-  padding: 22px 24px;
-  max-width: 1520px;
-  border: 1px solid var(--c-border);
-  border-radius: 6px;
-  background: var(--c-surface);
-  box-shadow: var(--shadow-panel);
-  overflow: hidden;
-}
-
-.studio-banner::before {
-  content: '';
-  position: absolute;
-  inset: 0 0 auto;
-  height: 3px;
-  background: linear-gradient(90deg, var(--c-accent), #38bdf8);
+  margin-bottom: 24px;
 }
 
 .banner-copy {
   max-width: 760px;
 }
 
-.banner-kicker,
 .surface-kicker {
   display: inline-block;
   color: var(--c-text-tertiary);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
 .banner-copy h1 {
-  margin: 8px 0 6px;
+  margin: 0 0 8px;
   color: var(--c-text);
-  font-size: 28px;
+  font-family: var(--font-display);
+  font-size: 30px;
   font-weight: 600;
-  line-height: 1.18;
-  letter-spacing: 0;
+  line-height: 1.3;
+  letter-spacing: -0.6px;
 }
 
 .banner-copy p {
@@ -1113,29 +1102,45 @@ onBeforeUnmount(() => {
 
 .mode-toggle {
   flex-shrink: 0;
+  padding: 5px;
+  border: 1px solid var(--c-border);
+  border-radius: 12px;
+  background: var(--c-surface);
 }
 
 .run-strip {
   display: flex;
   align-items: center;
-  gap: 12px;
-  max-width: 1520px;
-  margin: 0 auto 16px;
-  padding: 12px 16px;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 24px;
+  padding: 14px 18px;
   border: 1px solid var(--c-border);
-  border-radius: 6px;
+  border-radius: var(--r-card);
   background: var(--c-surface);
-  box-shadow: var(--shadow-panel);
+}
+
+.run-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 176px;
+}
+
+.run-actions:has(.run-progress) {
+  flex: 1;
+  max-width: 380px;
 }
 
 .ghost-action {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 32px;
+  height: 36px;
   padding: 0 12px;
   border: 1px solid var(--c-border);
-  border-radius: 4px;
+  border-radius: var(--r-control);
   color: var(--c-text);
   background: var(--c-surface);
   cursor: pointer;
@@ -1146,12 +1151,19 @@ onBeforeUnmount(() => {
 }
 
 .ghost-action:hover {
-  border-color: var(--c-border-strong);
+  border-color: var(--c-accent);
+  background: var(--c-bg-soft);
 }
 
 .ghost-action:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.ghost-action:focus-visible,
+.stop-action:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 3px;
 }
 
 .ghost-action.accent {
@@ -1196,7 +1208,7 @@ onBeforeUnmount(() => {
 }
 
 .progress-state {
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   color: var(--c-accent);
   font-weight: 600;
   letter-spacing: 0;
@@ -1212,10 +1224,10 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 32px;
+  height: 36px;
   padding: 0 14px;
   border: 1px solid var(--c-fail);
-  border-radius: 4px;
+  border-radius: var(--r-control);
   color: var(--c-fail);
   background: var(--c-fail-soft);
   cursor: pointer;
@@ -1229,47 +1241,27 @@ onBeforeUnmount(() => {
 }
 
 .signal-row {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-  max-width: 1520px;
-  margin: 0 auto 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  min-width: 0;
 }
 
 .signal-card {
-  position: relative;
-  padding: 14px 16px;
-  border: 1px solid var(--c-border);
-  border-radius: 6px;
-  background: var(--c-surface);
-  box-shadow: var(--shadow-panel);
-  overflow: hidden;
-}
-
-.signal-card::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 2px;
-  background: var(--c-accent);
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
 }
 
 .signal-card span {
-  display: block;
   color: var(--c-text-tertiary);
   font-size: 12px;
   font-weight: 500;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
 }
 
 .signal-card strong {
-  display: block;
-  margin: 6px 0 4px;
   color: var(--c-text);
-  font-size: 22px;
+  font-size: 13px;
   font-weight: 600;
   line-height: 1.2;
   letter-spacing: 0;
@@ -1277,18 +1269,11 @@ onBeforeUnmount(() => {
   font-variant-numeric: tabular-nums;
 }
 
-.signal-card small {
-  color: var(--c-text-tertiary);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
 .studio-grid {
   display: grid;
-  grid-template-columns: minmax(290px, 360px) minmax(0, 1fr);
-  grid-template-rows: 1fr;
-  gap: 16px;
-  max-width: 1520px;
+  grid-template-columns: minmax(290px, 340px) minmax(0, 1fr);
+  align-items: start;
+  gap: 24px;
   margin: 0 auto;
 }
 
@@ -1296,23 +1281,22 @@ onBeforeUnmount(() => {
   min-width: 0;
   display: grid;
   align-content: start;
-  gap: 16px;
+  gap: 20px;
 }
 
 .studio-center {
   min-width: 0;
   display: grid;
-  grid-template-rows: 1fr auto;
-  gap: 16px;
+  gap: 20px;
   align-content: start;
 }
 
 
 .studio-surface {
   min-width: 0;
-  padding: 20px;
+  padding: 24px;
   border: 1px solid var(--c-border);
-  border-radius: 6px;
+  border-radius: var(--r-card);
   background: var(--c-surface);
   box-shadow: var(--shadow-panel);
 }
@@ -1322,7 +1306,7 @@ onBeforeUnmount(() => {
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 20px;
 }
 
 .surface-head.compact {
@@ -1330,11 +1314,11 @@ onBeforeUnmount(() => {
 }
 
 .surface-head h2 {
-  margin: 4px 0 0;
+  margin: 0;
   color: var(--c-text);
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 600;
-  line-height: 1.25;
+  line-height: 1.5;
   letter-spacing: 0;
 }
 
@@ -1348,40 +1332,40 @@ onBeforeUnmount(() => {
 .surface-pill {
   display: inline-flex;
   align-items: center;
-  height: 22px;
-  padding: 0 8px;
-  border: 1px solid var(--c-border);
+  min-height: 25px;
+  padding: 2px 9px;
+  border: 1px solid var(--c-border-soft);
   border-radius: 999px;
   color: var(--c-text-secondary);
-  background: var(--c-surface);
-  font-size: 11px;
+  background: var(--c-bg-soft);
+  font-size: 12px;
   font-weight: 500;
-  font-family: var(--font-mono);
+  font-family: var(--font-ui);
   letter-spacing: 0;
   white-space: nowrap;
 }
 
 .surface-pill.success {
   color: var(--c-ok);
-  border-color: var(--c-ok);
+  border-color: var(--c-ok-soft);
   background: var(--c-ok-soft);
 }
 
 .surface-pill.running {
   color: var(--c-warn);
-  border-color: var(--c-warn);
+  border-color: var(--c-warn-soft);
   background: var(--c-warn-soft);
 }
 
 .surface-pill.failed {
   color: var(--c-fail);
-  border-color: var(--c-fail);
+  border-color: var(--c-fail-soft);
   background: var(--c-fail-soft);
 }
 
 .surface-pill.warn {
   color: var(--c-warn);
-  border-color: var(--c-warn);
+  border-color: var(--c-warn-soft);
   background: var(--c-warn-soft);
 }
 
@@ -1391,7 +1375,7 @@ onBeforeUnmount(() => {
 
 .field-stack {
   display: grid;
-  gap: 16px;
+  gap: 20px;
 }
 
 .field-grid {
@@ -1402,12 +1386,12 @@ onBeforeUnmount(() => {
 
 .field-block {
   display: grid;
-  gap: 6px;
+  gap: 8px;
 }
 
 .field-block > span {
   color: var(--c-text-secondary);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   letter-spacing: 0.01em;
 }
@@ -1446,12 +1430,38 @@ onBeforeUnmount(() => {
 }
 
 .timeline-empty {
-  padding: 28px 16px;
-  border: 1px dashed var(--c-border);
-  border-radius: 6px;
+  padding: 4px 0;
   color: var(--c-text-tertiary);
   text-align: center;
   font-size: 13px;
+}
+
+.timeline-empty p {
+  margin: 18px 0 0;
+  line-height: 1.7;
+}
+
+.flow-preview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.flow-preview > span {
+  display: grid;
+  gap: 8px;
+  padding: 16px 8px;
+  border: 1px solid var(--c-border-soft);
+  border-radius: var(--r-control);
+  color: var(--c-text-secondary);
+  background: var(--c-bg-soft);
+  font-size: 14px;
+}
+
+.flow-preview small {
+  color: var(--c-accent);
+  font-family: var(--font-mono);
+  font-size: 12px;
 }
 
 .timeline {
@@ -1459,15 +1469,15 @@ onBeforeUnmount(() => {
   margin: 0;
   padding: 0;
   display: grid;
-  gap: 6px;
+  gap: 10px;
 }
 
 .timeline-step {
   display: grid;
   gap: 4px;
-  padding: 8px 12px;
-  border: 1px solid var(--c-border);
-  border-radius: 6px;
+  padding: 13px 14px;
+  border: 1px solid var(--c-border-soft);
+  border-radius: var(--r-control);
   background: var(--c-surface);
   cursor: pointer;
   outline: none;
@@ -1494,7 +1504,7 @@ onBeforeUnmount(() => {
 }
 
 .timeline-step.completed {
-  border-color: var(--c-ok);
+  border-color: var(--c-border);
 }
 
 .timeline-step.failed {
@@ -1571,7 +1581,7 @@ onBeforeUnmount(() => {
 
 .timeline-name {
   color: var(--c-text);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: 0;
   white-space: nowrap;
@@ -1596,7 +1606,7 @@ onBeforeUnmount(() => {
 .timeline-step.running .timeline-index {
   border-color: var(--c-accent);
   color: var(--c-accent);
-  background: #ffffff;
+  background: var(--c-surface);
 }
 
 .timeline-step.completed .timeline-index {
@@ -1696,7 +1706,7 @@ onBeforeUnmount(() => {
 }
 
 .research-surface {
-  border-color: var(--c-accent);
+  border-color: var(--c-border);
   background: var(--c-surface);
 }
 
@@ -1727,7 +1737,7 @@ onBeforeUnmount(() => {
   gap: 12px;
   padding: 10px 12px;
   border: 1px solid var(--c-border);
-  border-radius: 6px;
+  border-radius: var(--r-control);
   background: var(--c-surface);
   cursor: pointer;
   user-select: none;
@@ -1744,7 +1754,7 @@ onBeforeUnmount(() => {
 }
 
 .research-toggle.active {
-  border-color: var(--c-accent);
+  border-color: var(--c-border);
   background: var(--c-accent-soft);
 }
 
@@ -1905,40 +1915,95 @@ onBeforeUnmount(() => {
 }
 
 .final-surface {
-  border-color: var(--c-ok);
+  padding: 28px;
+  border-color: var(--c-border);
 }
 
 .final-body {
   margin: 0;
-  padding: 16px;
-  max-height: 540px;
+  padding: 24px 0 0;
+  max-height: 680px;
   overflow-y: auto;
-  border: 1px solid var(--c-border);
-  border-radius: 6px;
-  background: var(--c-bg-soft);
+  border-top: 1px solid var(--c-border-soft);
+  background: var(--c-surface);
   color: var(--c-text);
   white-space: pre-wrap;
   word-break: break-word;
-  font-family: var(--font-ui);
+  font-family: var(--font-editorial);
+  font-size: 15px;
+  line-height: 1.95;
+}
+
+.draft-placeholder {
+  min-height: 380px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.draft-icon {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 64px;
+  margin-bottom: 24px;
+  border: 1px solid var(--c-border);
+  border-radius: 12px;
+  color: var(--c-accent);
+  background: var(--c-bg-soft);
+  font-size: 25px;
+  transform: rotate(-5deg);
+}
+
+.draft-placeholder h2 {
+  margin: 0;
+  font-family: var(--font-editorial);
+  font-size: 23px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.draft-placeholder p {
+  max-width: 340px;
+  margin: 12px 0 32px;
+  color: var(--c-text-secondary);
   font-size: 14px;
   line-height: 1.7;
 }
 
-@media (max-width: 1180px) {
-  .signal-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+.draft-placeholder > span {
+  color: var(--c-text-tertiary);
+  font-size: 12px;
+}
+
+@media (max-width: 1100px) {
+  .studio-page {
+    padding: 28px 24px;
   }
 
   .studio-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(270px, 310px) minmax(0, 1fr);
+    gap: 18px;
   }
 
+  .studio-surface {
+    padding: 20px;
+  }
 
+  .run-strip {
+    flex-wrap: wrap;
+  }
+
+  .run-actions {
+    margin-left: auto;
+  }
 }
 
-@media (max-width: 980px) {
+@media (max-width: 800px) {
   .studio-page {
-    padding: 16px;
+    padding: 24px 18px;
   }
 
   .studio-banner {
@@ -1946,8 +2011,45 @@ onBeforeUnmount(() => {
     flex-direction: column;
   }
 
-  .signal-row {
+  .studio-grid {
     grid-template-columns: 1fr;
+  }
+
+  .mode-toggle {
+    max-width: 100%;
+  }
+
+  .run-strip {
+    gap: 18px;
+  }
+
+  .signal-row {
+    width: 100%;
+    gap: 10px 18px;
+  }
+
+  .run-actions:has(.run-progress) {
+    max-width: none;
+  }
+
+  .surface-head {
+    flex-wrap: wrap;
+  }
+
+  .draft-placeholder {
+    min-height: 320px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-bar-fill,
+  .timeline-step,
+  .timeline-chevron {
+    transition: none;
+  }
+
+  .is-loading {
+    animation: none;
   }
 }
 </style>

@@ -26,6 +26,7 @@ from src.api.services.tool_policy import SIDE_EFFECT_TOOLS
 from src.jobs.queue import JobQueueError, enqueue_pipeline_run
 from src.llm.litellm_client import LiteLLMClient
 from src.storage import ContentStore
+from src.storage.tenancy import TenantAccessError
 from src.utils import config
 
 
@@ -221,6 +222,8 @@ async def chat(
 ) -> ChatResponse:
     try:
         return await agent_service.chat(request)
+    except TenantAccessError:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except ChatAgentExecutionError as exc:
@@ -259,7 +262,7 @@ def propose_action(
         impact_summary=request.impact_summary
         or f"Execute write tool {request.tool_name}",
         ttl_seconds=config.ACTION_CAPABILITY_TTL_SECONDS,
-        requester=config.AUTH_USERNAME if config.AUTH_ENABLED else None,
+        requester=store.user_id,
     )
 
 
