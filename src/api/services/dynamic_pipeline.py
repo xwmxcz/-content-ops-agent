@@ -39,6 +39,7 @@ from src.api.services.content_service import resolve_provider
 from src.api.services.plan_schema import (
     MAX_REVISIONS,
     MAX_STEPS,
+    ParseSource,
     PlanParseOutcome,
     assert_completed_steps_preserved,
     coerce_plan_payload,
@@ -412,8 +413,8 @@ class DynamicPipeline:
             # A cancel/fail transition may win while final content is being
             # prepared. Never report a synthetic completed response when the
             # atomic completion transaction did not commit.
-            current = self.store.get_run(run_id)
-            current_status = current.get("status") if current else None
+            current = self.store.get_run(run_id) or {}
+            current_status = current.get("status")
             if current_status in {"failed", "cancelled"}:
                 response.status = current_status
                 response.error = current.get("error")
@@ -473,7 +474,7 @@ class DynamicPipeline:
         model: str | None,
         system_prompt: str,
         user_prompt: str,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, ParseSource]:
         """Call the planner, preferring provider-native JSON mode.
 
         Returns the raw text and which path produced it, so the parse outcome can

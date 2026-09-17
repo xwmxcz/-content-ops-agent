@@ -84,8 +84,10 @@ class AccountStore:
         key = hashlib.sha256(f"{scope}:{client}".encode()).hexdigest()
         now = utcnow()
         expired = AuthRateLimit.window_started_at <= now - timedelta(seconds=seconds)
-        statement = insert(AuthRateLimit).values(key=key, window_started_at=now, attempts=1)
-        statement = statement.on_conflict_do_update(
+        # Separate names: the pre-upsert Insert and the post-upsert statement are
+        # different types, and reusing one variable conflates them.
+        insert_statement = insert(AuthRateLimit).values(key=key, window_started_at=now, attempts=1)
+        upsert_statement = insert_statement.on_conflict_do_update(
             index_elements=[AuthRateLimit.key],
             set_={
                 "window_started_at": case((expired, now), else_=AuthRateLimit.window_started_at),
@@ -93,7 +95,7 @@ class AccountStore:
             },
         ).returning(AuthRateLimit.attempts)
         with self.store._get_session() as session:
-            attempts = session.execute(statement).scalar_one()
+            attempts = session.execute(upsert_statement).scalar_one()
             session.query(AuthRateLimit).filter(
                 AuthRateLimit.window_started_at < now - timedelta(days=1),
             ).delete(synchronize_session=False)

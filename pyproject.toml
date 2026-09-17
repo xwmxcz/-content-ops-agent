@@ -69,34 +69,14 @@ warn_unused_ignores = true
 warn_redundant_casts = true
 no_implicit_optional = true
 check_untyped_defs = true
+plugins = ["sqlalchemy.ext.mypy.plugin"]
 
-# --- Legitimate-gap ratchet ------------------------------------------------
-# 15 modules predate type checking. They declare legacy SQLAlchemy `Column`
-# attributes and duck-typed request payloads, which produce `assignment` /
-# `misc` / `valid-type` noise that carries no runtime risk. Those three
-# categories are waived below; every other category -- union-attr, arg-type,
-# attr-defined, return-value, call-* -- stays enforced for these files too,
-# because exactly that check found a real None-dereference in chat_agent.
-# Removing a module from this list is the ratchet: fix the file, delete the line.
-[[tool.mypy.overrides]]
-module = [
-    "src.api.routes.memory",
-    "src.api.services.chat_agent",
-    "src.api.services.content_service",
-    "src.api.services.dynamic_pipeline",
-    "src.api.services.intent_recognizer",
-    "src.api.services.sub_agents",
-    "src.jobs.runner",
-    "src.models.content",
-    "src.storage.account_store",
-    "src.storage.content_store",
-    "src.storage.tenancy",
-    "src.tools.prompt_templates",
-    "src.utils.idempotency",
-    "src.utils.metrics",
-]
-disable_error_code = ["assignment", "misc", "valid-type"]
-
+# Nothing is waived any more. The legacy SQLAlchemy models were migrated to
+# `Mapped[]` annotations on a `DeclarativeBase` subclass, which is what the
+# SQLAlchemy mypy plugin actually reads -- with the old `declarative_base()`
+# factory the annotations were silently ignored and every model attribute kept
+# its `Column` type. If a new module ever needs an override, add it here with a
+# comment explaining the specific gap, and treat it as debt to remove.
 [tool.pytest.ini_options]
 addopts = "-p no:cacheprovider"
 asyncio_mode = "auto"

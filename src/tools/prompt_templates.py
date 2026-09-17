@@ -1,5 +1,7 @@
 """Prompt 模板"""
 
+from __future__ import annotations
+
 from src.models import ContentStyle, ContentType
 
 
@@ -21,7 +23,7 @@ class PromptTemplates:
         return f"{base}\n{style_prompts.get(style, '')}"
 
     @staticmethod
-    def get_xiaohongshu_prompt(topic: str, keywords: list = None, length: str = "medium") -> str:
+    def get_xiaohongshu_prompt(topic: str, keywords: list[str] | None = None, length: str = "medium") -> str:
         """小红书文案生成 Prompt"""
         length_guide = {"short": "100-200字", "medium": "200-400字", "long": "400-600字"}
 
@@ -49,7 +51,7 @@ class PromptTemplates:
 """
 
     @staticmethod
-    def get_weibo_prompt(topic: str, keywords: list = None) -> str:
+    def get_weibo_prompt(topic: str, keywords: list[str] | None = None) -> str:
         """微博文案生成 Prompt"""
         keywords_text = f"关键词：{', '.join(keywords)}" if keywords else ""
 
@@ -66,7 +68,7 @@ class PromptTemplates:
 """
 
     @staticmethod
-    def get_blog_prompt(topic: str, keywords: list = None, length: str = "medium") -> str:
+    def get_blog_prompt(topic: str, keywords: list[str] | None = None, length: str = "medium") -> str:
         """博客文章生成 Prompt"""
         length_guide = {"short": "500-800字", "medium": "800-1500字", "long": "1500-3000字"}
 

@@ -429,7 +429,16 @@ class SubAgentRunner:
         if provider == "claude":
             from langchain_anthropic import ChatAnthropic
 
-            return ChatAnthropic(api_key=api_key, model=model, temperature=temperature, max_tokens=max_tokens)
+            # langchain-anthropic 1.4.x ships stubs whose __init__ is just
+            # (*args, **kwargs), so mypy cannot see model/max_tokens and types
+            # api_key as SecretStr-only. Verified at runtime: all three are
+            # accepted, and pydantic coerces a plain str to SecretStr.
+            return ChatAnthropic(  # type: ignore[call-arg]
+                api_key=api_key,  # type: ignore[arg-type]
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
         from langchain_openai import ChatOpenAI
 
         kwargs: dict[str, Any] = {
@@ -560,9 +569,11 @@ class SubAgentRunner:
             results = parsed.get("results")
             if error and isinstance(results, list) and not results:
                 return f"搜索失败：{error}"
-            preview = parsed.get("title") or parsed.get("name") or parsed.get("content") or parsed.get("text")
-            if preview:
-                return str(preview)[:limit]
+            dict_preview = (
+                parsed.get("title") or parsed.get("name") or parsed.get("content") or parsed.get("text")
+            )
+            if dict_preview:
+                return str(dict_preview)[:limit]
             keys = ", ".join(list(parsed.keys())[:6])
             return f"返回对象：{keys}" if keys else "无结果"
         return text[:limit]

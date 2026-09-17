@@ -43,7 +43,7 @@ class GeneratedContent:
     title: str | None = None  # 标题
     tags: list[str] | None = None  # 标签
     content_type: ContentType | None = None  # 内容类型
-    created_at: datetime = None  # 创建时间
+    created_at: datetime | None = None  # 创建时间；__post_init__ 补齐 UTC now
     metadata: dict | None = None  # 元数据
 
     def __post_init__(self):

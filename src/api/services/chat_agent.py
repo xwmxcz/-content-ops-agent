@@ -632,12 +632,17 @@ class ChatAgentService:
             length: str = "medium",
         ) -> str:
             """Create and save a new content draft."""
+            # `length` comes from a model-authored tool call, so it is untrusted
+            # free text; GenerateRequest only accepts the three known sizes.
+            if length not in ("short", "medium", "long"):
+                length = "medium"
             request = GenerateRequest(
                 topic=topic,
                 content_type=ContentType(content_type),
                 style=ContentStyle(style),
                 keywords=self._split_keywords(keywords),
-                length=length,
+                length=length,  # type: ignore[arg-type]
+
                 provider=provider,
                 model=model,
                 temperature=temperature,
@@ -1347,8 +1352,12 @@ class ChatAgentService:
         if provider == "claude":
             from langchain_anthropic import ChatAnthropic
 
-            return ChatAnthropic(
-                api_key=api_key,
+            # langchain-anthropic 1.4.x ships stubs whose __init__ is just
+            # (*args, **kwargs), so mypy cannot see model/max_tokens and types
+            # api_key as SecretStr-only. Verified at runtime: all three are
+            # accepted, and pydantic coerces a plain str to SecretStr.
+            return ChatAnthropic(  # type: ignore[call-arg]
+                api_key=api_key,  # type: ignore[arg-type]
                 model=model,
                 temperature=temperature,
                 max_tokens=max_tokens,

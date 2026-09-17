@@ -8,7 +8,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from src.api.schemas.agent import ChatIntent, ChatIntentName
 from src.api.services.tool_policy import SIDE_EFFECT_TOOLS
@@ -171,7 +171,10 @@ class IntentRecognizer:
         thread_id: str | None = None,
     ) -> ChatIntent:
         chat_model = self.model_factory(provider, model, INTENT_TEMPERATURE, INTENT_MAX_TOKENS)
-        messages = [SystemMessage(content=INTENT_SYSTEM_PROMPT)]
+        # Typed as BaseMessage: the list mixes a SystemMessage with the
+        # HumanMessage appended below, so inferring from the first element would
+        # pin it to list[SystemMessage].
+        messages: list[BaseMessage] = [SystemMessage(content=INTENT_SYSTEM_PROMPT)]
         last_messages = history[-6:]
         if last_messages:
             transcript = []
@@ -191,12 +194,14 @@ class IntentRecognizer:
         if not isinstance(payload, dict):
             return self._clarify_intent(message)
 
-        name = str(payload.get("name") or "unknown").strip()
+        raw_name = str(payload.get("name") or "unknown").strip()
         confidence = self._safe_confidence(payload.get("confidence"))
-        slots = payload.get("slots") if isinstance(payload.get("slots"), dict) else {}
+        raw_slots = payload.get("slots")
+        slots: dict[str, Any] = raw_slots if isinstance(raw_slots, dict) else {}
         clarification = payload.get("clarification")
-        if name not in INTENT_ALLOWED_TOOLS:
-            name = "unknown"
+        # The model supplies free text, so narrow it to a known intent before it
+        # is used as a dict key or an authorization input.
+        name: ChatIntentName = raw_name if raw_name in INTENT_ALLOWED_TOOLS else "unknown"
         # The classifier is model-controlled routing advice. Confirmation names
         # are exclusively produced by _match_rule() after the server validates
         # the raw current message and persisted preceding proposal.

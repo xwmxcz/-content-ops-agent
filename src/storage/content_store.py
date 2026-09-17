@@ -14,7 +14,6 @@ from uuid import uuid4
 
 from sqlalchemy import (
     Boolean,
-    Column,
     Date,
     DateTime,
     Float,
@@ -31,7 +30,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.engine import make_url
-from sqlalchemy.orm import Session, declarative_base, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from src.storage.tenancy import OwnedMixin, TenantSession
 from src.utils import metrics
@@ -39,34 +38,61 @@ from src.utils.structured_logging import log_capability_event, log_idempotency_e
 
 logger = logging.getLogger(__name__)
 
-Base = declarative_base()
+class Base(DeclarativeBase):
+    """Declarative base for every ORM model.
+
+    The class form (SQLAlchemy 2.0 style) rather than ``declarative_base()``:
+    the mypy plugin only injects attribute types for ``Mapped[]`` annotations
+    when the base subclasses ``DeclarativeBase``. With the legacy factory,
+    ``Mapped[int]`` is silently ignored and every model attribute keeps the
+    ``Column`` type, which is what produced the type errors this migration
+    removes.
+    """
+
+
+def _assigned_pk(instance: object, field: str) -> int:
+    """Return an integer primary key that the database has already assigned.
+
+    SQLAlchemy types a primary key as Optional because it is unset before the
+    flush. Every caller here reads it immediately after `commit()`, so a None
+    would mean the flush silently did nothing -- a real bug worth failing loudly
+    on rather than a case to paper over.
+    """
+    value = getattr(instance, field)
+    if value is None:
+        raise RuntimeError(f"{type(instance).__name__}.{field} is unset after flush")
+    return int(value)
 
 
 class User(Base):
     __tablename__ = "users"
 
-    id = Column(String(32), primary_key=True, default=lambda: uuid4().hex)
-    username = Column(String(32), nullable=False, unique=True)
-    password_hash = Column(Text, nullable=False)
-    is_active = Column(Boolean, nullable=False, default=True)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=lambda: uuid4().hex)
+    username: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
 
 
 class AuthSession(Base):
     __tablename__ = "auth_sessions"
 
-    id = Column(String(32), primary_key=True, default=lambda: uuid4().hex)
-    user_id = Column(String(32), ForeignKey("users.id"), nullable=False, index=True)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
-    expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=lambda: uuid4().hex)
+    user_id: Mapped[str] = mapped_column(String(32), ForeignKey("users.id"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
 
 class AuthRateLimit(Base):
     __tablename__ = "auth_rate_limits"
 
-    key = Column(String(64), primary_key=True)
-    window_started_at = Column(DateTime(timezone=True), nullable=False)
-    attempts = Column(Integer, nullable=False, default=0)
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    window_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 class Content(OwnedMixin, Base):
@@ -74,22 +100,22 @@ class Content(OwnedMixin, Base):
 
     __tablename__ = "contents"
 
-    id = Column(Integer, primary_key=True)
-    title = Column(Text, nullable=True)
-    content = Column(Text, nullable=False)
-    content_type = Column(String(50), nullable=False)
-    style = Column(String(50), nullable=False)
-    keywords = Column(Text, nullable=True)
-    tags = Column(Text, nullable=True)
-    status = Column(String(20), default="draft")
-    version = Column(Integer, default=1)
-    parent_id = Column(Integer, nullable=True)
-    llm_provider = Column(String(50), nullable=True)
-    model_name = Column(String(100), nullable=True)
-    token_usage = Column(Integer, nullable=True)
-    cost_estimate = Column(Float, nullable=True)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    style: Mapped[str] = mapped_column(String(50), nullable=False)
+    keywords: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tags: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str | None] = mapped_column(String(20), default="draft")
+    version: Mapped[int | None] = mapped_column(Integer, default=1)
+    parent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    llm_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    model_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    token_usage: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cost_estimate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
 Index("ix_contents_created_at", Content.created_at)
@@ -102,13 +128,13 @@ class CalendarEvent(OwnedMixin, Base):
 
     __tablename__ = "calendar_events"
 
-    id = Column(Integer, primary_key=True)
-    content_id = Column(Integer, ForeignKey("contents.id"), nullable=False)
-    platform = Column(String(50), nullable=False)
-    scheduled_date = Column(Date, nullable=False)
-    status = Column(String(20), default="planned")
-    published_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.now)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    content_id: Mapped[int] = mapped_column(Integer, ForeignKey("contents.id"), nullable=False)
+    platform: Mapped[str] = mapped_column(String(50), nullable=False)
+    scheduled_date: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[str | None] = mapped_column(String(20), default="planned")
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now)
 
 
 Index("ix_calendar_events_scheduled_date", CalendarEvent.scheduled_date)
@@ -119,14 +145,14 @@ class ContentMetrics(OwnedMixin, Base):
 
     __tablename__ = "content_metrics"
 
-    id = Column(Integer, primary_key=True)
-    content_id = Column(Integer, ForeignKey("contents.id"), nullable=False)
-    platform = Column(String(50), nullable=True)
-    views = Column(Integer, default=0)
-    likes = Column(Integer, default=0)
-    comments = Column(Integer, default=0)
-    shares = Column(Integer, default=0)
-    recorded_at = Column(DateTime, default=datetime.now)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    content_id: Mapped[int] = mapped_column(Integer, ForeignKey("contents.id"), nullable=False)
+    platform: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    views: Mapped[int | None] = mapped_column(Integer, default=0)
+    likes: Mapped[int | None] = mapped_column(Integer, default=0)
+    comments: Mapped[int | None] = mapped_column(Integer, default=0)
+    shares: Mapped[int | None] = mapped_column(Integer, default=0)
+    recorded_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now)
 
 
 class MediaAsset(OwnedMixin, Base):
@@ -134,17 +160,17 @@ class MediaAsset(OwnedMixin, Base):
 
     __tablename__ = "media_assets"
 
-    id = Column(Integer, primary_key=True)
-    content_id = Column(Integer, ForeignKey("contents.id"), nullable=False)
-    media_type = Column(String(20), nullable=False)
-    source_type = Column(String(20), nullable=False, default="upload")
-    file_name = Column(Text, nullable=False)
-    file_path = Column(Text, nullable=False)
-    mime_type = Column(String(120), nullable=True)
-    sort_order = Column(Integer, default=0)
-    provider = Column(String(80), nullable=True)
-    generation_params = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.now)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    content_id: Mapped[int] = mapped_column(Integer, ForeignKey("contents.id"), nullable=False)
+    media_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(20), nullable=False, default="upload")
+    file_name: Mapped[str] = mapped_column(Text, nullable=False)
+    file_path: Mapped[str] = mapped_column(Text, nullable=False)
+    mime_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    sort_order: Mapped[int | None] = mapped_column(Integer, default=0)
+    provider: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    generation_params: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now)
 
 
 Index("ix_media_assets_content_created", MediaAsset.content_id, MediaAsset.created_at)
@@ -155,21 +181,21 @@ class PlatformPublication(OwnedMixin, Base):
 
     __tablename__ = "platform_publications"
 
-    id = Column(Integer, primary_key=True)
-    content_id = Column(Integer, ForeignKey("contents.id"), nullable=False)
-    platform = Column(String(50), nullable=False)
-    publish_type = Column(String(30), nullable=False)
-    status = Column(String(20), nullable=False, default="draft")
-    title = Column(Text, nullable=True)
-    body = Column(Text, nullable=False)
-    scheduled_at = Column(DateTime, nullable=True)
-    published_at = Column(DateTime, nullable=True)
-    external_post_id = Column(String(120), nullable=True)
-    request_payload = Column(Text, nullable=True)
-    response_payload = Column(Text, nullable=True)
-    error_message = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    content_id: Mapped[int] = mapped_column(Integer, ForeignKey("contents.id"), nullable=False)
+    platform: Mapped[str] = mapped_column(String(50), nullable=False)
+    publish_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    external_post_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    request_payload: Mapped[str | None] = mapped_column(Text, nullable=True)
+    response_payload: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
 Index("ix_platform_publications_content_status", PlatformPublication.content_id, PlatformPublication.status)
@@ -181,15 +207,15 @@ class AgentThread(OwnedMixin, Base):
 
     __tablename__ = "agent_threads"
 
-    id = Column(String(80), primary_key=True)
-    title = Column(Text, nullable=True)
-    last_provider = Column(String(50), nullable=True)
-    last_model = Column(String(200), nullable=True)
-    pinned = Column(Boolean, default=False, nullable=False)
-    archived = Column(Boolean, default=False, nullable=False)
-    title_pinned = Column(Boolean, default=False, nullable=False)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    last_model: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    title_pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
 Index("ix_agent_threads_updated_at", AgentThread.updated_at)
@@ -202,17 +228,17 @@ class AgentMessage(OwnedMixin, Base):
 
     __tablename__ = "agent_messages"
 
-    id = Column(Integer, primary_key=True)
-    thread_id = Column(String(80), ForeignKey("agent_threads.id"), nullable=False)
-    role = Column(String(20), nullable=False)
-    content = Column(Text, nullable=False)
-    provider = Column(String(50), nullable=True)
-    model = Column(String(200), nullable=True)
-    intent = Column(Text, nullable=True)
-    tool_events = Column(Text, nullable=True)
-    plan = Column(Text, nullable=True)
-    status = Column(String(20), default="completed")
-    created_at = Column(DateTime, default=datetime.now)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    thread_id: Mapped[str] = mapped_column(String(80), ForeignKey("agent_threads.id"), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    intent: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tool_events: Mapped[str | None] = mapped_column(Text, nullable=True)
+    plan: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str | None] = mapped_column(String(20), default="completed")
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now)
 
 
 Index("ix_agent_messages_thread_created", AgentMessage.thread_id, AgentMessage.created_at)
@@ -223,32 +249,32 @@ class Job(OwnedMixin, Base):
 
     __tablename__ = "jobs"
 
-    id = Column(String(80), primary_key=True)
-    job_type = Column(String(80), nullable=False)
-    status = Column(String(20), nullable=False, default="queued")
-    payload = Column(Text, nullable=False)
-    result = Column(Text, nullable=True)
-    error = Column(Text, nullable=True)
-    provider = Column(String(50), nullable=True)
-    model = Column(String(200), nullable=True)
-    progress = Column(Integer, default=0)
-    attempts = Column(Integer, default=0)
-    max_retries = Column(Integer, default=5, nullable=False)
-    next_retry_at = Column(DateTime, nullable=True)
-    error_type = Column(String(20), nullable=True)
-    archived_at = Column(DateTime, nullable=True, index=True)
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    job_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    progress: Mapped[int | None] = mapped_column(Integer, default=0)
+    attempts: Mapped[int | None] = mapped_column(Integer, default=0)
+    max_retries: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     # P1-04 lease: exactly one worker owns a running job. A SIGKILLed worker
     # never releases its lease, so recovery keys off an expired lease_expires_at
     # rather than any explicit signal from the dead process.
-    worker_id = Column(String(255), nullable=True)
-    lease_expires_at = Column(DateTime, nullable=True)
-    heartbeat_at = Column(DateTime, nullable=True)
-    token_usage = Column(Integer, default=0)
-    cost_estimate = Column(Float, default=0.0)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
-    started_at = Column(DateTime, nullable=True)
-    completed_at = Column(DateTime, nullable=True)
+    worker_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    token_usage: Mapped[int | None] = mapped_column(Integer, default=0)
+    cost_estimate: Mapped[float | None] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 Index("ix_jobs_status_created", Job.status, Job.created_at)
@@ -269,14 +295,14 @@ class RunStep(OwnedMixin, Base):
     __tablename__ = "run_steps"
     __table_args__ = (UniqueConstraint("run_id", "step_index", name="uq_run_steps_run_index"),)
 
-    id = Column(Integer, primary_key=True)
-    run_id = Column(String(80), nullable=False)
-    step_index = Column(Integer, nullable=False)
-    step_name = Column(String(255), nullable=False)
-    status = Column(String(20), nullable=False, default="pending")
-    result_data = Column(Text, nullable=True)
-    started_at = Column(DateTime, nullable=True)
-    completed_at = Column(DateTime, nullable=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    step_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    step_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    result_data: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 Index("ix_run_steps_run_status", RunStep.run_id, RunStep.status)
@@ -287,24 +313,24 @@ class AgentRun(OwnedMixin, Base):
 
     __tablename__ = "agent_runs"
 
-    id = Column(String(80), primary_key=True)
-    thread_id = Column(String(80), nullable=True)
-    topic = Column(Text, nullable=False)
-    content_type = Column(String(50), nullable=False)
-    style = Column(String(50), nullable=False)
-    provider = Column(String(50), nullable=True)
-    model = Column(String(200), nullable=True)
-    plan_json = Column(Text, nullable=True)
-    revision_count = Column(Integer, default=0)
-    total_prompt_tokens = Column(Integer, default=0)
-    total_completion_tokens = Column(Integer, default=0)
-    total_cost = Column(Float, default=0.0)
-    saved_content_id = Column(Integer, nullable=True)
-    status = Column(String(20), default="running")
-    error = Column(Text, nullable=True)
-    next_event_seq = Column(Integer, nullable=False, default=1, server_default=text("1"))
-    created_at = Column(DateTime, default=datetime.now)
-    completed_at = Column(DateTime, nullable=True)
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    thread_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    topic: Mapped[str] = mapped_column(Text, nullable=False)
+    content_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    style: Mapped[str] = mapped_column(String(50), nullable=False)
+    provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    plan_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    revision_count: Mapped[int | None] = mapped_column(Integer, default=0)
+    total_prompt_tokens: Mapped[int | None] = mapped_column(Integer, default=0)
+    total_completion_tokens: Mapped[int | None] = mapped_column(Integer, default=0)
+    total_cost: Mapped[float | None] = mapped_column(Float, default=0.0)
+    saved_content_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str | None] = mapped_column(String(20), default="running")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    next_event_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 Index("ix_agent_runs_thread_created", AgentRun.thread_id, AgentRun.created_at)
@@ -316,12 +342,12 @@ class AgentRunEvent(OwnedMixin, Base):
     __tablename__ = "agent_run_events"
     __table_args__ = (UniqueConstraint("run_id", "seq", name="uq_agent_run_events_run_seq"),)
 
-    id = Column(Integer, primary_key=True)
-    run_id = Column(String(80), ForeignKey("agent_runs.id"), nullable=False)
-    seq = Column(Integer, nullable=False)
-    event_type = Column(String(40), nullable=False)
-    payload = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=datetime.now)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(80), ForeignKey("agent_runs.id"), nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now)
 
 
 Index("ix_agent_run_events_run_seq", AgentRunEvent.run_id, AgentRunEvent.seq)
@@ -339,21 +365,21 @@ class ProposedAction(OwnedMixin, Base):
 
     __tablename__ = "proposed_actions"
 
-    id = Column(String(80), primary_key=True)
-    thread_id = Column(String(80), ForeignKey("agent_threads.id"), nullable=False)
-    requester = Column(String(120), nullable=True)
-    tool_name = Column(String(80), nullable=False)
-    args_json = Column(Text, nullable=False)
-    args_hash = Column(String(64), nullable=False)
-    impact_summary = Column(Text, nullable=False)
-    status = Column(String(20), nullable=False, default="proposed")
-    proposing_message_id = Column(Integer, nullable=True)
-    consuming_message_id = Column(Integer, nullable=True)
-    created_at = Column(DateTime, default=datetime.now, nullable=False)
-    expires_at = Column(DateTime, nullable=False)
-    confirmed_at = Column(DateTime, nullable=True)
-    consumed_at = Column(DateTime, nullable=True)
-    cancelled_at = Column(DateTime, nullable=True)
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    thread_id: Mapped[str] = mapped_column(String(80), ForeignKey("agent_threads.id"), nullable=False)
+    requester: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    tool_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    args_json: Mapped[str] = mapped_column(Text, nullable=False)
+    args_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    impact_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="proposed")
+    proposing_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    consuming_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 Index("ix_proposed_actions_thread_created", ProposedAction.thread_id, ProposedAction.created_at)
@@ -383,15 +409,15 @@ class IdempotencyRecord(OwnedMixin, Base):
         UniqueConstraint("user_id", "scope", "idempotency_key", name="uq_idempotency_records_user_scope_key"),
     )
 
-    id = Column(Integer, primary_key=True)
-    scope = Column(String(60), nullable=False)
-    idempotency_key = Column(String(160), nullable=False)
-    args_hash = Column(String(64), nullable=False)
-    status = Column(String(20), nullable=False, default="in_progress")
-    result_json = Column(Text, nullable=True)
-    external_request_id = Column(String(120), nullable=True)
-    created_at = Column(DateTime, default=datetime.now, nullable=False)
-    completed_at = Column(DateTime, nullable=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scope: Mapped[str] = mapped_column(String(60), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    args_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="in_progress")
+    result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    external_request_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 Index("ix_idempotency_records_scope_created", IdempotencyRecord.scope, IdempotencyRecord.created_at)
@@ -402,6 +428,12 @@ IDEMPOTENCY_RECORD_STATUSES = ("in_progress", "completed", "failed")
 
 class ContentStore:
     """内容存储管理类"""
+
+    # Set to the owning user id by for_user(); None on the unscoped system store
+    # used for auth, migrations, and worker discovery. Declared here because
+    # __init__ assigns None, which would otherwise pin the inferred type to None
+    # and reject the later str assignment in for_user().
+    _user_id: str | None
 
     def __init__(
         self,
@@ -494,7 +526,7 @@ class ContentStore:
             )
             session.add(content)
             session.commit()
-            return content.id
+            return _assigned_pk(content, "id")
         except Exception:
             session.rollback()
             raise
@@ -585,7 +617,7 @@ class ContentStore:
             )
             session.add(event)
             session.commit()
-            return event.id
+            return _assigned_pk(event, "id")
         except Exception:
             session.rollback()
             raise
@@ -687,7 +719,7 @@ class ContentStore:
             type_buckets: dict[str, dict[str, Any]] = {}
             style_buckets: dict[str, dict[str, Any]] = {}
             for content in contents:
-                m = metrics_by_content.get(content.id)
+                content_metrics = metrics_by_content.get(content.id)
                 for bucket_key, store_dict in (
                     (content.content_type or "unknown", type_buckets),
                     (content.style or "unknown", style_buckets),
@@ -705,13 +737,13 @@ class ContentStore:
                         },
                     )
                     bucket["count"] += 1
-                    if m is not None:
+                    if content_metrics is not None:
                         bucket["with_metrics"] += 1
-                        bucket["views"] += m.views or 0
-                        bucket["likes"] += m.likes or 0
-                        bucket["comments"] += m.comments or 0
-                        bucket["shares"] += m.shares or 0
-                        bucket["engagement_rates"].append(_engagement_rate(m))
+                        bucket["views"] += content_metrics.views or 0
+                        bucket["likes"] += content_metrics.likes or 0
+                        bucket["comments"] += content_metrics.comments or 0
+                        bucket["shares"] += content_metrics.shares or 0
+                        bucket["engagement_rates"].append(_engagement_rate(content_metrics))
 
             def _summarize(buckets: dict[str, dict[str, Any]], key_name: str) -> list[dict[str, Any]]:
                 out = []
@@ -737,10 +769,10 @@ class ContentStore:
 
             scored: list[tuple[float, Content, ContentMetrics]] = []
             for c in contents:
-                m = metrics_by_content.get(c.id)
-                if m is None:
+                metrics_row = metrics_by_content.get(c.id)
+                if metrics_row is None:
                     continue
-                scored.append((_engagement_rate(m), c, m))
+                scored.append((_engagement_rate(metrics_row), c, metrics_row))
             scored.sort(key=lambda x: (x[0], x[2].views or 0), reverse=True)
             top_performers = [
                 {
@@ -819,11 +851,15 @@ class ContentStore:
                     return []
                 rates: list[tuple[Content, ContentMetrics, float]] = []
                 for c in contents:
-                    m = metrics_by_content.get(c.id)
-                    if m is None or not m.views:
+                    metrics_row = metrics_by_content.get(c.id)
+                    if metrics_row is None or not metrics_row.views:
                         continue
-                    rate = ((m.likes or 0) + (m.comments or 0) + (m.shares or 0)) / m.views
-                    rates.append((c, m, rate))
+                    rate = (
+                        (metrics_row.likes or 0)
+                        + (metrics_row.comments or 0)
+                        + (metrics_row.shares or 0)
+                    ) / metrics_row.views
+                    rates.append((c, metrics_row, rate))
                 if not rates:
                     return []
                 avg_rate = sum(r for _, _, r in rates) / len(rates)
@@ -1693,7 +1729,7 @@ class ContentStore:
             )
             session.add(message)
             session.commit()
-            return message.id
+            return _assigned_pk(message, "id")
         except Exception:
             session.rollback()
             raise

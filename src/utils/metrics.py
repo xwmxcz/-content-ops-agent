@@ -6,14 +6,25 @@ Gracefully degrades if prometheus_client is not installed.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from prometheus_client import Counter, Histogram
+    from prometheus_client.registry import CollectorRegistry
 
 logger = logging.getLogger(__name__)
 
-# Try to import prometheus_client, gracefully degrade if not available
+# prometheus_client is optional, so the names below are either the real objects
+# or None. They are declared explicitly, rather than inferred from the import,
+# because the fallback branch rebinds them and an inferred type would be either
+# the imported type (rejecting None) or a class name (rejecting a type
+# assignment). Consumers already guard on PROMETHEUS_AVAILABLE.
+REGISTRY: CollectorRegistry | None
+generate_latest: Callable[[Any], bytes] | None
+_Counter: Any
+_Histogram: Any
+
 try:
     from prometheus_client import REGISTRY, generate_latest
     from prometheus_client import Counter as _Counter
