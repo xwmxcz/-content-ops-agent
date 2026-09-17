@@ -92,7 +92,10 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npx vue-tsc --noEmit
-      - run: npx vitest run
+      # jsdom boots slowly on cold CI runners; the first local run timed out
+      # during environment setup. Give the pool a longer ceiling than the
+      # vitest default so a slow runner cannot look like a real failure.
+      - run: npx vitest run --testTimeout=20000 --hookTimeout=20000
       - run: npm run build
 
   docker-build:
