@@ -569,9 +569,7 @@ class SubAgentRunner:
             results = parsed.get("results")
             if error and isinstance(results, list) and not results:
                 return f"搜索失败：{error}"
-            dict_preview = (
-                parsed.get("title") or parsed.get("name") or parsed.get("content") or parsed.get("text")
-            )
+            dict_preview = parsed.get("title") or parsed.get("name") or parsed.get("content") or parsed.get("text")
             if dict_preview:
                 return str(dict_preview)[:limit]
             keys = ", ".join(list(parsed.keys())[:6])

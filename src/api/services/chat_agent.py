@@ -642,7 +642,6 @@ class ChatAgentService:
                 style=ContentStyle(style),
                 keywords=self._split_keywords(keywords),
                 length=length,  # type: ignore[arg-type]
-
                 provider=provider,
                 model=model,
                 temperature=temperature,

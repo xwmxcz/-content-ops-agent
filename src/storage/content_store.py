@@ -38,6 +38,7 @@ from src.utils.structured_logging import log_capability_event, log_idempotency_e
 
 logger = logging.getLogger(__name__)
 
+
 class Base(DeclarativeBase):
     """Declarative base for every ORM model.
 
@@ -855,9 +856,7 @@ class ContentStore:
                     if metrics_row is None or not metrics_row.views:
                         continue
                     rate = (
-                        (metrics_row.likes or 0)
-                        + (metrics_row.comments or 0)
-                        + (metrics_row.shares or 0)
+                        (metrics_row.likes or 0) + (metrics_row.comments or 0) + (metrics_row.shares or 0)
                     ) / metrics_row.views
                     rates.append((c, metrics_row, rate))
                 if not rates:
