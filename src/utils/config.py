@@ -105,6 +105,13 @@ class Config:
     JOB_REAPER_INTERVAL_SECONDS = int(os.getenv("JOB_REAPER_INTERVAL_SECONDS", "60"))
     JOB_REAPER_BATCH_SIZE = int(os.getenv("JOB_REAPER_BATCH_SIZE", "50"))
 
+    # Per-user throttle on the endpoints that spend an operator's LLM budget.
+    # Auth endpoints were already rate-limited, but nothing bounded an
+    # *authenticated* user looping /api/agent/chat, which is the path that can
+    # drain a provider account. 0 disables the check, which is the local and
+    # test default so the suite never depends on wall-clock windows.
+    LLM_RATE_LIMIT_PER_MINUTE = int(os.getenv("LLM_RATE_LIMIT_PER_MINUTE", "0"))
+
     # SSE run streaming (P1-06). Clients treat silence as a stale connection, so
     # the server must emit a browser-visible ping inside the client's staleness
     # budget: a long research step produces no events for minutes, and without a

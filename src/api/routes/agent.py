@@ -4,7 +4,12 @@ import time
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
-from src.api.dependencies import get_chat_agent_service, get_litellm_client, get_store
+from src.api.dependencies import (
+    enforce_llm_budget,
+    get_chat_agent_service,
+    get_litellm_client,
+    get_store,
+)
 from src.api.schemas.agent import (
     AgentMessageResponse,
     AgentRunRequest,
@@ -37,6 +42,7 @@ async def run(
     request: AgentRunRequest,
     llm: LiteLLMClient = Depends(get_litellm_client),
     store: ContentStore = Depends(get_store),
+    _budget: None = Depends(enforce_llm_budget),
 ) -> AgentRunResponse:
     try:
         return await run_agent_pipeline(request, llm, store)
@@ -58,6 +64,7 @@ async def create_pipeline_run(
     background_tasks: BackgroundTasks,
     llm: LiteLLMClient = Depends(get_litellm_client),
     store: ContentStore = Depends(get_store),
+    _budget: None = Depends(enforce_llm_budget),
 ) -> PipelineRunHandle:
     """Kick off a dynamic pipeline run; client subscribes to /runs/{id}/stream for events.
 
@@ -219,6 +226,7 @@ def cancel_pipeline_run(run_id: str, store: ContentStore = Depends(get_store)) -
 async def chat(
     request: ChatRequest,
     agent_service: ChatAgentService = Depends(get_chat_agent_service),
+    _budget: None = Depends(enforce_llm_budget),
 ) -> ChatResponse:
     try:
         return await agent_service.chat(request)

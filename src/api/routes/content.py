@@ -3,7 +3,7 @@ from pathlib import Path as FilePath
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, status
 
-from src.api.dependencies import get_litellm_client, get_store
+from src.api.dependencies import enforce_llm_budget, get_litellm_client, get_store
 from src.api.schemas.content import (
     ContentResponse,
     ContentSummary,
@@ -68,6 +68,7 @@ async def generate_content(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     store: ContentStore = Depends(get_store),
     llm: LiteLLMClient = Depends(get_litellm_client),
+    _budget: None = Depends(enforce_llm_budget),
 ) -> dict:
     try:
         with request_key(idempotency_key):
@@ -106,6 +107,7 @@ async def refine_content(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     store: ContentStore = Depends(get_store),
     llm: LiteLLMClient = Depends(get_litellm_client),
+    _budget: None = Depends(enforce_llm_budget),
 ) -> dict:
     try:
         with request_key(idempotency_key):
@@ -144,6 +146,7 @@ async def generate_titles(
     request: TitleRequest,
     store: ContentStore = Depends(get_store),
     llm: LiteLLMClient = Depends(get_litellm_client),
+    _budget: None = Depends(enforce_llm_budget),
 ) -> TextResult:
     try:
         return TextResult(result=await content_service.generate_titles(request, llm, store))
@@ -162,6 +165,7 @@ async def analyze_seo(
     request: SeoRequest,
     store: ContentStore = Depends(get_store),
     llm: LiteLLMClient = Depends(get_litellm_client),
+    _budget: None = Depends(enforce_llm_budget),
 ) -> TextResult:
     try:
         return TextResult(result=await content_service.analyze_seo(request, llm, store))
