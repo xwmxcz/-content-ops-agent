@@ -5,6 +5,7 @@ reserved for authentication, migration, and worker discovery; its new business
 rows still require an explicit owner. Request and job sessions have one fixed
 owner for their entire lifetime.
 """
+
 from __future__ import annotations
 
 from sqlalchemy import Column, ForeignKey, String, event, inspect, select
@@ -96,10 +97,9 @@ def _scope_statement(state):
                     raise TenantAccessError("Workspace ownership and primary keys are immutable")
                 if key in references:
                     clears_reference = not parameters and (
-                        isinstance(value, Null) or value is None or (
-                            isinstance(value, BindParameter)
-                            and value.value is None and not value.required
-                        )
+                        isinstance(value, Null)
+                        or value is None
+                        or (isinstance(value, BindParameter) and value.value is None and not value.required)
                     )
                     if not clears_reference:
                         raise TenantAccessError("Update references through ORM objects")
@@ -116,10 +116,7 @@ def _scope_statement(state):
 
 @event.listens_for(TenantSession, "before_flush")
 def _validate_owned_writes(session, flush_context, instances):
-    owned = [
-        item for item in session.new.union(session.dirty).union(session.deleted)
-        if isinstance(item, OwnedMixin)
-    ]
+    owned = [item for item in session.new.union(session.dirty).union(session.deleted) if isinstance(item, OwnedMixin)]
     for item in owned:
         state = inspect(item)
         if item in session.new and item.user_id is None:
@@ -135,18 +132,21 @@ def _validate_owned_writes(session, flush_context, instances):
                 primary_key = list(state.mapper.primary_key)
                 if all(getattr(item, column.key) is not None for column in primary_key):
                     table = state.mapper.local_table
-                    owner = session.connection().execute(
-                        select(table.c.user_id).where(*(
-                            column == getattr(item, column.key) for column in primary_key
-                        ))
-                    ).scalar_one_or_none()
+                    owner = (
+                        session.connection()
+                        .execute(
+                            select(table.c.user_id).where(
+                                *(column == getattr(item, column.key) for column in primary_key)
+                            )
+                        )
+                        .scalar_one_or_none()
+                    )
                     if owner is not None and owner != session.user_id:
                         raise TenantAccessError("Record does not belong to this workspace")
             if item not in session.new and state.attrs.user_id.history.has_changes():
                 raise TenantAccessError("Workspace ownership is immutable")
             if item not in session.new and any(
-                state.attrs[column.key].history.has_changes()
-                for column in state.mapper.primary_key
+                state.attrs[column.key].history.has_changes() for column in state.mapper.primary_key
             ):
                 raise TenantAccessError("Workspace primary keys are immutable")
 
@@ -165,20 +165,26 @@ def _validate_owned_writes(session, flush_context, instances):
             target = state.mapper.local_table.metadata.tables[table_name]
             if "user_id" not in target.c:
                 continue
-            pending = next((
-                candidate for candidate in session.new.union(session.dirty)
-                if isinstance(candidate, OwnedMixin)
-                and inspect(candidate).mapper.local_table.name == table_name
-                and getattr(candidate, target_key) == value
-            ), None)
+            pending = next(
+                (
+                    candidate
+                    for candidate in session.new.union(session.dirty)
+                    if isinstance(candidate, OwnedMixin)
+                    and inspect(candidate).mapper.local_table.name == table_name
+                    and getattr(candidate, target_key) == value
+                ),
+                None,
+            )
             if pending is not None:
                 owner = pending.user_id
             else:
                 # Use the known metadata table internally, so a foreign owner
                 # and a missing correlation thread can be distinguished. This
                 # value is never exposed to callers.
-                owner = session.connection().execute(
-                    select(target.c.user_id).where(target.c[target_key] == value)
-                ).scalar_one_or_none()
+                owner = (
+                    session.connection()
+                    .execute(select(target.c.user_id).where(target.c[target_key] == value))
+                    .scalar_one_or_none()
+                )
             if owner != item.user_id and not (owner is None and allow_missing):
                 raise TenantAccessError(f"Referenced {key} is not in this workspace")

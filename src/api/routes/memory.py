@@ -14,6 +14,7 @@ Endpoints (relative to `/api/memory`):
 The path was previously `/api/memories` (CRUD over `agent_memories` rows);
 that mount has been retired together with the vector-backed memory.
 """
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status

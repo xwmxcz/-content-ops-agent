@@ -1,4 +1,5 @@
 """RQ worker entry point for production-style background jobs."""
+
 import os
 
 from redis import Redis

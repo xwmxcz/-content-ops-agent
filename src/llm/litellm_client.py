@@ -1,4 +1,5 @@
 """LiteLLM-based unified LLM client."""
+
 from __future__ import annotations
 
 import asyncio
@@ -31,6 +32,7 @@ class StreamChunk:
     `delta` is the incremental text since the last chunk (may be empty).
     `usage` is set only on the final chunk: tuple of (prompt_tokens, completion_tokens).
     """
+
     delta: str = ""
     usage: tuple[int, int] | None = None
 
@@ -88,9 +90,7 @@ class LiteLLMClient:
                 timeout=config.LLM_TIMEOUT_SECONDS,
             )
         except TimeoutError as exc:
-            raise LLMGenerationError(
-                f"LLM request timed out after {config.LLM_TIMEOUT_SECONDS:g} seconds"
-            ) from exc
+            raise LLMGenerationError(f"LLM request timed out after {config.LLM_TIMEOUT_SECONDS:g} seconds") from exc
         except Exception as exc:
             raise LLMGenerationError(_format_provider_error(provider, exc)) from exc
 
@@ -190,9 +190,11 @@ class LiteLLMClient:
                 try:
                     choice = raw.choices[0]
                     delta_obj = getattr(choice, "delta", None) or {}
-                    delta_text = getattr(delta_obj, "content", "") or (
-                        delta_obj.get("content", "") if isinstance(delta_obj, dict) else ""
-                    ) or ""
+                    delta_text = (
+                        getattr(delta_obj, "content", "")
+                        or (delta_obj.get("content", "") if isinstance(delta_obj, dict) else "")
+                        or ""
+                    )
                 except (AttributeError, IndexError, KeyError):
                     delta_text = ""
                 usage = getattr(raw, "usage", None)
@@ -226,9 +228,7 @@ class LiteLLMClient:
                     max_tokens=max_tokens,
                 )
             except Exception as fallback_exc:
-                raise LLMGenerationError(
-                    f"LLM streaming failed: {type(exc).__name__}: {exc}"
-                ) from fallback_exc
+                raise LLMGenerationError(f"LLM streaming failed: {type(exc).__name__}: {exc}") from fallback_exc
             yield StreamChunk(delta=text, usage=None)
             return
         yield StreamChunk(delta="", usage=(prompt_tokens, completion_tokens))
@@ -279,6 +279,7 @@ def _format_provider_error(provider: str, exc: BaseException) -> str:
         if end != -1:
             try:
                 import json
+
                 body = json.loads(raw[start:end])
                 msg = (body.get("error") or {}).get("message") or ""
                 if msg:

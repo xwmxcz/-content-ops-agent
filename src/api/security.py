@@ -1,4 +1,5 @@
 """Signed, revocable database sessions and narrow browser-resource authentication."""
+
 from __future__ import annotations
 
 import base64
@@ -39,9 +40,17 @@ def _create_token(user_id: str, session_id: str, expires_at: int, token_use: str
     if not _ID.fullmatch(user_id) or not _ID.fullmatch(session_id):
         raise ValueError("Tokens require database user and session IDs")
     header = {"alg": "HS256", "typ": "JWT"}
-    payload = {"v": _TOKEN_VERSION, "sub": user_id, "sid": session_id,
-               "iat": int(time.time()), "exp": expires_at, "token_use": token_use,
-               "iss": "content-ops-agent", "aud": "content-ops-api", **extra}
+    payload = {
+        "v": _TOKEN_VERSION,
+        "sub": user_id,
+        "sid": session_id,
+        "iat": int(time.time()),
+        "exp": expires_at,
+        "token_use": token_use,
+        "iss": "content-ops-agent",
+        "aud": "content-ops-api",
+        **extra,
+    }
     signing_input = f"{_json_b64(header)}.{_json_b64(payload)}"
     return f"{signing_input}.{_sign(signing_input)}"
 
@@ -62,7 +71,11 @@ def _decode_signed_payload(token: str | None) -> dict[str, Any] | None:
         return None
     if header != {"alg": "HS256", "typ": "JWT"} or not isinstance(payload, dict):
         return None
-    if payload.get("v") != _TOKEN_VERSION or payload.get("iss") != "content-ops-agent" or payload.get("aud") != "content-ops-api":
+    if (
+        payload.get("v") != _TOKEN_VERSION
+        or payload.get("iss") != "content-ops-agent"
+        or payload.get("aud") != "content-ops-api"
+    ):
         return None
     if not isinstance(payload.get("sub"), str) or not _ID.fullmatch(payload["sub"]):
         return None
@@ -98,8 +111,10 @@ def decode_resource_ticket(ticket: str | None, path: str) -> dict[str, Any] | No
 
 
 def is_ticket_path(path: str) -> bool:
-    return bool(re.fullmatch(r"/api/agent/runs/[A-Za-z0-9_-]{1,80}/stream", path)
-                or re.fullmatch(r"/api/media/[0-9]{1,20}/file", path))
+    return bool(
+        re.fullmatch(r"/api/agent/runs/[A-Za-z0-9_-]{1,80}/stream", path)
+        or re.fullmatch(r"/api/media/[0-9]{1,20}/file", path)
+    )
 
 
 def get_request_token(request: Request) -> str | None:
@@ -110,6 +125,7 @@ def get_request_token(request: Request) -> str | None:
 def authenticate_request(request: Request) -> dict | None:
     """Resolve every credential through the same live DB-session check."""
     from src.api.dependencies import get_account_store
+
     payload = decode_access_token(get_request_token(request))
     if payload is None and request.method in {"GET", "HEAD"} and is_ticket_path(request.url.path):
         payload = decode_access_token(request.cookies.get(RESOURCE_SESSION_COOKIE))
@@ -133,23 +149,31 @@ class HttpsEnforcementMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower()
         client_host = request.client.host if request.client else ""
-        if request.url.scheme == "https" or (
-            forwarded_proto == "https" and _is_trusted_proxy(client_host)
-        ):
+        if request.url.scheme == "https" or (forwarded_proto == "https" and _is_trusted_proxy(client_host)):
             return await call_next(request)
         return JSONResponse(status_code=426, content={"detail": "HTTPS is required"})
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        if request.method == "OPTIONS" or not request.url.path.startswith("/api") or request.url.path in PUBLIC_API_PATHS:
+        if (
+            request.method == "OPTIONS"
+            or not request.url.path.startswith("/api")
+            or request.url.path in PUBLIC_API_PATHS
+        ):
             response = await call_next(request)
         else:
             if not is_auth_configured():
-                return JSONResponse(status_code=503, content={"detail": "Server signing key is not configured"}, headers={"Cache-Control": "no-store"})
+                return JSONResponse(
+                    status_code=503,
+                    content={"detail": "Server signing key is not configured"},
+                    headers={"Cache-Control": "no-store"},
+                )
             user = await run_in_threadpool(authenticate_request, request)
             if user is None:
-                return JSONResponse(status_code=401, content={"detail": "请先登录"}, headers={"Cache-Control": "no-store"})
+                return JSONResponse(
+                    status_code=401, content={"detail": "请先登录"}, headers={"Cache-Control": "no-store"}
+                )
             request.state.user = user
             response = await call_next(request)
         if request.url.path.startswith("/api"):

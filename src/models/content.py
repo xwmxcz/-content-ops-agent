@@ -5,6 +5,7 @@ from enum import Enum
 
 class ContentType(str, Enum):
     """内容类型"""
+
     XIAOHONGSHU = "xiaohongshu"  # 小红书
     WEIBO = "weibo"  # 微博
     BLOG = "blog"  # 博客文章
@@ -14,6 +15,7 @@ class ContentType(str, Enum):
 
 class ContentStyle(str, Enum):
     """内容风格"""
+
     PROFESSIONAL = "professional"  # 专业
     CASUAL = "casual"  # 轻松
     MARKETING = "marketing"  # 营销
@@ -23,6 +25,7 @@ class ContentStyle(str, Enum):
 @dataclass
 class ContentRequest:
     """内容生成请求"""
+
     topic: str  # 主题
     content_type: ContentType  # 内容类型
     style: ContentStyle = ContentStyle.CASUAL  # 风格
@@ -35,6 +38,7 @@ class ContentRequest:
 @dataclass
 class GeneratedContent:
     """生成的内容"""
+
     content: str  # 内容正文
     title: str | None = None  # 标题
     tags: list[str] | None = None  # 标签

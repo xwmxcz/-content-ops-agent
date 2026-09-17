@@ -4,6 +4,7 @@ Usage:
     python -m src.jobs.cleanup --dry-run
     python -m src.jobs.cleanup --execute
 """
+
 from __future__ import annotations
 
 import argparse

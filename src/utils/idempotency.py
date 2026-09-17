@@ -15,6 +15,7 @@ therefore comes from request identity:
 ``consume_proposed_action``: the same key arriving with different arguments is a
 client error and fails closed rather than returning the first result.
 """
+
 from __future__ import annotations
 
 from contextlib import contextmanager

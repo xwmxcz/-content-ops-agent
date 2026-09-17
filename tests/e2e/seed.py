@@ -1,4 +1,5 @@
 """Seed one isolated PostgreSQL account and its browser fixtures; no model calls."""
+
 import base64
 import json
 import os
@@ -18,10 +19,13 @@ png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4
 if sys.argv[1] == "seed":
     user = AccountStore(system_store).create_user("admin", hash_password(os.environ["E2E_PASSWORD"]))
     store = system_store.for_user(user["id"])
-    content_id = store.save_content(GeneratedContent(
-        content="Disposable browser verification fixture", title="E2E fixture",
-        content_type=ContentType.BLOG,
-    ))
+    content_id = store.save_content(
+        GeneratedContent(
+            content="Disposable browser verification fixture",
+            title="E2E fixture",
+            content_type=ContentType.BLOG,
+        )
+    )
     path = Path(config.MEDIA_STORAGE_ROOT) / "e2e.png"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(png)
@@ -33,8 +37,11 @@ if sys.argv[1] == "seed":
     memory.parent.mkdir(parents=True, exist_ok=True)
     memory.write_text("e2e-volume-marker", encoding="utf-8")
     fixtures = {
-        "user_id": user["id"], "username": user["username"],
-        "content_id": content_id, "media_id": media["id"], "media_size": len(png),
+        "user_id": user["id"],
+        "username": user["username"],
+        "content_id": content_id,
+        "media_id": media["id"],
+        "media_size": len(png),
     }
     manifest.write_text(json.dumps(fixtures), encoding="utf-8")
     print(json.dumps(fixtures))
@@ -43,8 +50,11 @@ elif sys.argv[1] == "complete":
     store = system_store.for_user(fixtures["user_id"])
     store.append_run_event("e2e_reconnect", "step_token", {"index": 1, "delta": "B"})
     store.transition_run_and_append_event(
-        "e2e_reconnect", expected_statuses={"running"}, new_status="completed",
-        event_type="run_complete", payload={"final_content": {"content": "AB"}},
+        "e2e_reconnect",
+        expected_statuses={"running"},
+        new_status="completed",
+        event_type="run_complete",
+        payload={"final_content": {"content": "AB"}},
     )
 elif sys.argv[1] == "verify":
     fixtures = json.loads(manifest.read_text())

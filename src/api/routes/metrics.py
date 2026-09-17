@@ -1,4 +1,5 @@
 """Prometheus metrics endpoint."""
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Response
@@ -17,13 +18,6 @@ async def metrics() -> Response:
     """
     metrics_text = get_metrics_text()
     if metrics_text is None:
-        return Response(
-            content="prometheus_client not installed\n",
-            status_code=503,
-            media_type="text/plain"
-        )
+        return Response(content="prometheus_client not installed\n", status_code=503, media_type="text/plain")
 
-    return Response(
-        content=metrics_text,
-        media_type="text/plain; version=0.0.4; charset=utf-8"
-    )
+    return Response(content=metrics_text, media_type="text/plain; version=0.0.4; charset=utf-8")

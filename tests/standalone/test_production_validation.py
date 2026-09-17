@@ -10,7 +10,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 REMOVED_AUTH_SETTINGS = (
-    "AUTH_ENABLED", "AUTH_USERNAME", "AUTH_PASSWORD", "AUTH_STREAM_TICKET_SECONDS",
+    "AUTH_ENABLED",
+    "AUTH_USERNAME",
+    "AUTH_PASSWORD",
+    "AUTH_STREAM_TICKET_SECONDS",
 )
 BASE_ENV = {
     "PYTHON_DOTENV_DISABLED": "1",
@@ -31,16 +34,28 @@ CASES = [
     ("reject missing signing key", {"AUTH_SECRET_KEY": ""}, "AUTH_SECRET_KEY"),
     ("reject short signing key", {"AUTH_SECRET_KEY": "short"}, "high-entropy AUTH_SECRET_KEY"),
     ("reject repeated signing key", {"AUTH_SECRET_KEY": "A" * 40}, "high-entropy AUTH_SECRET_KEY"),
-    ("reject placeholder signing key", {"AUTH_SECRET_KEY": "CHANGE_ME_WITH_32_RANDOM_CHARACTERS"}, "high-entropy AUTH_SECRET_KEY"),
+    (
+        "reject placeholder signing key",
+        {"AUTH_SECRET_KEY": "CHANGE_ME_WITH_32_RANDOM_CHARACTERS"},
+        "high-entropy AUTH_SECRET_KEY",
+    ),
     ("reject debug", {"DEBUG": "true"}, "DEBUG=false"),
     ("reject HTTP", {"ENFORCE_HTTPS": "false"}, "ENFORCE_HTTPS=true"),
     ("reject HTTP CORS", {"CORS_ORIGINS": "http://example.com"}, "CORS_ORIGINS"),
     ("reject weak database secret", {"DATABASE_URL": "postgresql+psycopg://user:dev@localhost/db"}, "DATABASE_URL"),
     ("reject weak Redis secret", {"REDIS_URL": "redis://:dev@localhost:6379/0"}, "REDIS_URL"),
-    ("reject shared signing/database secret", {"DATABASE_URL": "postgresql+psycopg://user:" + BASE_ENV["AUTH_SECRET_KEY"] + "@localhost/db"}, "must be distinct"),
+    (
+        "reject shared signing/database secret",
+        {"DATABASE_URL": "postgresql+psycopg://user:" + BASE_ENV["AUTH_SECRET_KEY"] + "@localhost/db"},
+        "must be distinct",
+    ),
     ("accept development", {"APP_ENV": "development", "SCHEMA_MANAGEMENT": "create", "AUTH_SECRET_KEY": "dev"}, None),
     ("accept test", {"APP_ENV": "test", "SCHEMA_MANAGEMENT": "create", "AUTH_SECRET_KEY": "test"}, None),
-    ("reject development missing key", {"APP_ENV": "development", "AUTH_SECRET_KEY": ""}, "AUTH_SECRET_KEY is required"),
+    (
+        "reject development missing key",
+        {"APP_ENV": "development", "AUTH_SECRET_KEY": ""},
+        "AUTH_SECRET_KEY is required",
+    ),
     ("reject test missing key", {"APP_ENV": "test", "AUTH_SECRET_KEY": " "}, "AUTH_SECRET_KEY is required"),
     *[("reject removed " + name, {name: ""}, "migration required") for name in REMOVED_AUTH_SETTINGS],
 ]
@@ -54,7 +69,11 @@ def verify_case(overrides, expected_error):
     env.update(overrides)
     result = subprocess.run(
         [sys.executable, "-c", "from src.utils import config; config.validate_runtime()"],
-        cwd=ROOT, env=env, capture_output=True, text=True, check=False,
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if expected_error:
         assert result.returncode != 0, "Unsafe configuration unexpectedly passed"

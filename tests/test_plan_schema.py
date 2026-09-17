@@ -4,6 +4,7 @@ Most tests here are pure-unit and need no database: the planner contract is abou
 turning untrusted text into a plan, which is entirely in-process. Only the
 end-to-end pipeline assertions use the `store` fixture.
 """
+
 from __future__ import annotations
 
 import json
@@ -91,9 +92,7 @@ def _pipeline(llm) -> DynamicPipeline:
 
 
 def test_well_formed_plan_parses_strictly_without_repair():
-    outcome = parse_planner_output(
-        _raw(_entry(1, "researcher"), _entry(2, "writer", [1]))
-    )
+    outcome = parse_planner_output(_raw(_entry(1, "researcher"), _entry(2, "writer", [1])))
 
     assert outcome.mode == "strict"
     assert outcome.repair_attempts == 0
@@ -131,9 +130,7 @@ def test_sibling_keys_beside_the_steps_array_are_ignored():
     smuggles nothing and must not cost a repair pass. The injection boundary that
     matters is per-step, covered by the precompleted-step test above.
     """
-    payload = json.dumps(
-        {"steps": [_entry(1, "writer")], "reasoning": "I thought about it"}
-    )
+    payload = json.dumps({"steps": [_entry(1, "writer")], "reasoning": "I thought about it"})
 
     outcome = parse_planner_output(payload)
 
@@ -147,6 +144,7 @@ def test_draft_model_rejects_blank_description():
 
 
 # ---------- structured output / envelope --------------------------------------
+
 
 def test_structured_output_envelope_is_unwrapped_strictly():
     """Providers in JSON-object mode cannot emit a top-level array.
@@ -178,10 +176,9 @@ def test_response_schema_is_serialisable_and_names_the_plan():
 
 # ---------- repair passes -----------------------------------------------------
 
+
 def test_prose_wrapped_json_is_recovered_by_extraction():
-    raw = "Sure! Here is the plan you asked for:\n" + _raw(
-        _entry(1, "researcher"), _entry(2, "writer", [1])
-    )
+    raw = "Sure! Here is the plan you asked for:\n" + _raw(_entry(1, "researcher"), _entry(2, "writer", [1]))
 
     outcome = parse_planner_output(raw)
 
@@ -205,9 +202,7 @@ def test_extraction_handles_braces_inside_descriptions():
     A depth counter that ignores quoting would mis-balance on a `}` inside prose
     and truncate the array mid-step.
     """
-    raw = "Here you go: " + _raw(
-        _entry(1, "writer", description="Use the {placeholder} token")
-    )
+    raw = "Here you go: " + _raw(_entry(1, "writer", description="Use the {placeholder} token"))
 
     outcome = parse_planner_output(raw)
 
@@ -283,6 +278,7 @@ def test_oversized_plan_is_capped_at_max_steps():
 
 # ---------- repair boundary ---------------------------------------------------
 
+
 def test_unusable_output_falls_back_without_exhausting_passes():
     outcome = parse_planner_output("I'll just wing it, no JSON for you")
 
@@ -338,6 +334,7 @@ def test_empty_payload_is_not_rescued_into_a_lone_writer():
 
 
 # ---------- invariants --------------------------------------------------------
+
 
 def test_valid_plan_satisfies_every_invariant():
     steps = [_step(1, "researcher"), _step(2, "writer", [1]), _step(3, "editor", [2])]
@@ -411,6 +408,7 @@ def test_research_presence_detects_fact_checker_too():
 
 # ---------- completed-step immutability (safety) ------------------------------
 
+
 def test_revision_preserving_completed_steps_is_accepted():
     current = [_step(1, "writer", status="completed", output="draft"), _step(2, "reviewer", [1])]
     revised = [_step(1, "writer"), _step(2, "editor", [1])]
@@ -451,9 +449,7 @@ def test_revision_rewiring_a_completed_step_is_rejected():
     ]
     revised = [_step(1, "researcher"), _step(2, "writer", [])]
 
-    assert assert_completed_steps_preserved(current, revised) == (
-        "completed_step_inputs_changed:2",
-    )
+    assert assert_completed_steps_preserved(current, revised) == ("completed_step_inputs_changed:2",)
 
 
 def test_dropping_a_completed_step_entirely_is_rejected():
@@ -463,9 +459,7 @@ def test_dropping_a_completed_step_entirely_is_rejected():
     ]
     revised = [_step(1, "researcher")]
 
-    assert assert_completed_steps_preserved(current, revised) == (
-        "completed_step_removed:2",
-    )
+    assert assert_completed_steps_preserved(current, revised) == ("completed_step_removed:2",)
 
 
 def test_pending_steps_may_be_reordered_and_replaced_freely():
@@ -490,14 +484,10 @@ async def test_pipeline_rejects_a_revision_that_relabels_completed_work(caplog):
     from src.api.schemas.agent import PipelineRunRequest
     from src.models import ContentStyle, ContentType
 
-    request = PipelineRunRequest(
-        topic="t", content_type=ContentType.BLOG, style=ContentStyle.PROFESSIONAL
-    )
+    request = PipelineRunRequest(topic="t", content_type=ContentType.BLOG, style=ContentStyle.PROFESSIONAL)
 
     with caplog.at_level(logging.WARNING):
-        revised = await pipeline._maybe_revise_plan(
-            current, {1: "findings", 2: "draft"}, request, "siliconflow", None
-        )
+        revised = await pipeline._maybe_revise_plan(current, {1: "findings", 2: "draft"}, request, "siliconflow", None)
 
     assert revised is None, "a revision that relabels completed work must be discarded"
     assert any(getattr(r, "event", "") == "planner_revision_rejected" for r in caplog.records)
@@ -514,13 +504,9 @@ async def test_pipeline_carries_completed_outputs_into_an_accepted_revision():
     from src.api.schemas.agent import PipelineRunRequest
     from src.models import ContentStyle, ContentType
 
-    request = PipelineRunRequest(
-        topic="t", content_type=ContentType.BLOG, style=ContentStyle.PROFESSIONAL
-    )
+    request = PipelineRunRequest(topic="t", content_type=ContentType.BLOG, style=ContentStyle.PROFESSIONAL)
 
-    revised = await pipeline._maybe_revise_plan(
-        current, {1: "draft"}, request, "siliconflow", None
-    )
+    revised = await pipeline._maybe_revise_plan(current, {1: "draft"}, request, "siliconflow", None)
 
     assert revised is not None
     assert revised[0].status == "completed"
@@ -535,13 +521,9 @@ async def test_revision_declining_with_null_leaves_the_plan_untouched():
     from src.api.schemas.agent import PipelineRunRequest
     from src.models import ContentStyle, ContentType
 
-    request = PipelineRunRequest(
-        topic="t", content_type=ContentType.BLOG, style=ContentStyle.PROFESSIONAL
-    )
+    request = PipelineRunRequest(topic="t", content_type=ContentType.BLOG, style=ContentStyle.PROFESSIONAL)
 
-    assert await pipeline._maybe_revise_plan(
-        [_step(1, "writer")], {}, request, "siliconflow", None
-    ) is None
+    assert await pipeline._maybe_revise_plan([_step(1, "writer")], {}, request, "siliconflow", None) is None
 
 
 async def test_revision_path_never_requests_json_object_mode():
@@ -556,9 +538,7 @@ async def test_revision_path_never_requests_json_object_mode():
     from src.api.schemas.agent import PipelineRunRequest
     from src.models import ContentStyle, ContentType
 
-    request = PipelineRunRequest(
-        topic="t", content_type=ContentType.BLOG, style=ContentStyle.PROFESSIONAL
-    )
+    request = PipelineRunRequest(topic="t", content_type=ContentType.BLOG, style=ContentStyle.PROFESSIONAL)
     await pipeline._maybe_revise_plan([_step(1, "writer")], {}, request, "siliconflow", None)
 
     assert llm.calls
@@ -566,6 +546,7 @@ async def test_revision_path_never_requests_json_object_mode():
 
 
 # ---------- provider conformance ---------------------------------------------
+
 
 @pytest.mark.parametrize(
     "provider,expected",
@@ -593,9 +574,7 @@ async def test_capable_provider_uses_structured_output_in_one_call():
     llm = _PlannerLLM(_raw(_entry(1, "writer")))
     pipeline = _pipeline(llm)
 
-    raw, source = await pipeline._call_planner(
-        provider="siliconflow", model=None, system_prompt="s", user_prompt="u"
-    )
+    raw, source = await pipeline._call_planner(provider="siliconflow", model=None, system_prompt="s", user_prompt="u")
 
     assert source == "structured_output"
     assert len(llm.calls) == 1
@@ -606,9 +585,7 @@ async def test_claude_stays_on_the_text_path_without_response_format():
     llm = _PlannerLLM(_raw(_entry(1, "writer")))
     pipeline = _pipeline(llm)
 
-    raw, source = await pipeline._call_planner(
-        provider="claude", model=None, system_prompt="s", user_prompt="u"
-    )
+    raw, source = await pipeline._call_planner(provider="claude", model=None, system_prompt="s", user_prompt="u")
 
     assert source == "text_json"
     assert llm.calls[0].get("response_format") is None
@@ -630,10 +607,7 @@ async def test_provider_rejecting_response_format_is_retried_as_plain_text(caplo
 
     assert source == "text_json"
     assert raw
-    assert any(
-        getattr(r, "event", "") == "planner_structured_output_unsupported"
-        for r in caplog.records
-    )
+    assert any(getattr(r, "event", "") == "planner_structured_output_unsupported" for r in caplog.records)
 
 
 async def test_client_without_response_format_support_still_works():
@@ -676,11 +650,10 @@ async def test_missing_credentials_are_not_swallowed_by_the_text_retry():
 
 # ---------- observability -----------------------------------------------------
 
+
 def test_outcome_log_fields_carry_no_planner_text():
     """Log fields must stay free of prompts and model prose."""
-    outcome = parse_planner_output(
-        "Here is the plan: " + _raw(_entry(1, "researcher"), _entry(2, "writer", [1]))
-    )
+    outcome = parse_planner_output("Here is the plan: " + _raw(_entry(1, "researcher"), _entry(2, "writer", [1])))
     fields = outcome.as_log_fields()
 
     assert fields["plan_mode"] == "repaired"
@@ -721,9 +694,7 @@ def test_research_free_plan_is_flagged_for_prompt_drift(caplog):
     with caplog.at_level(logging.WARNING):
         pipeline._record_plan_outcome(outcome, run_id="run_3", provider="deepseek", model="m")
 
-    assert any(
-        getattr(r, "event", "") == "planner_plan_without_research" for r in caplog.records
-    )
+    assert any(getattr(r, "event", "") == "planner_plan_without_research" for r in caplog.records)
 
 
 def test_plan_with_research_is_not_flagged(caplog):
@@ -733,12 +704,11 @@ def test_plan_with_research_is_not_flagged(caplog):
     with caplog.at_level(logging.WARNING):
         pipeline._record_plan_outcome(outcome, run_id="run_4", provider="deepseek", model="m")
 
-    assert not any(
-        getattr(r, "event", "") == "planner_plan_without_research" for r in caplog.records
-    )
+    assert not any(getattr(r, "event", "") == "planner_plan_without_research" for r in caplog.records)
 
 
 # ---------- property / fuzz ---------------------------------------------------
+
 
 def _fuzz_payloads(seed: int, count: int) -> list[str]:
     rng = random.Random(seed)
@@ -755,9 +725,7 @@ def _fuzz_payloads(seed: int, count: int) -> list[str]:
             if rng.random() < 0.8:
                 entry["description"] = rng.choice(["desc", "", "  ", "with {brace}"])
             if rng.random() < 0.5:
-                entry["inputs_from"] = rng.choice(
-                    [[], [1], [rng.randint(-1, 9)], ["2"], [True], [None], "notalist"]
-                )
+                entry["inputs_from"] = rng.choice([[], [1], [rng.randint(-1, 9)], ["2"], [True], [None], "notalist"])
             entries.append(entry)
         raw = json.dumps(entries)
         style = rng.random()
@@ -839,6 +807,7 @@ def test_valid_plans_round_trip_through_parsing_unchanged():
 
 # ---------- end-to-end --------------------------------------------------------
 
+
 async def test_run_uses_a_structured_output_plan_end_to_end(store):
     from tests.test_dynamic_pipeline import FakeRunner, _request
 
@@ -867,7 +836,11 @@ async def test_run_falls_back_to_the_default_plan_when_output_is_unusable(store)
     response = await pipeline.run(_request())
 
     assert [s.agent_id for s in response.plan] == [
-        "researcher", "strategy", "writer", "fact_checker", "editor",
+        "researcher",
+        "strategy",
+        "writer",
+        "fact_checker",
+        "editor",
     ]
     assert all(s.status == "completed" for s in response.plan)
 
@@ -880,9 +853,7 @@ async def test_run_surfaces_configuration_errors_instead_of_falling_back(store):
         async def generate_from_prompts(self, **kwargs):
             raise LLMConfigurationError("Missing API key for provider: siliconflow")
 
-    pipeline = DynamicPipeline(
-        store=store, llm=Unconfigured(), runner=FakeRunner(store=store)
-    )
+    pipeline = DynamicPipeline(store=store, llm=Unconfigured(), runner=FakeRunner(store=store))
 
     with pytest.raises(LLMConfigurationError):
         await pipeline.run(_request())

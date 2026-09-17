@@ -1,4 +1,5 @@
 """Background/RQ runners restore the persisted owner's scope before executing work."""
+
 from __future__ import annotations
 
 import asyncio
@@ -151,9 +152,7 @@ async def run_job_async(job_id: str, store: ContentStore) -> None:
     # poll interval serves both and long-running work does not need to cooperate.
     monitor_state: dict[str, str | None] = {"reason": None}
     exec_task = asyncio.ensure_future(_execute_job(job, llm, store))
-    monitor_task = asyncio.ensure_future(
-        _monitor_job_lease(job_id, job_type, store, exec_task, monitor_state)
-    )
+    monitor_task = asyncio.ensure_future(_monitor_job_lease(job_id, job_type, store, exec_task, monitor_state))
 
     try:
         try:
@@ -302,8 +301,13 @@ def _handle_job_error(
         # P2-01: Metrics and logging
         metrics.job_retry_attempts_total.labels(error_type=error_type, job_type=job_type).inc()
         log_job_event(
-            logger, "retry_scheduled", job_id, job_type,
-            error_type=error_type, retry_count=current_attempt, next_retry_at=next_retry_at.isoformat()
+            logger,
+            "retry_scheduled",
+            job_id,
+            job_type,
+            error_type=error_type,
+            retry_count=current_attempt,
+            next_retry_at=next_retry_at.isoformat(),
         )
 
         log_event(
@@ -320,6 +324,7 @@ def _handle_job_error(
 
         # Requeue the job for delayed execution
         from src.jobs.queue import requeue_job_with_delay
+
         try:
             requeue_job_with_delay(job_id, delay_seconds, store.database_url)
         except Exception as requeue_error:  # noqa: BLE001 -- queue boundary; logged and job marked failed
@@ -346,8 +351,13 @@ def _handle_job_error(
             metrics.job_retry_exhausted_total.labels(job_type=job_type).inc()
         metrics.job_failures_total.labels(error_type=error_type, job_type=job_type).inc()
         log_job_event(
-            logger, "failed_permanently", job_id, job_type,
-            error_type=error_type, retry_count=current_attempt, max_retries=max_retries
+            logger,
+            "failed_permanently",
+            job_id,
+            job_type,
+            error_type=error_type,
+            retry_count=current_attempt,
+            max_retries=max_retries,
         )
 
         log_event(
@@ -401,7 +411,9 @@ async def _execute_job(job: dict[str, Any], llm: LiteLLMClient, store: ContentSt
                 "id": content_id,
                 "title": refined.title,
                 "content": refined.content,
-                "content_type": refined.content_type.value if refined.content_type else stored.get("content_type", "unknown"),
+                "content_type": refined.content_type.value
+                if refined.content_type
+                else stored.get("content_type", "unknown"),
                 "style": stored.get("style", request.new_style.value if request.new_style else "casual"),
                 "tags": refined.tags or [],
                 "status": stored.get("status", "refined"),

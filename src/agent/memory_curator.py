@@ -6,6 +6,7 @@ of `add` / `replace` / `remove` operations. Thread deletion never invokes this
 component. Curator output is untrusted and is never applied directly; only
 user-confirmed Chat memory tools may mutate the files.
 """
+
 from __future__ import annotations
 
 import json

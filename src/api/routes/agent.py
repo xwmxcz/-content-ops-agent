@@ -78,6 +78,7 @@ async def create_pipeline_run(
     model = request.model or config.get_model(provider)
 
     import uuid
+
     run_id = f"run_{uuid.uuid4().hex[:12]}"
     thread_id = request.thread_id or run_id
 
@@ -258,8 +259,7 @@ def propose_action(
         thread_id=request.thread_id,
         tool_name=request.tool_name,
         args=request.args,
-        impact_summary=request.impact_summary
-        or f"Execute write tool {request.tool_name}",
+        impact_summary=request.impact_summary or f"Execute write tool {request.tool_name}",
         ttl_seconds=config.ACTION_CAPABILITY_TTL_SECONDS,
         requester=store.user_id,
     )

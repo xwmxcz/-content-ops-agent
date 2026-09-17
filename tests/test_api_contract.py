@@ -91,7 +91,9 @@ class FakeChatModel:
             if "recent" in text or "之前写过" in str(last_human) or "content 99999" in text:
                 return AIMessage(content='{"name":"content_search","confidence":0.92,"slots":{},"clarification":null}')
             if "calendar week" in text or "schedule" in text:
-                return AIMessage(content='{"name":"schedule_propose","confidence":0.92,"slots":{},"clarification":null}')
+                return AIMessage(
+                    content='{"name":"schedule_propose","confidence":0.92,"slots":{},"clarification":null}'
+                )
             if "practical" in text:
                 return AIMessage(content='{"name":"content_refine","confidence":0.9,"slots":{},"clarification":null}')
             return AIMessage(content='{"name":"unknown","confidence":0.8,"slots":{},"clarification":null}')
@@ -221,9 +223,14 @@ def test_agent_chat_persists_thread_messages_and_model(client, store, fake_chat_
     assert second_response.status_code == 200
     assert second_response.json()["provider"] == "deepseek"
     second_call_messages = next(
-        c["messages"] for c in reversed(fake_chat_factory.calls) if c["provider"] == "deepseek" and c["temperature"] == 0.7
+        c["messages"]
+        for c in reversed(fake_chat_factory.calls)
+        if c["provider"] == "deepseek" and c["temperature"] == 0.7
     )
-    assert any(isinstance(message, HumanMessage) and message.content == "Plan a content week" for message in second_call_messages)
+    assert any(
+        isinstance(message, HumanMessage) and message.content == "Plan a content week"
+        for message in second_call_messages
+    )
     assert any(isinstance(message, AIMessage) and message.content == "Agent reply" for message in second_call_messages)
     assert store.list_agent_messages("thread-a")[-1]["model"] == "deepseek-chat"
 
@@ -291,6 +298,7 @@ def test_search_history_tool_returns_persisted_content(client, store, fake_chat_
     assert payload["tool_events"][0]["status"] == "completed"
 
     import json as _json
+
     matches = _json.loads(payload["tool_events"][0]["output"])
     assert any("徒步" in (item.get("title") or "") for item in matches)
     assert all("咖啡馆探店指南" not in (item.get("title") or "") for item in matches)
@@ -316,6 +324,7 @@ def test_chat_agent_retries_failed_tool(client, store, fake_chat_factory, monkey
     def build_tools_with_flaky(self, provider, model, temperature, max_tokens, allowed_tools=None):
         tools = real_build_tools(self, provider, model, temperature, max_tokens, allowed_tools=allowed_tools)
         from langchain_core.tools import StructuredTool
+
         replaced = [t for t in tools if t.name != "view_content"]
         replaced.append(StructuredTool.from_function(func=flaky_view_content, name="view_content"))
         if allowed_tools is None:
@@ -474,7 +483,9 @@ def test_schedule_propose_intent_blocks_commit_tool(client, fake_chat_factory):
 
 
 def test_schedule_commit_intent_reuses_prior_proposal(client, store):
-    store.upsert_agent_thread("thread-schedule-commit", title="schedule", provider="siliconflow", model="Qwen/Qwen2.5-7B-Instruct")
+    store.upsert_agent_thread(
+        "thread-schedule-commit", title="schedule", provider="siliconflow", model="Qwen/Qwen2.5-7B-Instruct"
+    )
     store.save_agent_message(
         thread_id="thread-schedule-commit",
         role="assistant",
@@ -597,9 +608,7 @@ def test_llm_forged_confirmation_on_explicit_rejection_cannot_write_calendar(
         tool_events=[proposal_event],
     )
 
-    fake_chat_factory.intent_response = json.dumps(
-        {"name": forged_intent, "confidence": 0.99, "slots": {}}
-    )
+    fake_chat_factory.intent_response = json.dumps({"name": forged_intent, "confidence": 0.99, "slots": {}})
     fake_chat_factory.tool_mode = True
     fake_chat_factory.tool_call_spec = {"name": tool_name, "args": tool_args}
 
@@ -619,9 +628,7 @@ def test_llm_forged_confirmation_on_explicit_rejection_cannot_write_calendar(
     assert payload["intent"]["allowed_tools"] == []
     assert payload["tool_events"][0]["status"] == "failed"
     assert f"Unknown tool: {tool_name}" in payload["tool_events"][0]["output"]
-    assert store.get_calendar_events(
-        datetime(2099, 1, 1).date(), datetime(2099, 1, 3).date()
-    ) == []
+    assert store.get_calendar_events(datetime(2099, 1, 1).date(), datetime(2099, 1, 3).date()) == []
 
 
 def test_proposed_action_routes_cover_propose_confirm_cancel(client, store):
@@ -697,9 +704,7 @@ def test_confirm_and_cancel_unknown_action_return_404(client):
     assert client.post("/api/agent/actions/act_missing/cancel").status_code == 404
 
 
-def test_chat_write_requires_confirmation_then_writes_content_once(
-    client, store, fake_chat_factory
-):
+def test_chat_write_requires_confirmation_then_writes_content_once(client, store, fake_chat_factory):
     """Full propose -> confirm -> execute cycle produces exactly one DB row."""
     tool_args = {"topic": "capability cycle topic", "content_type": "xiaohongshu"}
     thread_id = "thread-capability-cycle"
@@ -752,9 +757,7 @@ def test_chat_write_requires_confirmation_then_writes_content_once(
     assert len(store.list_contents(limit=10)) == 1
 
 
-def test_chat_write_records_the_consumed_capability_as_its_idempotency_key(
-    client, store, fake_chat_factory
-):
+def test_chat_write_records_the_consumed_capability_as_its_idempotency_key(client, store, fake_chat_factory):
     """The chat lane's request identity is the consumed ``proposed_actions.id``.
 
     Without that binding the write would run unguarded, so a keyed replay could
@@ -942,9 +945,7 @@ def test_expired_capability_denies_chat_confirmation_write(client, store, fake_c
     assert store.list_contents(limit=10) == []
 
 
-def test_legacy_transcript_proposal_denies_chat_write_end_to_end(
-    client, store, fake_chat_factory
-):
+def test_legacy_transcript_proposal_denies_chat_write_end_to_end(client, store, fake_chat_factory):
     """A Phase 0 thread has a `proposed` tool event but no durable capability.
 
     Confirming it must fail closed through the whole stack. The policy-layer

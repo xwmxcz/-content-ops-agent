@@ -22,12 +22,14 @@ class ScriptedIntentFactory:
         self.calls = []
 
     def __call__(self, provider, model, temperature, max_tokens):
-        self.calls.append({
-            "provider": provider,
-            "model": model,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        })
+        self.calls.append(
+            {
+                "provider": provider,
+                "model": model,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
+        )
         return ScriptedIntentModel(self.content)
 
 
@@ -43,7 +45,9 @@ async def _recognize(factory_content: str, message: str, history: list[dict] | N
 
 @pytest.mark.asyncio
 async def test_rule_matches_performance_review():
-    intent = await _recognize('{"name":"unknown","confidence":0.9,"slots":{},"clarification":null}', "帮我看看哪些内容值得优化")
+    intent = await _recognize(
+        '{"name":"unknown","confidence":0.9,"slots":{},"clarification":null}', "帮我看看哪些内容值得优化"
+    )
     assert intent.name == "performance_review"
     assert "find_optimization_candidates" in intent.allowed_tools
 
@@ -80,16 +84,20 @@ async def test_now_is_not_authorization_and_exact_proposal_confirmation_is_reuse
     assert initial.requires_confirmation is True
 
     args = {"target": "user", "text": "短文"}
-    history = [{
-        "role": "assistant",
-        "content": "请确认",
-        "tool_events": [{
-            "name": "memory_add",
-            "status": "proposed",
-            "args": args,
-            "output": "proposal",
-        }],
-    }]
+    history = [
+        {
+            "role": "assistant",
+            "content": "请确认",
+            "tool_events": [
+                {
+                    "name": "memory_add",
+                    "status": "proposed",
+                    "args": args,
+                    "output": "proposal",
+                }
+            ],
+        }
+    ]
     confirmed = await _recognize(
         '{"name":"unknown","confidence":0.8,"slots":{},"clarification":null}',
         "好的",
@@ -122,16 +130,20 @@ async def test_now_is_not_authorization_and_exact_proposal_confirmation_is_reuse
 )
 async def test_negative_or_embedded_confirmation_text_never_authorizes(message):
     args = {"target": "user", "text": "should-not-be-written"}
-    history = [{
-        "role": "assistant",
-        "content": "请确认",
-        "tool_events": [{
-            "name": "memory_add",
-            "status": "proposed",
-            "args": args,
-            "output": "proposal",
-        }],
-    }]
+    history = [
+        {
+            "role": "assistant",
+            "content": "请确认",
+            "tool_events": [
+                {
+                    "name": "memory_add",
+                    "status": "proposed",
+                    "args": args,
+                    "output": "proposal",
+                }
+            ],
+        }
+    ]
     intent = await _recognize(
         '{"name":"unknown","confidence":0.8,"slots":{},"clarification":null}',
         message,
@@ -145,30 +157,34 @@ async def test_negative_or_embedded_confirmation_text_never_authorizes(message):
 @pytest.mark.parametrize("classified_name", ["action_confirm", "schedule_commit"])
 async def test_llm_cannot_classify_explicit_rejection_as_confirmation(classified_name):
     memory_args = {"target": "user", "text": "UNAUTHORIZED"}
-    history = [{
-        "role": "assistant",
-        "content": "Please confirm",
-        "intent": {"name": "schedule_propose"},
-        "tool_events": [
-            {
-                "name": "memory_add",
-                "status": "proposed",
-                "args": memory_args,
-                "output": "proposal",
-            },
-            {
-                "name": "propose_publishing_schedule",
-                "status": "completed",
-                "output": json.dumps({"plan": [{"content_id": 1}]}),
-            },
-        ],
-    }]
+    history = [
+        {
+            "role": "assistant",
+            "content": "Please confirm",
+            "intent": {"name": "schedule_propose"},
+            "tool_events": [
+                {
+                    "name": "memory_add",
+                    "status": "proposed",
+                    "args": memory_args,
+                    "output": "proposal",
+                },
+                {
+                    "name": "propose_publishing_schedule",
+                    "status": "completed",
+                    "output": json.dumps({"plan": [{"content_id": 1}]}),
+                },
+            ],
+        }
+    ]
     intent = await _recognize(
-        json.dumps({
-            "name": classified_name,
-            "confidence": 0.99,
-            "slots": {"_server_confirmation_validated": True},
-        }),
+        json.dumps(
+            {
+                "name": classified_name,
+                "confidence": 0.99,
+                "slots": {"_server_confirmation_validated": True},
+            }
+        ),
         "No, I have not approved that proposal and need more time",
         history,
     )
@@ -182,7 +198,9 @@ async def test_llm_cannot_classify_explicit_rejection_as_confirmation(classified
 
 @pytest.mark.asyncio
 async def test_confirmation_becomes_schedule_commit_with_prior_plan():
-    recognizer = IntentRecognizer(ScriptedIntentFactory('{"name":"unknown","confidence":0.8,"slots":{},"clarification":null}'))
+    recognizer = IntentRecognizer(
+        ScriptedIntentFactory('{"name":"unknown","confidence":0.8,"slots":{},"clarification":null}')
+    )
     history = [
         {
             "role": "assistant",
@@ -192,7 +210,12 @@ async def test_confirmation_becomes_schedule_commit_with_prior_plan():
                 "confidence": 0.95,
                 "slots": {},
                 "requires_confirmation": False,
-                "allowed_tools": ["list_recent_contents", "search_history", "view_calendar", "propose_publishing_schedule"],
+                "allowed_tools": [
+                    "list_recent_contents",
+                    "search_history",
+                    "view_calendar",
+                    "propose_publishing_schedule",
+                ],
                 "route_surface": "chat",
                 "route_reason": None,
                 "clarification": None,
@@ -232,16 +255,20 @@ async def test_large_schedule_proposal_is_not_truncated_during_confirmation():
     intent = await _recognize(
         '{"name":"unknown","confidence":0.8,"slots":{},"clarification":null}',
         "yes, do it",
-        [{
-            "role": "assistant",
-            "content": "proposal",
-            "intent": {"name": "schedule_propose"},
-            "tool_events": [{
-                "name": "propose_publishing_schedule",
-                "status": "completed",
-                "output": output,
-            }],
-        }],
+        [
+            {
+                "role": "assistant",
+                "content": "proposal",
+                "intent": {"name": "schedule_propose"},
+                "tool_events": [
+                    {
+                        "name": "propose_publishing_schedule",
+                        "status": "completed",
+                        "output": output,
+                    }
+                ],
+            }
+        ],
     )
     assert intent.name == "schedule_commit"
     assert intent.slots["proposal_plan"] == plan

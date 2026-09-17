@@ -1,4 +1,5 @@
 """Content generation helpers for the API layer."""
+
 from __future__ import annotations
 
 import re
@@ -97,7 +98,7 @@ def parse_generated_content(content_text: str, content_type: ContentType) -> Gen
     if body_match:
         content = body_match.group(1).strip()
     elif title_match:
-        content = normalized[title_match.end():].strip()
+        content = normalized[title_match.end() :].strip()
 
     tags_match = re.search(r"【\s*标签\s*】\s*\n(.+?)\s*$", normalized, re.DOTALL)
     if tags_match:

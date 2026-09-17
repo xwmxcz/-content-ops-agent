@@ -1,4 +1,5 @@
 """Tests for ILIKE substring search over agent_messages."""
+
 from __future__ import annotations
 
 import pytest
@@ -8,8 +9,12 @@ import pytest
 def seeded(store):
     store.upsert_agent_thread("t1", title="ops", provider="claude", model="m")
     store.upsert_agent_thread("t2", title="weibo", provider="claude", model="m")
-    store.save_agent_message(thread_id="t1", role="user", content="今天写一篇关于小红书的笔记", provider="claude", model="m")
-    store.save_agent_message(thread_id="t1", role="assistant", content="好的我们来写小红书种草文案", provider="claude", model="m")
+    store.save_agent_message(
+        thread_id="t1", role="user", content="今天写一篇关于小红书的笔记", provider="claude", model="m"
+    )
+    store.save_agent_message(
+        thread_id="t1", role="assistant", content="好的我们来写小红书种草文案", provider="claude", model="m"
+    )
     store.save_agent_message(thread_id="t1", role="user", content="换个话题聊聊微博", provider="claude", model="m")
     store.save_agent_message(thread_id="t2", role="user", content="微博的标题怎么写", provider="claude", model="m")
     return store
@@ -42,7 +47,9 @@ class TestSessionSearch:
         assert seeded.search_agent_messages("天气预报") == []
 
     def test_search_reflects_insert(self, seeded):
-        seeded.save_agent_message(thread_id="t1", role="user", content="再补充一条小红书技巧", provider="claude", model="m")
+        seeded.save_agent_message(
+            thread_id="t1", role="user", content="再补充一条小红书技巧", provider="claude", model="m"
+        )
         rows = seeded.search_agent_messages("小红书")
         assert len(rows) == 3
 

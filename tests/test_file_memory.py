@@ -1,4 +1,5 @@
 """Tests for the file-based memory backend (MEMORY.md / USER.md)."""
+
 from __future__ import annotations
 
 import pytest

@@ -9,6 +9,7 @@ Tool-call pairs are protected: if a slice boundary would land between an AI
 message carrying `tool_calls` and its trailing `ToolMessage`(s), the boundary
 is pushed outward until the pair is intact.
 """
+
 from __future__ import annotations
 
 import json
@@ -117,10 +118,7 @@ CHECKPOINT_MARKER = "[Conversation checkpoint"
 
 def _has_prior_checkpoint(messages: list[BaseMessage]) -> bool:
     return any(
-        isinstance(m, AIMessage)
-        and isinstance(m.content, str)
-        and CHECKPOINT_MARKER in m.content
-        for m in messages
+        isinstance(m, AIMessage) and isinstance(m.content, str) and CHECKPOINT_MARKER in m.content for m in messages
     )
 
 
@@ -240,7 +238,9 @@ class ContextCompressor(ContextEngine):
                 if content:
                     lines.append(f"ASSISTANT: {content}")
                 for call in getattr(m, "tool_calls", None) or []:
-                    lines.append(f"ASSISTANT_TOOL_CALL: {call.get('name')} {json.dumps(call.get('args') or {}, ensure_ascii=False)}")
+                    lines.append(
+                        f"ASSISTANT_TOOL_CALL: {call.get('name')} {json.dumps(call.get('args') or {}, ensure_ascii=False)}"
+                    )
             elif isinstance(m, ToolMessage):
                 lines.append(f"TOOL_RESULT: {content}")
             else:

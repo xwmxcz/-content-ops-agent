@@ -4,6 +4,7 @@ Authorization compares model-proposed tool arguments against arguments that were
 persisted in an earlier request. Both sides must agree byte-for-byte, so the
 canonical form has exactly one spelling in the codebase.
 """
+
 from __future__ import annotations
 
 import hashlib

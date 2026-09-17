@@ -63,7 +63,7 @@ Key changes:
 Added retry configuration parameters:
 ```python
 RETRY_BASE_DELAY: int = 30  # Initial delay in seconds
-MAX_RETRY_DELAY: int = 480   # Maximum delay (8 minutes)
+MAX_RETRY_DELAY: int = 480  # Maximum delay (8 minutes)
 DEFAULT_MAX_RETRIES: int = 5
 ```
 
@@ -136,7 +136,7 @@ Per-job customization:
 store.create_job(
     job_type="content_generate",
     payload={...},
-    max_retries=3  # Custom retry limit
+    max_retries=3,  # Custom retry limit
 )
 ```
 

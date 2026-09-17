@@ -19,6 +19,7 @@ Behavior:
 - Does NOT touch any ChromaDB directory; delete `data/chroma/` yourself when
   you're confident the migration succeeded.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -41,17 +42,24 @@ def _fetch_legacy_rows(db_url: str) -> list[dict]:
     engine = create_engine(db_url, echo=False)
     with engine.connect() as conn:
         try:
-            rows = conn.execute(text(
-                "SELECT id, content, category, importance, updated_at "
-                "FROM agent_memories "
-                "ORDER BY importance DESC, updated_at DESC"
-            )).all()
+            rows = conn.execute(
+                text(
+                    "SELECT id, content, category, importance, updated_at "
+                    "FROM agent_memories "
+                    "ORDER BY importance DESC, updated_at DESC"
+                )
+            ).all()
         except Exception as exc:
             print(f"No agent_memories table found (or unreadable): {exc}", file=sys.stderr)
             return []
     return [
-        {"id": r[0], "content": r[1] or "", "category": (r[2] or "fact").lower(),
-         "importance": r[3] or 0.0, "updated_at": r[4]}
+        {
+            "id": r[0],
+            "content": r[1] or "",
+            "category": (r[2] or "fact").lower(),
+            "importance": r[3] or 0.0,
+            "updated_at": r[4],
+        }
         for r in rows
     ]
 
@@ -106,10 +114,14 @@ def _write_overflow(memory_dir: Path, overflow: list[dict]) -> Path | None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db", default="sqlite:///data/content_ops.db",
-                        help="SQLAlchemy URL of the legacy DB (default sqlite:///data/content_ops.db)")
-    parser.add_argument("--memory-dir", default="data/memory",
-                        help="Target directory for MEMORY.md / USER.md (default data/memory)")
+    parser.add_argument(
+        "--db",
+        default="sqlite:///data/content_ops.db",
+        help="SQLAlchemy URL of the legacy DB (default sqlite:///data/content_ops.db)",
+    )
+    parser.add_argument(
+        "--memory-dir", default="data/memory", help="Target directory for MEMORY.md / USER.md (default data/memory)"
+    )
     parser.add_argument("--memory-limit", type=int, default=2200)
     parser.add_argument("--user-limit", type=int, default=1375)
     parser.add_argument("--dry-run", action="store_true", help="Print the plan, do not write files")

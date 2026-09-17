@@ -1,4 +1,5 @@
 """Tests for P1-03: Automatic job retry with error classification and exponential backoff."""
+
 from __future__ import annotations
 
 import uuid
@@ -14,11 +15,13 @@ from src.storage import ContentStore
 
 class TransientNetworkError(Exception):
     """Simulates a transient network error."""
+
     pass
 
 
 class PermanentValidationError(Exception):
     """Simulates a permanent validation error."""
+
     pass
 
 
@@ -188,8 +191,8 @@ class TestJobRetryMechanism:
 
         for attempt, expected_delay in expected_delays:
             job = store.create_job(
-            job_id=str(uuid.uuid4()),
-            job_type="content_generate",
+                job_id=str(uuid.uuid4()),
+                job_type="content_generate",
                 payload={"topic": "test", "content_type": "blog"},
                 provider="openai",
                 model="gpt-4",

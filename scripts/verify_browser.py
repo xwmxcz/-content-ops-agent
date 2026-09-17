@@ -5,6 +5,7 @@ Uses the production Compose configuration, with current source/build mounts. No
 existing container, database or volume is reused. Secrets live in a temporary
 0700 directory, and the project's containers/volumes are removed on exit.
 """
+
 from __future__ import annotations
 
 import json
@@ -17,7 +18,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 REMOVED_AUTH_SETTINGS = (
-    "AUTH_ENABLED", "AUTH_USERNAME", "AUTH_PASSWORD", "AUTH_STREAM_TICKET_SECONDS",
+    "AUTH_ENABLED",
+    "AUTH_USERNAME",
+    "AUTH_PASSWORD",
+    "AUTH_STREAM_TICKET_SECONDS",
 )
 
 
@@ -39,31 +43,57 @@ def main():
         runtime = dict(os.environ)
         for key in REMOVED_AUTH_SETTINGS:
             runtime.pop(key, None)
-        runtime.update({
-            "APP_ENV": "production", "SCHEMA_MANAGEMENT": "validate",
-            "E2E_PASSWORD": secrets.token_urlsafe(32),
-            "AUTH_SECRET_KEY": secrets.token_urlsafe(48),
-            "POSTGRES_PASSWORD": secrets.token_urlsafe(32),
-            "REDIS_PASSWORD": secrets.token_urlsafe(32),
-            "AUTH_TOKEN_EXPIRE_MINUTES": "1",
-            "ENFORCE_HTTPS": "true", "CORS_ORIGINS": origin,
-            "TRUSTED_PROXY_CIDRS": "172.16.0.0/12",
-            "DEBUG": "false", "API_RELOAD": "false",
-            "XHS_MCP_ENABLED": "false", "MEMORY_CURATOR_ENABLED": "false",
-            "SSE_KEEPALIVE_SECONDS": "1", "SSE_POLL_INTERVAL_SECONDS": "0.1",
-            "SSE_STREAM_TIMEOUT_SECONDS": "8",
-        })
+        runtime.update(
+            {
+                "APP_ENV": "production",
+                "SCHEMA_MANAGEMENT": "validate",
+                "E2E_PASSWORD": secrets.token_urlsafe(32),
+                "AUTH_SECRET_KEY": secrets.token_urlsafe(48),
+                "POSTGRES_PASSWORD": secrets.token_urlsafe(32),
+                "REDIS_PASSWORD": secrets.token_urlsafe(32),
+                "AUTH_TOKEN_EXPIRE_MINUTES": "1",
+                "ENFORCE_HTTPS": "true",
+                "CORS_ORIGINS": origin,
+                "TRUSTED_PROXY_CIDRS": "172.16.0.0/12",
+                "DEBUG": "false",
+                "API_RELOAD": "false",
+                "XHS_MCP_ENABLED": "false",
+                "MEMORY_CURATOR_ENABLED": "false",
+                "SSE_KEEPALIVE_SECONDS": "1",
+                "SSE_POLL_INTERVAL_SECONDS": "0.1",
+                "SSE_STREAM_TIMEOUT_SECONDS": "8",
+            }
+        )
         # Do not load a developer's .env or pass real provider credentials.
-        for key in ("ANTHROPIC_API_KEY", "SILICONFLOW_API_KEY", "DEEPSEEK_API_KEY",
-                    "MOONSHOT_API_KEY", "NEWAPI_API_KEY", "SERPER_API_KEY",
-                    "TAVILY_API_KEY", "BRAVE_SEARCH_API_KEY"):
+        for key in (
+            "ANTHROPIC_API_KEY",
+            "SILICONFLOW_API_KEY",
+            "DEEPSEEK_API_KEY",
+            "MOONSHOT_API_KEY",
+            "NEWAPI_API_KEY",
+            "SERPER_API_KEY",
+            "TAVILY_API_KEY",
+            "BRAVE_SEARCH_API_KEY",
+        ):
             runtime[key] = ""
         env_file = temp / "empty.env"
         env_file.touch(mode=0o600)
-        result = run([
-            "docker", "compose", "--env-file", str(env_file),
-            "-f", str(ROOT / "docker-compose.yml"), "config", "--format", "json",
-        ], env=runtime, capture_output=True, text=True)
+        result = run(
+            [
+                "docker",
+                "compose",
+                "--env-file",
+                str(env_file),
+                "-f",
+                str(ROOT / "docker-compose.yml"),
+                "config",
+                "--format",
+                "json",
+            ],
+            env=runtime,
+            capture_output=True,
+            text=True,
+        )
         compose = json.loads(result.stdout)
         compose["name"] = project
         compose.pop("x-app-env", None)
@@ -86,34 +116,71 @@ def main():
                 if name == "api":
                     service["environment"]["E2E_PASSWORD"] = runtime["E2E_PASSWORD"]
                 for path in ("src", "migrations", "alembic.ini", "gunicorn.conf.py", "worker.py"):
-                    service.setdefault("volumes", []).append({
-                        "type": "bind", "source": str(ROOT / path),
-                        "target": f"/app/{path}", "read_only": True,
-                    })
-                service.setdefault("volumes", []).append({
-                    "type": "bind", "source": str(ROOT / "tests/e2e/seed.py"),
-                    "target": "/app/e2e_seed.py", "read_only": True,
-                })
+                    service.setdefault("volumes", []).append(
+                        {
+                            "type": "bind",
+                            "source": str(ROOT / path),
+                            "target": f"/app/{path}",
+                            "read_only": True,
+                        }
+                    )
+                service.setdefault("volumes", []).append(
+                    {
+                        "type": "bind",
+                        "source": str(ROOT / "tests/e2e/seed.py"),
+                        "target": "/app/e2e_seed.py",
+                        "read_only": True,
+                    }
+                )
             if name == "frontend":
                 service["image"] = frontend_image
                 service["volumes"] = [
-                    {"type": "bind", "source": str(ROOT / "frontend/dist"),
-                     "target": "/usr/share/nginx/html", "read_only": True},
-                    {"type": "bind", "source": str(ROOT / "frontend/nginx.conf"),
-                     "target": "/etc/nginx/conf.d/default.conf", "read_only": True},
+                    {
+                        "type": "bind",
+                        "source": str(ROOT / "frontend/dist"),
+                        "target": "/usr/share/nginx/html",
+                        "read_only": True,
+                    },
+                    {
+                        "type": "bind",
+                        "source": str(ROOT / "frontend/nginx.conf"),
+                        "target": "/etc/nginx/conf.d/default.conf",
+                        "read_only": True,
+                    },
                 ]
 
-        run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-             "-keyout", str(temp / "key.pem"), "-out", str(temp / "cert.pem"),
-             "-days", "1", "-subj", "/CN=content-ops.test",
-             "-addext", "subjectAltName=DNS:content-ops.test"], capture_output=True)
+        run(
+            [
+                "openssl",
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-nodes",
+                "-keyout",
+                str(temp / "key.pem"),
+                "-out",
+                str(temp / "cert.pem"),
+                "-days",
+                "1",
+                "-subj",
+                "/CN=content-ops.test",
+                "-addext",
+                "subjectAltName=DNS:content-ops.test",
+            ],
+            capture_output=True,
+        )
         compose["services"]["tls"] = {
             "image": frontend_image,
             "ports": [{"target": 443, "published": str(port), "host_ip": "127.0.0.1"}],
             "volumes": [
                 {"type": "bind", "source": str(temp), "target": "/certs", "read_only": True},
-                {"type": "bind", "source": str(ROOT / "tests/e2e/tls.conf"),
-                 "target": "/etc/nginx/conf.d/default.conf", "read_only": True},
+                {
+                    "type": "bind",
+                    "source": str(ROOT / "tests/e2e/tls.conf"),
+                    "target": "/etc/nginx/conf.d/default.conf",
+                    "read_only": True,
+                },
             ],
             "depends_on": {"frontend": {"condition": "service_started"}},
         }
@@ -123,14 +190,17 @@ def main():
         command = ["docker", "compose", "-p", project, "-f", str(config_path)]
         try:
             run(command + ["up", "-d", "--wait", "--wait-timeout", "180"])
-            seed = run(command + ["exec", "-T", "api", "python", "e2e_seed.py", "seed"],
-                       capture_output=True, text=True)
+            seed = run(command + ["exec", "-T", "api", "python", "e2e_seed.py", "seed"], capture_output=True, text=True)
             fixture_path = temp / "fixtures.json"
             fixture_path.write_text(seed.stdout, encoding="utf-8")
-            browser_env = dict(os.environ, E2E_BASE_URL=origin,
-                               E2E_PASSWORD=runtime["E2E_PASSWORD"],
-                               E2E_FIXTURES=str(fixture_path), E2E_COMPOSE=str(config_path),
-                               E2E_PROJECT=project)
+            browser_env = dict(
+                os.environ,
+                E2E_BASE_URL=origin,
+                E2E_PASSWORD=runtime["E2E_PASSWORD"],
+                E2E_FIXTURES=str(fixture_path),
+                E2E_COMPOSE=str(config_path),
+                E2E_PROJECT=project,
+            )
             for key in REMOVED_AUTH_SETTINGS:
                 browser_env.pop(key, None)
             # The system Chrome is optional; otherwise Playwright uses its own
@@ -147,8 +217,7 @@ def main():
             if tests.returncode:
                 raise SystemExit(tests.returncode)
         except subprocess.CalledProcessError:
-            logs = subprocess.run(command + ["logs", "--no-color", "--tail", "60"],
-                                  capture_output=True, text=True)
+            logs = subprocess.run(command + ["logs", "--no-color", "--tail", "60"], capture_output=True, text=True)
             diagnostic = logs.stdout + logs.stderr
             for key in ("E2E_PASSWORD", "AUTH_SECRET_KEY", "POSTGRES_PASSWORD", "REDIS_PASSWORD"):
                 diagnostic = diagnostic.replace(runtime[key], "[REDACTED]")

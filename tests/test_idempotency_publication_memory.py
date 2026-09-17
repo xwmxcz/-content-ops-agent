@@ -9,6 +9,7 @@ Every test asserts the real side effect — provider call counts, publication ro
 counts, file contents — not just the returned payload. A retry that returns the
 right value while publishing twice is exactly the failure being guarded.
 """
+
 from __future__ import annotations
 
 import json
@@ -128,9 +129,7 @@ def client(store, publish_mcp, monkeypatch):
     """Local to this module: `client` in test_api_contract is not a shared fixture."""
     app.dependency_overrides[get_store] = lambda: store
     app.dependency_overrides[get_litellm_client] = lambda: FakeLLMClient()
-    app.dependency_overrides[get_publish_service] = lambda: PublishService(
-        store=store, mcp_client=publish_mcp
-    )
+    app.dependency_overrides[get_publish_service] = lambda: PublishService(store=store, mcp_client=publish_mcp)
     monkeypatch.setattr(
         "src.jobs.runner.create_publish_service",
         lambda current_store: PublishService(store=current_store, mcp_client=publish_mcp),
@@ -158,10 +157,13 @@ async def test_publication_retry_does_not_publish_twice(store, tmp_path):
     assert len(mcp.calls) == 1
     assert first["external_post_id"] == second["external_post_id"] == "xhs-1"
     assert _count(store, "platform_publications") == 1
-    assert _count(
-        store,
-        where=f"scope = '{SCOPE_PUBLICATION_EXECUTE}' AND status = 'completed'",
-    ) == 1
+    assert (
+        _count(
+            store,
+            where=f"scope = '{SCOPE_PUBLICATION_EXECUTE}' AND status = 'completed'",
+        )
+        == 1
+    )
 
 
 @pytest.mark.asyncio
@@ -300,16 +302,12 @@ def test_memory_replace_and_remove_apply_once(store, file_memory):
 
     with request_key("mem-replace-1"):
         first = json.loads(
-            tools["memory_replace"].invoke(
-                {"target": "user", "old_text": "旧偏好", "new_text": "新偏好"}
-            )
+            tools["memory_replace"].invoke({"target": "user", "old_text": "旧偏好", "new_text": "新偏好"})
         )
         # A replay whose old_text no longer exists would normally raise
         # MemoryNotFound; the ledger short-circuits before FileMemory is touched.
         second = json.loads(
-            tools["memory_replace"].invoke(
-                {"target": "user", "old_text": "旧偏好", "new_text": "新偏好"}
-            )
+            tools["memory_replace"].invoke({"target": "user", "old_text": "旧偏好", "new_text": "新偏好"})
         )
 
     assert first["replaced"] is True and second["replaced"] is True
@@ -371,9 +369,7 @@ def test_failed_memory_mutation_leaves_the_key_retryable(store, file_memory):
 
     with request_key("mem-retry"):
         rejected = json.loads(
-            tools["memory_replace"].invoke(
-                {"target": "user", "old_text": "不存在的文本", "new_text": "x"}
-            )
+            tools["memory_replace"].invoke({"target": "user", "old_text": "不存在的文本", "new_text": "x"})
         )
         assert rejected["replaced"] is False
         recovered = json.loads(tools["memory_add"].invoke({"target": "user", "text": "重试后的条目"}))

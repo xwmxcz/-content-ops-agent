@@ -51,11 +51,7 @@ def test_gunicorn_config_has_no_name_colliding_with_a_gunicorn_setting():
     namespace = _load_module_namespace(ROOT / "gunicorn.conf.py", "_gunicorn_conf_probe")
     cfg = Config()
 
-    collisions = {
-        key: value
-        for key, value in namespace.items()
-        if key in cfg.settings and not key.startswith("_")
-    }
+    collisions = {key: value for key, value in namespace.items() if key in cfg.settings and not key.startswith("_")}
     # Guard the guard: if this file stopped defining any recognised setting, the
     # test would pass while checking nothing.
     assert "bind" in collisions, "expected gunicorn.conf.py to set at least `bind`"

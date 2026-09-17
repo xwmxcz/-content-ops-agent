@@ -19,6 +19,7 @@ Hard guards:
   - On any planner failure (bad JSON / empty / invariant violation) → fall back to
     the canonical 5-step researcher/strategy/writer/fact_checker/editor plan
 """
+
 from __future__ import annotations
 
 import json
@@ -153,9 +154,7 @@ class DynamicPipeline:
                 reason="exception",
                 error_class=exc.__class__.__name__,
             )
-            metrics.planner_plans_parsed_total.labels(
-                source="text_json", mode="fallback"
-            ).inc()
+            metrics.planner_plans_parsed_total.labels(source="text_json", mode="fallback").inc()
             plan = self._default_plan(request)
         else:
             self._record_plan_outcome(
@@ -195,9 +194,15 @@ class DynamicPipeline:
                 break
 
             step.status = "running"
-            await self._emit(run_id, "step_start", {
-                "index": step.index, "agent_id": step.agent_id, "description": step.description,
-            })
+            await self._emit(
+                run_id,
+                "step_start",
+                {
+                    "index": step.index,
+                    "agent_id": step.agent_id,
+                    "description": step.description,
+                },
+            )
 
             spec = SUB_AGENTS.get(step.agent_id)
             user_prompt = self._build_step_prompt(step, plan, outputs, request, research_tools)
@@ -211,17 +216,21 @@ class DynamicPipeline:
                 async def token_sink(delta: str, _idx=step.index):
                     await self._emit(run_id, "step_token", {"index": _idx, "delta": delta})
 
-                async def tool_sink(event_type: str, payload: dict[str, Any], _idx=step.index, _events=step_tool_events):
+                async def tool_sink(
+                    event_type: str, payload: dict[str, Any], _idx=step.index, _events=step_tool_events
+                ):
                     enriched = {"index": _idx, **payload}
                     if event_type == "tool_call_result":
-                        _events.append({
-                            "name": payload.get("name", ""),
-                            "args": payload.get("args") or {},
-                            "status": payload.get("status", "completed"),
-                            "preview": payload.get("preview", ""),
-                            "error": payload.get("error"),
-                            "duration_ms": payload.get("duration_ms", 0),
-                        })
+                        _events.append(
+                            {
+                                "name": payload.get("name", ""),
+                                "args": payload.get("args") or {},
+                                "status": payload.get("status", "completed"),
+                                "preview": payload.get("preview", ""),
+                                "error": payload.get("error"),
+                                "duration_ms": payload.get("duration_ms", 0),
+                            }
+                        )
                     await self._emit(run_id, event_type, enriched)
 
                 text, p_tok, c_tok, _, _ = await self.runner.run(
@@ -249,16 +258,20 @@ class DynamicPipeline:
                 total_completion += c_tok
                 total_cost += cost
 
-                await self._emit(run_id, "step_complete", {
-                    "index": step.index,
-                    "agent_id": step.agent_id,
-                    "output": text,
-                    "duration_ms": duration,
-                    "prompt_tokens": p_tok,
-                    "completion_tokens": c_tok,
-                    "cost_estimate": cost,
-                    "tool_events": step_tool_events,
-                })
+                await self._emit(
+                    run_id,
+                    "step_complete",
+                    {
+                        "index": step.index,
+                        "agent_id": step.agent_id,
+                        "output": text,
+                        "duration_ms": duration,
+                        "prompt_tokens": p_tok,
+                        "completion_tokens": c_tok,
+                        "cost_estimate": cost,
+                        "tool_events": step_tool_events,
+                    },
+                )
             except LLMConfigurationError:
                 raise
             except Exception as exc:  # noqa: BLE001 -- sub-agent boundary; surfaced as step_failed event
@@ -266,15 +279,17 @@ class DynamicPipeline:
                 duration = int((time.perf_counter() - started) * 1000)
                 step.status = "failed"
                 step.duration_ms = duration
-                await self._emit(run_id, "step_failed", {
-                    "index": step.index,
-                    "agent_id": step.agent_id,
-                    "error": str(exc) or exc.__class__.__name__,
-                })
+                await self._emit(
+                    run_id,
+                    "step_failed",
+                    {
+                        "index": step.index,
+                        "agent_id": step.agent_id,
+                        "error": str(exc) or exc.__class__.__name__,
+                    },
+                )
 
-            should_revise = revisions < MAX_REVISIONS and (
-                step.agent_id == "reviewer" or not success
-            )
+            should_revise = revisions < MAX_REVISIONS and (step.agent_id == "reviewer" or not success)
             if should_revise:
                 try:
                     revised = await self._maybe_revise_plan(plan, outputs, request, provider, request.model)
@@ -290,10 +305,14 @@ class DynamicPipeline:
                 if revised is not None:
                     plan = revised
                     revisions += 1
-                    await self._emit(run_id, "plan_revised", {
-                        "plan": [s.model_dump() for s in plan],
-                        "revision": revisions,
-                    })
+                    await self._emit(
+                        run_id,
+                        "plan_revised",
+                        {
+                            "plan": [s.model_dump() for s in plan],
+                            "revision": revisions,
+                        },
+                    )
                     i = next(
                         (idx for idx, s in enumerate(plan) if s.status == "pending"),
                         len(plan),
@@ -494,9 +513,7 @@ class DynamicPipeline:
                     provider=provider,
                     error_class=exc.__class__.__name__,
                 )
-                metrics.planner_structured_output_unsupported_total.labels(
-                    provider=provider
-                ).inc()
+                metrics.planner_structured_output_unsupported_total.labels(provider=provider).inc()
 
         raw = await self.llm.generate_from_prompts(
             provider=provider,
@@ -537,9 +554,7 @@ class DynamicPipeline:
         interpretable against the total, and `mode="strict"` is the baseline that
         makes a rise in `repaired`/`fallback` legible.
         """
-        metrics.planner_plans_parsed_total.labels(
-            source=outcome.source, mode=outcome.mode
-        ).inc()
+        metrics.planner_plans_parsed_total.labels(source=outcome.source, mode=outcome.mode).inc()
         for pass_name in outcome.applied_passes:
             metrics.planner_repair_passes_total.labels(pass_name=pass_name).inc()
         for invariant in outcome.violations:
@@ -645,9 +660,7 @@ class DynamicPipeline:
                 violations=list(violations),
             )
             for violation in violations:
-                metrics.planner_revisions_rejected_total.labels(
-                    reason=violation.split(":", 1)[0]
-                ).inc()
+                metrics.planner_revisions_rejected_total.labels(reason=violation.split(":", 1)[0]).inc()
             return None
 
         # Carry completed results forward. Safe now that identity is confirmed
@@ -681,26 +694,41 @@ class DynamicPipeline:
         research_instruction = self._default_research_instruction(request)
         fact_check_instruction = self._default_fact_check_instruction(request)
         return [
-            PipelinePlanStep(index=1, agent_id="researcher",
-                             description="Gather context from the enabled research sources",
-                             instruction=research_instruction,
-                             inputs_from=[]),
-            PipelinePlanStep(index=2, agent_id="strategy",
-                             description="Plan audience, angle, and structure grounded in research",
-                             instruction="Use the researcher's findings to design the strategy.",
-                             inputs_from=[1]),
-            PipelinePlanStep(index=3, agent_id="writer",
-                             description="Write the first draft",
-                             instruction="Use the strategy and research findings. Cite sources where the researcher provided URLs.",
-                             inputs_from=[1, 2]),
-            PipelinePlanStep(index=4, agent_id="fact_checker",
-                             description="Verify factual claims in the draft",
-                             instruction=fact_check_instruction,
-                             inputs_from=[3]),
-            PipelinePlanStep(index=5, agent_id="editor",
-                             description="Polish the draft and incorporate fact-check findings",
-                             instruction="Polish for clarity and platform fit. If the fact_checker flagged unverified claims, soften or remove them.",
-                             inputs_from=[3, 4]),
+            PipelinePlanStep(
+                index=1,
+                agent_id="researcher",
+                description="Gather context from the enabled research sources",
+                instruction=research_instruction,
+                inputs_from=[],
+            ),
+            PipelinePlanStep(
+                index=2,
+                agent_id="strategy",
+                description="Plan audience, angle, and structure grounded in research",
+                instruction="Use the researcher's findings to design the strategy.",
+                inputs_from=[1],
+            ),
+            PipelinePlanStep(
+                index=3,
+                agent_id="writer",
+                description="Write the first draft",
+                instruction="Use the strategy and research findings. Cite sources where the researcher provided URLs.",
+                inputs_from=[1, 2],
+            ),
+            PipelinePlanStep(
+                index=4,
+                agent_id="fact_checker",
+                description="Verify factual claims in the draft",
+                instruction=fact_check_instruction,
+                inputs_from=[3],
+            ),
+            PipelinePlanStep(
+                index=5,
+                agent_id="editor",
+                description="Polish the draft and incorporate fact-check findings",
+                instruction="Polish for clarity and platform fit. If the fact_checker flagged unverified claims, soften or remove them.",
+                inputs_from=[3, 4],
+            ),
         ]
 
     # -- step prompt builder ----------------------------------------------
@@ -746,9 +774,7 @@ class DynamicPipeline:
                 "Research the topic using only the internal content library tools "
                 "(search_history, view_content, list_recent_contents). Summarize findings as 5-8 bullet points."
             )
-        return (
-            "Research the topic using only web_search. Summarize findings as 5-8 bullet points."
-        )
+        return "Research the topic using only web_search. Summarize findings as 5-8 bullet points."
 
     @staticmethod
     def _default_fact_check_instruction(request: PipelineRunRequest) -> str:

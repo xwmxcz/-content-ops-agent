@@ -1,4 +1,5 @@
 """Exercise real account/session HTTP contracts against disposable PostgreSQL."""
+
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
@@ -30,8 +31,9 @@ def bearer(session):
 def make_run(session, run_id="run_auth"):
     owned = get_system_store().for_user(session["user"]["id"])
     owned.create_run(run_id, "private", "blog", "casual")
-    owned.transition_run_and_append_event(run_id, expected_statuses={"running"},
-                                         new_status="completed", event_type="run_complete", payload={"ok": True})
+    owned.transition_run_and_append_event(
+        run_id, expected_statuses={"running"}, new_status="completed", event_type="run_complete", payload={"ok": True}
+    )
     return f"/api/agent/runs/{run_id}/stream"
 
 
@@ -51,7 +53,8 @@ def test_registration_normalizes_username_hashes_password_and_logs_in(store):
         assert created["expires_at"] > datetime.now(timezone.utc).timestamp()
         assert client.get("/api/content", headers=bearer(created)).json() == []
         assert client.get("/api/auth/status", headers=bearer(created)).json() == {
-            "authenticated": True, "user": created["user"],
+            "authenticated": True,
+            "user": created["user"],
         }
         with get_system_store()._get_session() as db:
             user = db.get(User, created["user"]["id"])
@@ -75,21 +78,25 @@ def test_simultaneous_registration_has_one_winner(store):
     def attempt(_):
         with TestClient(app) as client:
             return client.post("/api/auth/register", json={"username": "race_user", "password": PASSWORD}).status_code
+
     with ThreadPoolExecutor(max_workers=2) as executor:
         assert sorted(executor.map(attempt, range(2))) == [201, 409]
 
 
-@pytest.mark.parametrize("payload", [
-    {"username": "ab", "password": PASSWORD},
-    {"username": "a" * 33, "password": PASSWORD},
-    {"username": "contains space", "password": PASSWORD},
-    {"username": "../outside", "password": PASSWORD},
-    {"username": "valid_user", "password": "short"},
-    {"username": "valid_user", "password": "x" * 129},
-    {"username": "valid_user", "password": " " * 12},
-    {"username": "valid_user", "password": "x" * 12 + "\x00"},
-    {"username": "valid_user", "password": PASSWORD, "user_id": "a" * 32},
-])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"username": "ab", "password": PASSWORD},
+        {"username": "a" * 33, "password": PASSWORD},
+        {"username": "contains space", "password": PASSWORD},
+        {"username": "../outside", "password": PASSWORD},
+        {"username": "valid_user", "password": "short"},
+        {"username": "valid_user", "password": "x" * 129},
+        {"username": "valid_user", "password": " " * 12},
+        {"username": "valid_user", "password": "x" * 12 + "\x00"},
+        {"username": "valid_user", "password": PASSWORD, "user_id": "a" * 32},
+    ],
+)
 def test_invalid_registration_inputs_fail_before_creating_accounts(store, payload):
     with TestClient(app) as client:
         assert client.post("/api/auth/register", json=payload).status_code == 422
@@ -130,7 +137,10 @@ def test_migrated_legacy_workspace_is_not_claimed_by_registration(store):
     with TestClient(app) as client:
         collision = client.post("/api/auth/register", json={"username": "__legacy_workspace__", "password": PASSWORD})
         assert collision.status_code == 409
-        assert client.post("/api/auth/login", json={"username": "__legacy_workspace__", "password": PASSWORD}).status_code == 401
+        assert (
+            client.post("/api/auth/login", json={"username": "__legacy_workspace__", "password": PASSWORD}).status_code
+            == 401
+        )
         created = register(client, "first_public_user")
         assert created["user"]["id"] != LEGACY_USER_ID
         assert client.get("/api/content", headers=bearer(created)).json() == []
@@ -143,8 +153,11 @@ def test_authentication_rate_limits_are_enforced_in_database(store, route, limit
         for index in range(limit):
             response = client.post(f"/api/auth/{route}", json={"username": f"attempt_{index}", "password": PASSWORD})
             assert response.status_code == (201 if route == "register" else 401)
-        response = client.post(f"/api/auth/{route}", json={"username": "overflow", "password": PASSWORD},
-                               headers={"X-Forwarded-For": "different-peer"})
+        response = client.post(
+            f"/api/auth/{route}",
+            json={"username": "overflow", "password": PASSWORD},
+            headers={"X-Forwarded-For": "different-peer"},
+        )
         assert response.status_code == 429
         assert response.headers["retry-after"] == "60"
 
@@ -213,7 +226,13 @@ def test_cross_account_session_substitution_and_old_admin_tokens_are_rejected(st
         forged, _ = create_access_token(first["user"]["id"], other_session_id)
         assert client.get("/api/content", headers={"Authorization": f"Bearer {forged}"}).status_code == 401
         header = base64.urlsafe_b64encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode()).decode().rstrip("=")
-        payload = base64.urlsafe_b64encode(json.dumps({"sub": "admin", "iat": int(time.time()), "exp": int(time.time()) + 600}).encode()).decode().rstrip("=")
+        payload = (
+            base64.urlsafe_b64encode(
+                json.dumps({"sub": "admin", "iat": int(time.time()), "exp": int(time.time()) + 600}).encode()
+            )
+            .decode()
+            .rstrip("=")
+        )
         message = f"{header}.{payload}"
         digest = hmac.new(config.AUTH_SECRET_KEY.encode(), message.encode(), hashlib.sha256).digest()
         legacy = message + "." + base64.urlsafe_b64encode(digest).decode().rstrip("=")

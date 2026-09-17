@@ -143,7 +143,9 @@ class PublishService:
                 external_request_id=publication_request_id(publication_id),
             )
             response_data = tool_response.get("data")
-            response_payload = response_data if isinstance(response_data, dict) else {"text": tool_response.get("text", "")}
+            response_payload = (
+                response_data if isinstance(response_data, dict) else {"text": tool_response.get("text", "")}
+            )
             final_status = "scheduled" if request_payload.get("scheduled_at") else "completed"
             published_at = None if final_status == "scheduled" else datetime.now()
             external_post_id = self._extract_external_post_id(response_payload, tool_response.get("text", ""))
@@ -168,9 +170,13 @@ class PublishService:
             metrics.publication_requests_total.labels(platform=platform, status=final_status).inc()
             metrics.publication_duration_seconds.labels(platform=platform).observe(duration)
             log_event(
-                logger, "publication_completed", level=logging.INFO,
-                publication_id=publication_id, platform=platform,
-                status=final_status, duration_seconds=duration
+                logger,
+                "publication_completed",
+                level=logging.INFO,
+                publication_id=publication_id,
+                platform=platform,
+                status=final_status,
+                duration_seconds=duration,
             )
 
             return updated or publication
@@ -182,13 +188,19 @@ class PublishService:
             metrics.publication_requests_total.labels(platform=platform, status="failed").inc()
             metrics.publication_duration_seconds.labels(platform=platform).observe(duration)
             log_event(
-                logger, "publication_failed", level=logging.ERROR,
-                publication_id=publication_id, platform=platform,
-                error=str(exc), duration_seconds=duration
+                logger,
+                "publication_failed",
+                level=logging.ERROR,
+                publication_id=publication_id,
+                platform=platform,
+                error=str(exc),
+                duration_seconds=duration,
             )
             raise
 
-    def _select_media_assets(self, content_id: int, publish_type: str, media_ids: list[int] | None) -> list[dict[str, Any]]:
+    def _select_media_assets(
+        self, content_id: int, publish_type: str, media_ids: list[int] | None
+    ) -> list[dict[str, Any]]:
         expected_type = "image" if publish_type == "image_post" else "video"
         assets = self.store.list_media_assets(content_id, media_type=expected_type)
         if media_ids:

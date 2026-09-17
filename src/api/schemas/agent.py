@@ -231,6 +231,7 @@ SubAgentId = Literal["strategy", "writer", "editor", "reviewer", "researcher", "
 
 class SubAgentToolEvent(BaseModel):
     """One tool invocation made by a sub-agent during its step."""
+
     name: str
     args: dict[str, Any] = Field(default_factory=dict)
     status: Literal["started", "completed", "failed"] = "completed"
@@ -290,6 +291,7 @@ class PipelineRunResponse(BaseModel):
 
 class PipelineRunHandle(BaseModel):
     """Returned immediately from POST /api/agent/runs so the client can subscribe to SSE."""
+
     run_id: str
     thread_id: str
     provider: str

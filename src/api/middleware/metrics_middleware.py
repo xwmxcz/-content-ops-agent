@@ -1,4 +1,5 @@
 """HTTP request metrics middleware for Prometheus."""
+
 import time
 from collections.abc import Callable
 
@@ -26,21 +27,13 @@ class MetricsMiddleware(BaseHTTPMiddleware):
 
             # Track metrics
             duration = time.time() - start_time
-            metrics.http_requests_total.labels(
-                method=method, endpoint=endpoint, status=status
-            ).inc()
-            metrics.http_request_duration_seconds.labels(
-                method=method, endpoint=endpoint
-            ).observe(duration)
+            metrics.http_requests_total.labels(method=method, endpoint=endpoint, status=status).inc()
+            metrics.http_request_duration_seconds.labels(method=method, endpoint=endpoint).observe(duration)
 
             return response
         except Exception:
             # Track failed requests (500)
             duration = time.time() - start_time
-            metrics.http_requests_total.labels(
-                method=method, endpoint=endpoint, status=500
-            ).inc()
-            metrics.http_request_duration_seconds.labels(
-                method=method, endpoint=endpoint
-            ).observe(duration)
+            metrics.http_requests_total.labels(method=method, endpoint=endpoint, status=500).inc()
+            metrics.http_request_duration_seconds.labels(method=method, endpoint=endpoint).observe(duration)
             raise

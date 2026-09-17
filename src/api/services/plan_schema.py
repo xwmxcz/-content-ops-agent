@@ -36,6 +36,7 @@ researcher step here would override a decision the prompt delegates to the
 planner, so this module reports whether research is present and leaves the
 judgement to the caller.
 """
+
 from __future__ import annotations
 
 import json
@@ -476,8 +477,7 @@ def _repair_coerce_steps(raw: str, payload: Any) -> list[dict[str, Any]] | None:
         refs = [
             int(ref)
             for ref in (entry.get("inputs_from") or [])
-            if (isinstance(ref, int) and not isinstance(ref, bool))
-            or (isinstance(ref, str) and ref.isdigit())
+            if (isinstance(ref, int) and not isinstance(ref, bool)) or (isinstance(ref, str) and ref.isdigit())
         ]
         description = str(entry.get("description") or "").strip() or f"{agent_id} step"
         instruction = str(entry.get("instruction") or "").strip()
@@ -500,11 +500,7 @@ def _repair_coerce_steps(raw: str, payload: Any) -> list[dict[str, Any]] | None:
     for entry in coerced:
         new_index = old_to_new[entry["index"]]
         entry["inputs_from"] = sorted(
-            {
-                old_to_new[ref]
-                for ref in entry["inputs_from"]
-                if ref in old_to_new and old_to_new[ref] < new_index
-            }
+            {old_to_new[ref] for ref in entry["inputs_from"] if ref in old_to_new and old_to_new[ref] < new_index}
         )
         entry["index"] = new_index
     return coerced
@@ -540,9 +536,7 @@ def _repair_enforce_structure(raw: str, payload: Any) -> list[dict[str, Any]] | 
             "agent_id": "writer",
             "description": "Compose the final draft using prior outputs.",
             "instruction": "Write the final draft based on the strategy and any reviewer notes above.",
-            "inputs_from": [
-                int(entry["index"]) for entry in steps_payload if isinstance(entry.get("index"), int)
-            ],
+            "inputs_from": [int(entry["index"]) for entry in steps_payload if isinstance(entry.get("index"), int)],
         }
     )
     return appended

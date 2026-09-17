@@ -4,6 +4,7 @@ Defines the abstract base class; the default implementation lives in
 `context_compressor.py`. Engines are stateless w.r.t. the agent and operate
 on the in-memory `BaseMessage` list passed each turn.
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

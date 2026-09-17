@@ -14,6 +14,7 @@ Usage:
     python -m src.jobs.reaper --execute
     python -m src.jobs.reaper --execute --loop
 """
+
 from __future__ import annotations
 
 import argparse

@@ -3,6 +3,7 @@
 Categorizes exceptions into transient (retriable) vs permanent (non-retriable) errors
 to enable smart automatic retries with exponential backoff.
 """
+
 from __future__ import annotations
 
 import httpx
@@ -73,7 +74,9 @@ class ErrorClassifier:
             return cls.TRANSIENT
         if "timeout" in exc_message or "timed out" in exc_message:
             return cls.TRANSIENT
-        if "connection" in exc_message and ("refused" in exc_message or "reset" in exc_message or "closed" in exc_message):
+        if "connection" in exc_message and (
+            "refused" in exc_message or "reset" in exc_message or "closed" in exc_message
+        ):
             return cls.TRANSIENT
 
         # LLM generation errors: inspect message for clues

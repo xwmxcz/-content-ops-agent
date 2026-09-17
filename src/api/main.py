@@ -1,4 +1,5 @@
 """FastAPI app for the modern Content Ops Agent backend."""
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -41,6 +42,7 @@ app = FastAPI(
 @app.exception_handler(TenantAccessError)
 async def workspace_access_error(request, exc):
     return JSONResponse(status_code=404, content={"detail": "Resource not found"})
+
 
 app.add_middleware(AuthMiddleware)
 app.add_middleware(RequestContextMiddleware)

@@ -31,11 +31,15 @@ def authenticated_fixture_user(monkeypatch, request):
     # Account/permission tests opt out and use real database sessions.
     from src.api import security
 
-    monkeypatch.setattr(security, "authenticate_request", lambda request: {
-        "id": "11111111111111111111111111111111",
-        "username": "fixture_user",
-        "session_id": "22222222222222222222222222222222",
-    })
+    monkeypatch.setattr(
+        security,
+        "authenticate_request",
+        lambda request: {
+            "id": "11111111111111111111111111111111",
+            "username": "fixture_user",
+            "session_id": "22222222222222222222222222222222",
+        },
+    )
 
 
 @pytest.fixture(scope="session")
@@ -71,7 +75,9 @@ def store(pg_engine, monkeypatch):
     _file_memory_for.cache_clear()
     system = ContentStore(database_url=TEST_DATABASE_URL, initialize_schema=False)
     with system._get_session() as session:
-        session.add(User(id="11111111111111111111111111111111", username="fixture_user", password_hash="!", is_active=True))
+        session.add(
+            User(id="11111111111111111111111111111111", username="fixture_user", password_hash="!", is_active=True)
+        )
         session.commit()
     s = system.for_user("11111111111111111111111111111111")
     try:

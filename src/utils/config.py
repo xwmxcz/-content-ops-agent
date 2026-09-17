@@ -67,9 +67,7 @@ class Config:
     # Ask the provider for JSON directly where it is supported. Kept switchable
     # because a gateway can advertise JSON mode and still reject the parameter,
     # which would otherwise fail every planner call behind that gateway.
-    PLANNER_STRUCTURED_OUTPUT_ENABLED = (
-        os.getenv("PLANNER_STRUCTURED_OUTPUT_ENABLED", "true").lower() == "true"
-    )
+    PLANNER_STRUCTURED_OUTPUT_ENABLED = os.getenv("PLANNER_STRUCTURED_OUTPUT_ENABLED", "true").lower() == "true"
 
     # PostgreSQL accounts own credentials; this key signs every user session.
     AUTH_SECRET_KEY = os.getenv("AUTH_SECRET_KEY", "")
@@ -154,30 +152,19 @@ class Config:
     API_HOST = os.getenv("API_HOST", "0.0.0.0")
     API_PORT = int(os.getenv("API_PORT", "8000"))
     API_RELOAD = os.getenv("API_RELOAD", "False").lower() == "true"
-    ENFORCE_HTTPS = os.getenv(
-        "ENFORCE_HTTPS", "true" if APP_ENV == "production" else "false"
-    ).lower() == "true"
+    ENFORCE_HTTPS = os.getenv("ENFORCE_HTTPS", "true" if APP_ENV == "production" else "false").lower() == "true"
     CORS_ORIGINS = [
-        origin.strip()
-        for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
-        if origin.strip()
+        origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",") if origin.strip()
     ]
     # X-Forwarded-Proto is accepted only from these explicitly configured
     # proxy source networks. Empty by default: direct entrypoints cannot trust a
     # client-supplied forwarding header. Compose sets its private bridge range.
-    TRUSTED_PROXY_CIDRS = [
-        value.strip()
-        for value in os.getenv("TRUSTED_PROXY_CIDRS", "").split(",")
-        if value.strip()
-    ]
+    TRUSTED_PROXY_CIDRS = [value.strip() for value in os.getenv("TRUSTED_PROXY_CIDRS", "").split(",") if value.strip()]
 
     @classmethod
     def validate_runtime(cls) -> bool:
         """Validate process-wide deployment settings before serving work."""
-        removed = [
-            name for name in ("AUTH_ENABLED", "AUTH_USERNAME", "AUTH_PASSWORD")
-            if name in os.environ
-        ]
+        removed = [name for name in ("AUTH_ENABLED", "AUTH_USERNAME", "AUTH_PASSWORD") if name in os.environ]
         if removed:
             raise ValueError(
                 "Authentication configuration migration required: remove "
@@ -229,9 +216,7 @@ class Config:
         redis_password = _url_password(cls.REDIS_URL) if cls.JOB_QUEUE_MODE == "rq" else None
         if _url_uses_weak_secret(cls.DATABASE_URL, {"content_ops", "postgres", "password"}):
             errors.append("production DATABASE_URL must include a high-entropy password of at least 16 characters")
-        if cls.JOB_QUEUE_MODE == "rq" and _url_uses_weak_secret(
-            cls.REDIS_URL, {"content_ops", "redis", "password"}
-        ):
+        if cls.JOB_QUEUE_MODE == "rq" and _url_uses_weak_secret(cls.REDIS_URL, {"content_ops", "redis", "password"}):
             errors.append("production REDIS_URL must include a high-entropy password of at least 16 characters")
         secrets = [cls.AUTH_SECRET_KEY, database_password, redis_password]
         normalized = [secret for secret in secrets if secret]
@@ -423,9 +408,7 @@ def _url_password(value: str) -> str | None:
 
 def _url_uses_weak_secret(value: str, examples: set[str]) -> bool:
     password = _url_password(value)
-    return _is_unsafe_secret(password, minimum=16, minimum_unique=10) or bool(
-        password and password.lower() in examples
-    )
+    return _is_unsafe_secret(password, minimum=16, minimum_unique=10) or bool(password and password.lower() in examples)
 
 
 config = Config()

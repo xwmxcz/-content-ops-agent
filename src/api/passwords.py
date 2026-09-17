@@ -1,4 +1,5 @@
 """Own password hashing and credential validation for registration and migration."""
+
 from __future__ import annotations
 
 import re

@@ -55,10 +55,7 @@ def provider_display_name(provider: str) -> str:
 
 
 def fallback_models(provider: str) -> list[ModelInfo]:
-    return [
-        ModelInfo(id=model_id, name=name)
-        for model_id, name in PROVIDER_MODELS.get(provider, [])
-    ]
+    return [ModelInfo(id=model_id, name=name) for model_id, name in PROVIDER_MODELS.get(provider, [])]
 
 
 async def fetch_siliconflow_models() -> list[ModelInfo] | None:

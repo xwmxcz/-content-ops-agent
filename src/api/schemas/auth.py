@@ -1,4 +1,5 @@
 """Public account API shapes; credential rules are owned by passwords.py."""
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src.api.passwords import normalize_username, validate_password

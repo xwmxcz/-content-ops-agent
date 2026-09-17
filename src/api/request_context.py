@@ -1,4 +1,5 @@
 """Request correlation middleware for structured operational logs."""
+
 from __future__ import annotations
 
 import logging

@@ -1,4 +1,5 @@
 """Explicitly claim pre-account data; public registration never adopts legacy records."""
+
 from __future__ import annotations
 
 import argparse

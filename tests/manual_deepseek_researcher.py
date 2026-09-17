@@ -12,6 +12,7 @@ Run:
 Creates/reuses the manual_researcher account only in TEST_DATABASE_URL and runs
 the researcher within that account's workspace; DATABASE_URL is never a fallback.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -51,7 +52,8 @@ async def main() -> int:
     system_store = ContentStore(database_url=test_db_url)
     accounts = AccountStore(system_store)
     user = accounts.get_user_by_username("manual_researcher") or accounts.create_user(
-        "manual_researcher", hash_password("Manual-researcher-test-only-2026"),
+        "manual_researcher",
+        hash_password("Manual-researcher-test-only-2026"),
     )
     store = system_store.for_user(user["id"])
     runner = SubAgentRunner(store=store)
@@ -77,9 +79,7 @@ async def main() -> int:
             tool_sink=tool_sink,
         )
 
-    extra_body_warns = [
-        w for w in caught if "extra_body" in str(w.message)
-    ]
+    extra_body_warns = [w for w in caught if "extra_body" in str(w.message)]
 
     print("=" * 60)
     print(f"provider={provider} model={model}")

@@ -4,6 +4,7 @@ TenantSession owns workspace filtering and write validation. Stores returned by
 for_user share the engine, not mutable request identity; existing databases are
 upgraded only by Alembic.
 """
+
 import json
 import logging
 import re
@@ -70,6 +71,7 @@ class AuthRateLimit(Base):
 
 class Content(OwnedMixin, Base):
     """内容记录表"""
+
     __tablename__ = "contents"
 
     id = Column(Integer, primary_key=True)
@@ -97,6 +99,7 @@ Index("ix_contents_content_type", Content.content_type)
 
 class CalendarEvent(OwnedMixin, Base):
     """内容日历表"""
+
     __tablename__ = "calendar_events"
 
     id = Column(Integer, primary_key=True)
@@ -113,6 +116,7 @@ Index("ix_calendar_events_scheduled_date", CalendarEvent.scheduled_date)
 
 class ContentMetrics(OwnedMixin, Base):
     """内容效果表"""
+
     __tablename__ = "content_metrics"
 
     id = Column(Integer, primary_key=True)
@@ -263,9 +267,7 @@ class RunStep(OwnedMixin, Base):
     """
 
     __tablename__ = "run_steps"
-    __table_args__ = (
-        UniqueConstraint("run_id", "step_index", name="uq_run_steps_run_index"),
-    )
+    __table_args__ = (UniqueConstraint("run_id", "step_index", name="uq_run_steps_run_index"),)
 
     id = Column(Integer, primary_key=True)
     run_id = Column(String(80), nullable=False)
@@ -312,9 +314,7 @@ class AgentRunEvent(OwnedMixin, Base):
     """Append-only event log for a pipeline run; SSE bridge reads this table."""
 
     __tablename__ = "agent_run_events"
-    __table_args__ = (
-        UniqueConstraint("run_id", "seq", name="uq_agent_run_events_run_seq"),
-    )
+    __table_args__ = (UniqueConstraint("run_id", "seq", name="uq_agent_run_events_run_seq"),)
 
     id = Column(Integer, primary_key=True)
     run_id = Column(String(80), ForeignKey("agent_runs.id"), nullable=False)
@@ -453,7 +453,9 @@ class ContentStore:
         scoped.database_url = self.database_url
         scoped.engine = self.engine
         scoped.SessionLocal = sessionmaker(
-            bind=self.engine, class_=TenantSession, info={"user_id": user_id},
+            bind=self.engine,
+            class_=TenantSession,
+            info={"user_id": user_id},
         )
         scoped._user_id = user_id
         return scoped
@@ -579,10 +581,7 @@ class ContentStore:
         session = self._get_session()
         try:
             event = CalendarEvent(
-                content_id=content_id,
-                platform=platform,
-                scheduled_date=scheduled_date,
-                status="planned"
+                content_id=content_id, platform=platform, scheduled_date=scheduled_date, status="planned"
             )
             session.add(event)
             session.commit()
@@ -596,9 +595,7 @@ class ContentStore:
     def get_calendar_events(self, start_date=None, end_date=None) -> list[dict[str, Any]]:
         session = self._get_session()
         try:
-            query = session.query(CalendarEvent, Content).join(
-                Content, CalendarEvent.content_id == Content.id
-            )
+            query = session.query(CalendarEvent, Content).join(Content, CalendarEvent.content_id == Content.id)
             if start_date:
                 query = query.filter(CalendarEvent.scheduled_date >= start_date)
             if end_date:
@@ -627,18 +624,14 @@ class ContentStore:
             by_type = {
                 content_type: count
                 for content_type, count in (
-                    session.query(Content.content_type, func.count(Content.id))
-                    .group_by(Content.content_type)
-                    .all()
+                    session.query(Content.content_type, func.count(Content.id)).group_by(Content.content_type).all()
                 )
                 if content_type
             }
             by_status = {
                 status: count
                 for status, count in (
-                    session.query(Content.status, func.count(Content.id))
-                    .group_by(Content.status)
-                    .all()
+                    session.query(Content.status, func.count(Content.id)).group_by(Content.status).all()
                 )
                 if status
             }
@@ -670,15 +663,15 @@ class ContentStore:
             contents = session.query(Content).filter(Content.created_at >= cutoff).all()
             if not contents:
                 return {
-                    "window_days": days, "total_contents": 0, "total_with_metrics": 0,
-                    "by_type": [], "by_style": [], "top_performers": [],
+                    "window_days": days,
+                    "total_contents": 0,
+                    "total_with_metrics": 0,
+                    "by_type": [],
+                    "by_style": [],
+                    "top_performers": [],
                 }
             content_ids = [c.id for c in contents]
-            metrics_rows = (
-                session.query(ContentMetrics)
-                .filter(ContentMetrics.content_id.in_(content_ids))
-                .all()
-            )
+            metrics_rows = session.query(ContentMetrics).filter(ContentMetrics.content_id.in_(content_ids)).all()
             metrics_by_content: dict[int, ContentMetrics] = {}
             for m in metrics_rows:
                 # If multiple metric rows exist per content, keep the one with highest views.
@@ -701,8 +694,15 @@ class ContentStore:
                 ):
                     bucket = store_dict.setdefault(
                         bucket_key,
-                        {"count": 0, "with_metrics": 0, "views": 0, "likes": 0,
-                         "comments": 0, "shares": 0, "engagement_rates": []},
+                        {
+                            "count": 0,
+                            "with_metrics": 0,
+                            "views": 0,
+                            "likes": 0,
+                            "comments": 0,
+                            "shares": 0,
+                            "engagement_rates": [],
+                        },
                     )
                     bucket["count"] += 1
                     if m is not None:
@@ -717,18 +717,21 @@ class ContentStore:
                 out = []
                 for k, b in buckets.items():
                     n = max(1, b["with_metrics"])
-                    out.append({
-                        key_name: k,
-                        "count": b["count"],
-                        "with_metrics": b["with_metrics"],
-                        "avg_views": round(b["views"] / n) if b["with_metrics"] else 0,
-                        "avg_likes": round(b["likes"] / n) if b["with_metrics"] else 0,
-                        "avg_comments": round(b["comments"] / n) if b["with_metrics"] else 0,
-                        "avg_engagement_rate": (
-                            round(sum(b["engagement_rates"]) / len(b["engagement_rates"]), 4)
-                            if b["engagement_rates"] else 0.0
-                        ),
-                    })
+                    out.append(
+                        {
+                            key_name: k,
+                            "count": b["count"],
+                            "with_metrics": b["with_metrics"],
+                            "avg_views": round(b["views"] / n) if b["with_metrics"] else 0,
+                            "avg_likes": round(b["likes"] / n) if b["with_metrics"] else 0,
+                            "avg_comments": round(b["comments"] / n) if b["with_metrics"] else 0,
+                            "avg_engagement_rate": (
+                                round(sum(b["engagement_rates"]) / len(b["engagement_rates"]), 4)
+                                if b["engagement_rates"]
+                                else 0.0
+                            ),
+                        }
+                    )
                 out.sort(key=lambda r: (r["with_metrics"] > 0, r["avg_engagement_rate"]), reverse=True)
                 return out
 
@@ -827,17 +830,19 @@ class ContentStore:
                 weak = [(c, m, r) for c, m, r in rates if r < avg_rate]
                 weak.sort(key=lambda x: x[2])
                 for c, m, r in weak[:limit]:
-                    results.append({
-                        "id": c.id,
-                        "title": c.title,
-                        "content_type": c.content_type,
-                        "style": c.style,
-                        "status": c.status,
-                        "views": m.views or 0,
-                        "engagement_rate": round(r, 4),
-                        "global_avg_rate": round(avg_rate, 4),
-                        "reason": f"engagement {round(r,4)} < cohort avg {round(avg_rate,4)}",
-                    })
+                    results.append(
+                        {
+                            "id": c.id,
+                            "title": c.title,
+                            "content_type": c.content_type,
+                            "style": c.style,
+                            "status": c.status,
+                            "views": m.views or 0,
+                            "engagement_rate": round(r, 4),
+                            "global_avg_rate": round(avg_rate, 4),
+                            "reason": f"engagement {round(r, 4)} < cohort avg {round(avg_rate, 4)}",
+                        }
+                    )
             elif criteria == "recent_drafts":
                 cutoff = now - timedelta(days=7)
                 rows = (
@@ -852,15 +857,17 @@ class ContentStore:
                 )
                 for c in rows:
                     age_days = max(0, (now - c.created_at).days) if c.created_at else 0
-                    results.append({
-                        "id": c.id,
-                        "title": c.title,
-                        "content_type": c.content_type,
-                        "style": c.style,
-                        "status": c.status,
-                        "age_days": age_days,
-                        "reason": f"recent {c.status}, {age_days}d old, not yet finalized",
-                    })
+                    results.append(
+                        {
+                            "id": c.id,
+                            "title": c.title,
+                            "content_type": c.content_type,
+                            "style": c.style,
+                            "status": c.status,
+                            "age_days": age_days,
+                            "reason": f"recent {c.status}, {age_days}d old, not yet finalized",
+                        }
+                    )
             elif criteria == "old_drafts":
                 cutoff = now - timedelta(days=14)
                 rows = (
@@ -872,15 +879,17 @@ class ContentStore:
                 )
                 for c in rows:
                     age_days = max(0, (now - c.created_at).days) if c.created_at else 0
-                    results.append({
-                        "id": c.id,
-                        "title": c.title,
-                        "content_type": c.content_type,
-                        "style": c.style,
-                        "status": c.status,
-                        "age_days": age_days,
-                        "reason": f"draft sitting {age_days}d, may need a decision",
-                    })
+                    results.append(
+                        {
+                            "id": c.id,
+                            "title": c.title,
+                            "content_type": c.content_type,
+                            "style": c.style,
+                            "status": c.status,
+                            "age_days": age_days,
+                            "reason": f"draft sitting {age_days}d, may need a decision",
+                        }
+                    )
             return results
         finally:
             session.close()
@@ -923,12 +932,16 @@ class ContentStore:
                 {Content.parent_id: None},
                 synchronize_session=False,
             )
-            session.query(CalendarEvent).filter(CalendarEvent.content_id == content_id).delete(synchronize_session=False)
-            session.query(ContentMetrics).filter(ContentMetrics.content_id == content_id).delete(synchronize_session=False)
+            session.query(CalendarEvent).filter(CalendarEvent.content_id == content_id).delete(
+                synchronize_session=False
+            )
+            session.query(ContentMetrics).filter(ContentMetrics.content_id == content_id).delete(
+                synchronize_session=False
+            )
             session.query(MediaAsset).filter(MediaAsset.content_id == content_id).delete(synchronize_session=False)
-            session.query(PlatformPublication).filter(
-                PlatformPublication.content_id == content_id
-            ).delete(synchronize_session=False)
+            session.query(PlatformPublication).filter(PlatformPublication.content_id == content_id).delete(
+                synchronize_session=False
+            )
             session.delete(content)
             session.commit()
             return deleted
@@ -1180,11 +1193,7 @@ class ContentStore:
         """Mark a queued/failed job as running without reviving a cancelled job."""
         session = self._get_session()
         try:
-            job = (
-                session.query(Job)
-                .filter(Job.id == job_id, Job.status.in_(["queued", "failed"]))
-                .first()
-            )
+            job = session.query(Job).filter(Job.id == job_id, Job.status.in_(["queued", "failed"])).first()
             if not job:
                 return None
             now = datetime.now()
@@ -1407,11 +1416,7 @@ class ContentStore:
         session = self._get_session()
         try:
             now = datetime.now()
-            step = (
-                session.query(RunStep)
-                .filter(RunStep.run_id == run_id, RunStep.step_index == step_index)
-                .first()
-            )
+            step = session.query(RunStep).filter(RunStep.run_id == run_id, RunStep.step_index == step_index).first()
             if step is None:
                 step = RunStep(
                     run_id=run_id,
@@ -1440,12 +1445,7 @@ class ContentStore:
         """All persisted steps for a run, ordered by step index."""
         session = self._get_session()
         try:
-            steps = (
-                session.query(RunStep)
-                .filter(RunStep.run_id == run_id)
-                .order_by(RunStep.step_index)
-                .all()
-            )
+            steps = session.query(RunStep).filter(RunStep.run_id == run_id).order_by(RunStep.step_index).all()
             return [self._run_step_to_dict(step) for step in steps]
         finally:
             session.close()
@@ -1453,11 +1453,7 @@ class ContentStore:
     def get_run_step_checkpoint(self, run_id: str, step_index: int) -> dict[str, Any] | None:
         session = self._get_session()
         try:
-            step = (
-                session.query(RunStep)
-                .filter(RunStep.run_id == run_id, RunStep.step_index == step_index)
-                .first()
-            )
+            step = session.query(RunStep).filter(RunStep.run_id == run_id, RunStep.step_index == step_index).first()
             return self._run_step_to_dict(step) if step else None
         finally:
             session.close()
@@ -1491,11 +1487,7 @@ class ContentStore:
         """Drop a run's checkpoints once its result is durable."""
         session = self._get_session()
         try:
-            deleted = (
-                session.query(RunStep)
-                .filter(RunStep.run_id == run_id)
-                .delete(synchronize_session=False)
-            )
+            deleted = session.query(RunStep).filter(RunStep.run_id == run_id).delete(synchronize_session=False)
             session.commit()
             return int(deleted)
         except Exception:
@@ -1593,9 +1585,7 @@ class ContentStore:
                 query = query.filter(AgentThread.archived.is_(False))
             if q and q.strip():
                 pattern = f"%{q.strip()}%"
-                query = query.filter(
-                    or_(AgentThread.title.ilike(pattern), AgentThread.id.ilike(pattern))
-                )
+                query = query.filter(or_(AgentThread.title.ilike(pattern), AgentThread.id.ilike(pattern)))
 
             query = (
                 query.group_by(AgentThread.id)
@@ -1808,10 +1798,7 @@ class ContentStore:
             session.commit()
             # P2-01: Track proposed capabilities
             metrics.capability_proposals_total.labels(tool=tool_name).inc()
-            log_capability_event(
-                logger, "proposed", action.id, tool_name,
-                thread_id=thread_id
-            )
+            log_capability_event(logger, "proposed", action.id, tool_name, thread_id=thread_id)
             return self._proposed_action_to_dict(action)
         except Exception:
             session.rollback()
@@ -1822,11 +1809,7 @@ class ContentStore:
     def get_proposed_action(self, action_id: str) -> dict[str, Any] | None:
         session = self._get_session()
         try:
-            action = (
-                session.query(ProposedAction)
-                .filter(ProposedAction.id == action_id)
-                .first()
-            )
+            action = session.query(ProposedAction).filter(ProposedAction.id == action_id).first()
             return self._proposed_action_to_dict(action) if action else None
         finally:
             session.close()
@@ -1843,11 +1826,7 @@ class ContentStore:
             query = session.query(ProposedAction).filter(ProposedAction.thread_id == thread_id)
             if statuses:
                 query = query.filter(ProposedAction.status.in_(tuple(statuses)))
-            rows = (
-                query.order_by(ProposedAction.created_at.desc(), ProposedAction.id.desc())
-                .limit(limit)
-                .all()
-            )
+            rows = query.order_by(ProposedAction.created_at.desc(), ProposedAction.id.desc()).limit(limit).all()
             return [self._proposed_action_to_dict(row) for row in rows]
         finally:
             session.close()
@@ -1867,19 +1846,14 @@ class ContentStore:
         """
         session = self._get_session()
         try:
-            query = (
-                session.query(ProposedAction)
-                .filter(
-                    ProposedAction.thread_id == thread_id,
-                    ProposedAction.status == "proposed",
-                    ProposedAction.expires_at > datetime.now(),
-                )
+            query = session.query(ProposedAction).filter(
+                ProposedAction.thread_id == thread_id,
+                ProposedAction.status == "proposed",
+                ProposedAction.expires_at > datetime.now(),
             )
             if tool_name:
                 query = query.filter(ProposedAction.tool_name == tool_name)
-            action = query.order_by(
-                ProposedAction.created_at.desc(), ProposedAction.id.desc()
-            ).first()
+            action = query.order_by(ProposedAction.created_at.desc(), ProposedAction.id.desc()).first()
             return self._proposed_action_to_dict(action) if action else None
         finally:
             session.close()
@@ -1950,10 +1924,7 @@ class ContentStore:
                 session.commit()
                 # P2-01: Track expired capabilities
                 metrics.capability_expired_total.labels(tool=action.tool_name).inc()
-                log_capability_event(
-                    logger, "expired", action_id, tool_name,
-                    expired=True
-                )
+                log_capability_event(logger, "expired", action_id, tool_name, expired=True)
                 return None
             if action.tool_name != tool_name or action.args_hash != args_hash(args):
                 # Leave the capability unconsumed: the mismatch is the model
@@ -1966,10 +1937,7 @@ class ContentStore:
             session.commit()
             # P2-01: Track consumed capabilities
             metrics.capability_consumed_total.labels(tool=tool_name).inc()
-            log_capability_event(
-                logger, "consumed", action_id, tool_name,
-                consumed=True
-            )
+            log_capability_event(logger, "consumed", action_id, tool_name, consumed=True)
             return self._proposed_action_to_dict(action)
         except Exception:
             session.rollback()
@@ -2012,9 +1980,7 @@ class ContentStore:
             )
             if thread_id:
                 query = query.filter(ProposedAction.thread_id == thread_id)
-            updated = query.update(
-                {ProposedAction.status: "expired"}, synchronize_session=False
-            )
+            updated = query.update({ProposedAction.status: "expired"}, synchronize_session=False)
             session.commit()
             return int(updated or 0)
         except Exception:
@@ -2100,10 +2066,7 @@ class ContentStore:
             else:
                 # P2-01: Metrics and logging
                 metrics.idempotency_requests_total.labels(scope=scope, outcome="claimed").inc()
-                log_idempotency_event(
-                    logger, "claimed", scope, key,
-                    record_id=record.id, args_hash=digest
-                )
+                log_idempotency_event(logger, "claimed", scope, key, record_id=record.id, args_hash=digest)
                 return {
                     "outcome": "claimed",
                     "record_id": record.id,
@@ -2125,9 +2088,7 @@ class ContentStore:
             )
             if existing is None:
                 # The row was deleted between the failed insert and this read.
-                raise DuplicateRequestInFlight(
-                    f"Idempotency key for {scope} could not be claimed; retry the request"
-                )
+                raise DuplicateRequestInFlight(f"Idempotency key for {scope} could not be claimed; retry the request")
             # Check args compatibility based on current status:
             # - failed: retryable with any args (previous attempt didn't succeed)
             # - completed/in_progress: args must match (can't change a success or in-flight request)
@@ -2136,20 +2097,14 @@ class ContentStore:
                 metrics.idempotency_conflicts_total.labels(scope=scope).inc()
                 metrics.idempotency_requests_total.labels(scope=scope, outcome="conflict").inc()
                 log_idempotency_event(
-                    logger, "conflict", scope, key,
-                    record_id=existing.id, args_hash=digest, conflict=True
+                    logger, "conflict", scope, key, record_id=existing.id, args_hash=digest, conflict=True
                 )
-                raise IdempotencyKeyConflict(
-                    f"Idempotency key was already used for {scope} with different arguments"
-                )
+                raise IdempotencyKeyConflict(f"Idempotency key was already used for {scope} with different arguments")
             if existing.status == "completed":
                 # P2-01: Metrics and logging
                 metrics.idempotency_requests_total.labels(scope=scope, outcome="replay").inc()
                 metrics.idempotency_replay_rate.labels(scope=scope).inc()
-                log_idempotency_event(
-                    logger, "replay", scope, key,
-                    record_id=existing.id, args_hash=existing.args_hash
-                )
+                log_idempotency_event(logger, "replay", scope, key, record_id=existing.id, args_hash=existing.args_hash)
                 return {
                     "outcome": "replay",
                     "record_id": existing.id,
@@ -2176,9 +2131,7 @@ class ContentStore:
                     "key": key,
                     "external_request_id": existing.external_request_id,
                 }
-            raise DuplicateRequestInFlight(
-                f"Another request is already processing this {scope} key"
-            )
+            raise DuplicateRequestInFlight(f"Another request is already processing this {scope} key")
         except Exception:
             session.rollback()
             raise
@@ -2210,10 +2163,7 @@ class ContentStore:
             record.completed_at = datetime.now()
             session.commit()
             # P2-01: Log completion
-            log_idempotency_event(
-                logger, "completed", record.scope, record.idempotency_key,
-                record_id=record.id
-            )
+            log_idempotency_event(logger, "completed", record.scope, record.idempotency_key, record_id=record.id)
             return True
         except Exception:
             session.rollback()
@@ -2244,10 +2194,7 @@ class ContentStore:
             record.completed_at = datetime.now()
             session.commit()
             # P2-01: Log failure
-            log_idempotency_event(
-                logger, "failed", record.scope, record.idempotency_key,
-                record_id=record.id
-            )
+            log_idempotency_event(logger, "failed", record.scope, record.idempotency_key, record_id=record.id)
             return True
         except Exception:
             session.rollback()
@@ -2326,9 +2273,7 @@ class ContentStore:
 
     def update_run(self, run_id: str, **fields) -> dict[str, Any] | None:
         if fields.get("status") in {"completed", "failed", "cancelled"}:
-            raise ValueError(
-                "Terminal run states must use transition_run_and_append_event()"
-            )
+            raise ValueError("Terminal run states must use transition_run_and_append_event()")
         session = self._get_session()
         try:
             run = session.query(AgentRun).filter(AgentRun.id == run_id).first()
@@ -2339,7 +2284,11 @@ class ContentStore:
             for key, value in fields.items():
                 if hasattr(run, key):
                     setattr(run, key, value)
-            if fields.get("status") in {"completed", "failed", "cancelled"} or run.status in {"completed", "failed", "cancelled"}:
+            if fields.get("status") in {"completed", "failed", "cancelled"} or run.status in {
+                "completed",
+                "failed",
+                "cancelled",
+            }:
                 run.completed_at = run.completed_at or datetime.now()
             session.commit()
             return self._agent_run_to_dict(run)
@@ -2377,12 +2326,7 @@ class ContentStore:
         """
         session = self._get_session()
         try:
-            run = (
-                session.query(AgentRun)
-                .filter(AgentRun.id == run_id)
-                .with_for_update()
-                .first()
-            )
+            run = session.query(AgentRun).filter(AgentRun.id == run_id).with_for_update().first()
             if not run:
                 raise LookupError(f"Run {run_id} was not found")
             if run.status != "running":
@@ -2390,12 +2334,14 @@ class ContentStore:
                 return None
             seq = int(run.next_event_seq or 1)
             run.next_event_seq = seq + 1
-            session.add(AgentRunEvent(
-                run_id=run_id,
-                seq=seq,
-                event_type=event_type,
-                payload=json.dumps(payload, ensure_ascii=False),
-            ))
+            session.add(
+                AgentRunEvent(
+                    run_id=run_id,
+                    seq=seq,
+                    event_type=event_type,
+                    payload=json.dumps(payload, ensure_ascii=False),
+                )
+            )
             session.commit()
             return seq
         except Exception:
@@ -2451,12 +2397,14 @@ class ContentStore:
             run.completed_at = run.completed_at or datetime.now()
             seq = int(run.next_event_seq or 1)
             run.next_event_seq = seq + 1
-            session.add(AgentRunEvent(
-                run_id=run_id,
-                seq=seq,
-                event_type="run_complete",
-                payload=json.dumps(event_payload, ensure_ascii=False),
-            ))
+            session.add(
+                AgentRunEvent(
+                    run_id=run_id,
+                    seq=seq,
+                    event_type="run_complete",
+                    payload=json.dumps(event_payload, ensure_ascii=False),
+                )
+            )
             session.commit()
             result = self._agent_run_to_dict(run)
             result["event_seq"] = seq
@@ -2503,12 +2451,14 @@ class ContentStore:
                 run.completed_at = run.completed_at or datetime.now()
             seq = int(run.next_event_seq or 1)
             run.next_event_seq = seq + 1
-            session.add(AgentRunEvent(
-                run_id=run_id,
-                seq=seq,
-                event_type=event_type,
-                payload=json.dumps(payload, ensure_ascii=False),
-            ))
+            session.add(
+                AgentRunEvent(
+                    run_id=run_id,
+                    seq=seq,
+                    event_type=event_type,
+                    payload=json.dumps(payload, ensure_ascii=False),
+                )
+            )
             session.commit()
             result = self._agent_run_to_dict(run)
             result["event_seq"] = seq
@@ -2598,9 +2548,7 @@ class ContentStore:
         message_count: int | None = None,
     ) -> dict[str, Any]:
         if message_count is None:
-            message_count = (
-                session.query(AgentMessage).filter(AgentMessage.thread_id == thread.id).count()
-            )
+            message_count = session.query(AgentMessage).filter(AgentMessage.thread_id == thread.id).count()
         return {
             "id": thread.id,
             "title": thread.title,

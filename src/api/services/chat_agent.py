@@ -1,4 +1,5 @@
 """User-scoped persistent chat; tools and frozen memory snapshots retain workspace identity."""
+
 from __future__ import annotations
 
 import json
@@ -50,12 +51,27 @@ MAX_FAILURES_PER_TOOL = 2
 PLANNER_TEMPERATURE = 0.3
 PLANNER_MAX_TOKENS = 1024
 AVAILABLE_TOOL_NAMES = [
-    "create_content", "refine_content", "generate_title_options", "optimize_seo",
-    "view_content", "list_recent_contents", "add_to_calendar", "view_calendar",
-    "get_content_stats", "check_xiaohongshu_login", "search_history",
-    "web_search", "analyze_content_performance", "find_optimization_candidates",
-    "propose_topics", "propose_publishing_schedule", "commit_publishing_schedule",
-    "memory_add", "memory_replace", "memory_remove", "session_search",
+    "create_content",
+    "refine_content",
+    "generate_title_options",
+    "optimize_seo",
+    "view_content",
+    "list_recent_contents",
+    "add_to_calendar",
+    "view_calendar",
+    "get_content_stats",
+    "check_xiaohongshu_login",
+    "search_history",
+    "web_search",
+    "analyze_content_performance",
+    "find_optimization_candidates",
+    "propose_topics",
+    "propose_publishing_schedule",
+    "commit_publishing_schedule",
+    "memory_add",
+    "memory_replace",
+    "memory_remove",
+    "session_search",
 ]
 
 
@@ -199,9 +215,7 @@ class ChatAgentService:
         self.model_factory = model_factory or self._create_chat_model
         self.file_memory = file_memory
         self.context_engine = context_engine
-        self.intent_recognizer = intent_recognizer or IntentRecognizer(
-            self.model_factory, store=store
-        )
+        self.intent_recognizer = intent_recognizer or IntentRecognizer(self.model_factory, store=store)
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         provider = resolve_provider(request.provider)
@@ -384,8 +398,7 @@ class ChatAgentService:
             messages.append(SystemMessage(content=self._build_intent_prompt_block(intent)))
         if plan:
             numbered = "\n".join(
-                f"  {step.index}. {step.description}"
-                + (f" [hint: {step.tool_hint}]" if step.tool_hint else "")
+                f"  {step.index}. {step.description}" + (f" [hint: {step.tool_hint}]" if step.tool_hint else "")
                 for step in plan
             )
             plan_block = (
@@ -401,18 +414,18 @@ class ChatAgentService:
         tool_events: list[ChatToolEvent] = []
         if self.context_engine is not None:
             try:
-                result = await self.context_engine.maybe_compress(
-                    messages, provider=provider, model=model
-                )
+                result = await self.context_engine.maybe_compress(messages, provider=provider, model=model)
                 if result.compressed:
                     messages = result.messages
-                    tool_events.append(ChatToolEvent(
-                        name="context_compress",
-                        args={"dropped": result.dropped_count},
-                        output=(result.summary or "")[:1200],
-                        status="completed",
-                        attempt=1,
-                    ))
+                    tool_events.append(
+                        ChatToolEvent(
+                            name="context_compress",
+                            args={"dropped": result.dropped_count},
+                            output=(result.summary or "")[:1200],
+                            status="completed",
+                            attempt=1,
+                        )
+                    )
             except Exception as exc:  # noqa: BLE001 -- compression is optional; continue with full history
                 logger.warning("context compression failed, using uncompressed history: %s", exc.__class__.__name__)
 
@@ -458,18 +471,14 @@ class ChatAgentService:
                         name,
                         args,
                         intent,
-                        consume_capability=self._make_capability_consumer(
-                            thread_id, claimed_action
-                        ),
+                        consume_capability=self._make_capability_consumer(thread_id, claimed_action),
                     )
                     with request_key(claimed_action.get("action_id")):
                         output = await tool.ainvoke(args)
                     output_text = self._stringify_tool_output(output)
                     duration_ms = int((time.perf_counter() - started) * 1000)
                     step_index = self._associate_plan_step(plan, name, success=True)
-                    persisted_output = (
-                        output_text if name == "propose_publishing_schedule" else output_text[:1200]
-                    )
+                    persisted_output = output_text if name == "propose_publishing_schedule" else output_text[:1200]
                     event = ChatToolEvent(
                         name=name,
                         args=args,
@@ -787,6 +796,7 @@ class ChatAgentService:
             library does not cover.
             """
             from src.tools.web_search import web_search as run_web_search
+
             results = await run_web_search(query, limit=limit)
             return json.dumps(results, ensure_ascii=False)
 
@@ -832,13 +842,16 @@ class ChatAgentService:
                 "requested_count": count,
                 "user_hint": hint,
                 "winning_content_types": [
-                    {"content_type": t["content_type"], "avg_engagement_rate": t["avg_engagement_rate"],
-                     "avg_views": t["avg_views"], "sample_size": t["with_metrics"]}
+                    {
+                        "content_type": t["content_type"],
+                        "avg_engagement_rate": t["avg_engagement_rate"],
+                        "avg_views": t["avg_views"],
+                        "sample_size": t["with_metrics"],
+                    }
                     for t in winners[:3]
                 ],
                 "underrepresented_content_types": [
-                    {"content_type": t["content_type"], "count": t["count"]}
-                    for t in underrepresented
+                    {"content_type": t["content_type"], "count": t["count"]} for t in underrepresented
                 ],
                 "top_performers": perf.get("top_performers") or [],
                 "recently_published_titles": [r.get("title") for r in recent if r.get("title")][:10],
@@ -865,6 +878,7 @@ class ChatAgentService:
             wait for confirmation, then call commit_publishing_schedule with the same plan.
             """
             from datetime import date as _date
+
             try:
                 start = datetime.strptime(start_date, "%Y-%m-%d").date()
                 end = datetime.strptime(end_date, "%Y-%m-%d").date()
@@ -916,29 +930,36 @@ class ChatAgentService:
                     occupied.add((d.isoformat(), platform))
                     break
                 if slot is None:
-                    plan.append({
-                        "content_id": content["id"],
-                        "title": content.get("title"),
-                        "platform": platform,
-                        "scheduled_date": None,
-                        "warning": "no available date in range under given cadence",
-                    })
+                    plan.append(
+                        {
+                            "content_id": content["id"],
+                            "title": content.get("title"),
+                            "platform": platform,
+                            "scheduled_date": None,
+                            "warning": "no available date in range under given cadence",
+                        }
+                    )
                 else:
-                    plan.append({
-                        "content_id": content["id"],
-                        "title": content.get("title"),
-                        "platform": platform,
-                        "scheduled_date": slot.isoformat(),
-                    })
+                    plan.append(
+                        {
+                            "content_id": content["id"],
+                            "title": content.get("title"),
+                            "platform": platform,
+                            "scheduled_date": slot.isoformat(),
+                        }
+                    )
 
-            return json.dumps({
-                "plan": plan,
-                "cadence": cadence,
-                "start_date": start.isoformat(),
-                "end_date": end.isoformat(),
-                "committed": False,
-                "reminder": "This is a PROPOSAL. Show it to the user as a markdown table and wait for confirmation before calling commit_publishing_schedule.",
-            }, ensure_ascii=False)
+            return json.dumps(
+                {
+                    "plan": plan,
+                    "cadence": cadence,
+                    "start_date": start.isoformat(),
+                    "end_date": end.isoformat(),
+                    "committed": False,
+                    "reminder": "This is a PROPOSAL. Show it to the user as a markdown table and wait for confirmation before calling commit_publishing_schedule.",
+                },
+                ensure_ascii=False,
+            )
 
         def commit_publishing_schedule(plan: list[dict[str, Any]]) -> str:
             """Persist a previously-proposed publishing schedule to the calendar.
@@ -981,12 +1002,14 @@ class ChatAgentService:
                         cid, plat, day
                     ),
                 )
-                saved.append({
-                    "event_id": event_id,
-                    "content_id": content_id,
-                    "platform": item.get("platform"),
-                    "scheduled_date": item["scheduled_date"],
-                })
+                saved.append(
+                    {
+                        "event_id": event_id,
+                        "content_id": content_id,
+                        "platform": item.get("platform"),
+                        "scheduled_date": item["scheduled_date"],
+                    }
+                )
             return json.dumps({"saved": saved, "skipped": skipped, "committed": True}, ensure_ascii=False)
 
         def _memory_mutation(operation: str, args: dict, apply) -> dict:
@@ -1004,6 +1027,7 @@ class ChatAgentService:
             matching capability consumption in P1-01; it is not exactly-once,
             which a filesystem store cannot provide without a write-ahead log.
             """
+
             def write() -> dict:
                 apply()
                 stats = self.file_memory.stats(args["target"])
@@ -1195,10 +1219,7 @@ class ChatAgentService:
     def _describe_action_impact(tool_name: str, args: dict[str, Any]) -> str:
         """Short human-readable description of what confirming will do."""
         if tool_name == "add_to_calendar":
-            return (
-                f"Schedule content {args.get('content_id')} on "
-                f"{args.get('platform')} for {args.get('publish_date')}"
-            )
+            return f"Schedule content {args.get('content_id')} on {args.get('platform')} for {args.get('publish_date')}"
         if tool_name == "commit_publishing_schedule":
             return f"Commit {len(args.get('plan') or [])} calendar entries"
         if tool_name == "create_content":

@@ -1,4 +1,5 @@
 """Multi-agent content pipeline for the API layer."""
+
 from __future__ import annotations
 
 import time
@@ -181,10 +182,7 @@ def _build_user_prompt(step_id: str, request: AgentRunRequest, outputs: dict[str
             "Produce the final polished content."
         )
     if step_id == "review":
-        return (
-            f"{context}\n\nFinal content:\n{outputs['editor']}\n\n"
-            "Review the final content."
-        )
+        return f"{context}\n\nFinal content:\n{outputs['editor']}\n\nReview the final content."
     raise ValueError(f"Unknown agent step: {step_id}")
 
 

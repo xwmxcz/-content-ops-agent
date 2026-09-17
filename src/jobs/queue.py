@@ -1,4 +1,5 @@
 """Queue adapter for background and RQ execution modes."""
+
 from __future__ import annotations
 
 import uuid

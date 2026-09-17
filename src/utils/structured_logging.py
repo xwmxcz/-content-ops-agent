@@ -1,4 +1,5 @@
 """Minimal JSON logging with request correlation and no payload logging."""
+
 from __future__ import annotations
 
 import json
@@ -57,6 +58,7 @@ def _json_safe(value: Any) -> Any:
 # Event-Specific Logging Helpers (Phase 2)
 # ============================================================================
 
+
 def log_idempotency_event(
     logger: logging.Logger,
     outcome: str,
@@ -65,7 +67,7 @@ def log_idempotency_event(
     *,
     record_id: int | None = None,
     args_hash: str | None = None,
-    conflict: bool = False
+    conflict: bool = False,
 ) -> None:
     """
     Log idempotency events: claim, replay, conflict.
@@ -86,7 +88,7 @@ def log_idempotency_event(
         idempotency_key=idempotency_key,
         record_id=record_id,
         args_hash=args_hash,
-        conflict=conflict
+        conflict=conflict,
     )
 
 
@@ -99,7 +101,7 @@ def log_job_event(
     error_type: str | None = None,
     retry_count: int | None = None,
     max_retries: int | None = None,
-    next_retry_at: str | None = None
+    next_retry_at: str | None = None,
 ) -> None:
     """
     Log job lifecycle events: retry_scheduled, failed_permanently, completed.
@@ -121,7 +123,7 @@ def log_job_event(
         error_type=error_type,
         retry_count=retry_count,
         max_retries=max_retries,
-        next_retry_at=next_retry_at
+        next_retry_at=next_retry_at,
     )
 
 
@@ -134,7 +136,7 @@ def log_capability_event(
     thread_id: str | None = None,
     consumed: bool = False,
     expired: bool = False,
-    tampered: bool = False
+    tampered: bool = False,
 ) -> None:
     """
     Log capability lifecycle events: proposed, consumed, expired, tampered.
@@ -156,5 +158,5 @@ def log_capability_event(
         thread_id=thread_id,
         consumed=consumed,
         expired=expired,
-        tampered=tampered
+        tampered=tampered,
     )
