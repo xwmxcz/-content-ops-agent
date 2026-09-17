@@ -16,10 +16,21 @@ from src.utils import config
 # target database MUST be a throwaway test database, never a real one.
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
 
-_requires_pg = pytest.mark.skipif(
-    not TEST_DATABASE_URL,
-    reason="TEST_DATABASE_URL is not set; tests need a disposable PostgreSQL database",
-)
+# Locally, missing TEST_DATABASE_URL skips the ~250 database-backed tests so a
+# quick `pytest` still works. In CI that would hide half the suite behind a
+# green check, so REQUIRE_TEST_DATABASE=1 turns the skip into a hard failure.
+_REQUIRE_TEST_DATABASE = os.getenv("REQUIRE_TEST_DATABASE", "").lower() in {"1", "true", "yes"}
+_MISSING_DB_REASON = "TEST_DATABASE_URL is not set; tests need a disposable PostgreSQL database"
+
+_requires_pg = pytest.mark.skipif(not TEST_DATABASE_URL, reason=_MISSING_DB_REASON)
+
+
+def pytest_sessionstart(session):
+    if _REQUIRE_TEST_DATABASE and not TEST_DATABASE_URL:
+        raise pytest.UsageError(
+            "REQUIRE_TEST_DATABASE is set but TEST_DATABASE_URL is empty; "
+            "refusing to run a suite that would silently skip every database test."
+        )
 
 
 @pytest.fixture(autouse=True)
@@ -45,7 +56,9 @@ def authenticated_fixture_user(monkeypatch, request):
 @pytest.fixture(scope="session")
 def pg_engine():
     if not TEST_DATABASE_URL:
-        pytest.skip("TEST_DATABASE_URL is not set; tests need a disposable PostgreSQL database")
+        if _REQUIRE_TEST_DATABASE:
+            pytest.fail(_MISSING_DB_REASON)
+        pytest.skip(_MISSING_DB_REASON)
     from sqlalchemy import create_engine
 
     engine = create_engine(TEST_DATABASE_URL, echo=False, pool_pre_ping=True)

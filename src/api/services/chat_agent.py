@@ -1028,9 +1028,18 @@ class ChatAgentService:
             which a filesystem store cannot provide without a write-ahead log.
             """
 
+            # All callers guard on file_memory, but the guard is lost across the
+            # closure boundary; re-assert it so a disabled memory fails closed
+            # with a clean reason instead of an AttributeError.
+            # Bind to a local before the closure: mypy cannot narrow
+            # `self.file_memory` inside `write()`.
+            memory = self.file_memory
+            if not memory:
+                return {"saved": False, "reason": "memory disabled"}
+
             def write() -> dict:
                 apply()
-                stats = self.file_memory.stats(args["target"])
+                stats = memory.stats(args["target"])
                 return {
                     "target": args["target"],
                     "char_count": stats["char_count"],

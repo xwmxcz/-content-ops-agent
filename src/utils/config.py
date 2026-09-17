@@ -252,21 +252,27 @@ class Config:
 
     @classmethod
     def get_api_key(cls, provider: str | None = None) -> str:
-        """获取指定提供商的 API Key"""
+        """Return the configured API key for ``provider`` (defaults to LLM_PROVIDER).
+
+        Every provider env var is optional at import time, so a missing key is
+        reported here as an explicit configuration error rather than being
+        returned as None and failing later inside the HTTP client.
+        """
         provider = (provider or cls.LLM_PROVIDER).lower()
 
-        if provider == "claude":
-            return cls.ANTHROPIC_API_KEY
-        elif provider == "siliconflow":
-            return cls.SILICONFLOW_API_KEY
-        elif provider == "deepseek":
-            return cls.DEEPSEEK_API_KEY
-        elif provider == "moonshot":
-            return cls.MOONSHOT_API_KEY
-        elif provider == "newapi":
-            return cls.NEWAPI_API_KEY
-        else:
+        keys = {
+            "claude": cls.ANTHROPIC_API_KEY,
+            "siliconflow": cls.SILICONFLOW_API_KEY,
+            "deepseek": cls.DEEPSEEK_API_KEY,
+            "moonshot": cls.MOONSHOT_API_KEY,
+            "newapi": cls.NEWAPI_API_KEY,
+        }
+        if provider not in keys:
             raise ValueError(f"Unknown provider: {provider}")
+        key = keys[provider]
+        if not key:
+            raise ValueError(f"{provider.upper()}_API_KEY is required for the {provider} provider")
+        return key
 
     @classmethod
     def get_model(cls, provider: str | None = None) -> str:

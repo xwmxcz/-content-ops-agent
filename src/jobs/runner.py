@@ -378,15 +378,17 @@ async def _execute_job(job: dict[str, Any], llm: LiteLLMClient, store: ContentSt
     job_id = job["id"]
 
     if job_type == "content_generation":
-        request = GenerateRequest(**payload)
-        content_id, generated, provider, model = await content_service.generate_content(request, llm, store)
+        generate_request = GenerateRequest(**payload)
+        content_id, generated, provider, model = await content_service.generate_content(generate_request, llm, store)
         return {
             "content": {
                 "id": content_id,
                 "title": generated.title,
                 "content": generated.content,
-                "content_type": generated.content_type.value if generated.content_type else request.content_type.value,
-                "style": request.style.value,
+                "content_type": generated.content_type.value
+                if generated.content_type
+                else generate_request.content_type.value,
+                "style": generate_request.style.value,
                 "tags": generated.tags or [],
                 "status": "draft",
                 "created_at": generated.created_at.isoformat() if generated.created_at else None,
@@ -397,14 +399,14 @@ async def _execute_job(job: dict[str, Any], llm: LiteLLMClient, store: ContentSt
         }
 
     if job_type == "agent_run":
-        request = AgentRunRequest(**payload)
+        agent_request = AgentRunRequest(**payload)
         store.update_job(job_id, progress=20)
-        result = await run_agent_pipeline(request, llm, store)
+        result = await run_agent_pipeline(agent_request, llm, store)
         return {"agent_run": result.model_dump()}
 
     if job_type == "refine":
-        request = RefineRequest(**payload)
-        content_id, refined, provider, model = await content_service.refine_content(request, llm, store)
+        refine_request = RefineRequest(**payload)
+        content_id, refined, provider, model = await content_service.refine_content(refine_request, llm, store)
         stored = store.get_content(content_id) or {}
         return {
             "content": {
@@ -414,7 +416,10 @@ async def _execute_job(job: dict[str, Any], llm: LiteLLMClient, store: ContentSt
                 "content_type": refined.content_type.value
                 if refined.content_type
                 else stored.get("content_type", "unknown"),
-                "style": stored.get("style", request.new_style.value if request.new_style else "casual"),
+                "style": stored.get(
+                    "style",
+                    refine_request.new_style.value if refine_request.new_style else "casual",
+                ),
                 "tags": refined.tags or [],
                 "status": stored.get("status", "refined"),
                 "created_at": stored.get("created_at"),
@@ -425,12 +430,12 @@ async def _execute_job(job: dict[str, Any], llm: LiteLLMClient, store: ContentSt
         }
 
     if job_type == "titles":
-        request = TitleRequest(**payload)
-        return {"text": await content_service.generate_titles(request, llm, store)}
+        title_request = TitleRequest(**payload)
+        return {"text": await content_service.generate_titles(title_request, llm, store)}
 
     if job_type == "seo":
-        request = SeoRequest(**payload)
-        return {"text": await content_service.analyze_seo(request, llm, store)}
+        seo_request = SeoRequest(**payload)
+        return {"text": await content_service.analyze_seo(seo_request, llm, store)}
 
     if job_type == "publish_xiaohongshu":
         publication_id = int(payload["publication_id"])

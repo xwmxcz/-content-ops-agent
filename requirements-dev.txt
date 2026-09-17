@@ -1,0 +1,7 @@
+# Tooling for local development and CI. Runtime deps live in requirements.txt.
+-r requirements.txt
+ruff>=0.8.0
+mypy>=1.13.0
+pip-audit>=2.7.0
+pip-tools>=7.4.0
+pre-commit>=4.0.0
