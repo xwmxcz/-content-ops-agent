@@ -52,15 +52,28 @@ make test-db        # full suite, silent database skips forbidden
 
 ## Type checking
 
-`mypy` covers `src/`. Fifteen legacy modules that predate type checking are listed
-in `[tool.mypy.overrides]` in `pyproject.toml`, where only `assignment`, `misc`
-and `valid-type` are waived — the noise produced by legacy SQLAlchemy `Column`
-declarations and duck-typed request payloads. Every other check stays on for those
-files too, and that is deliberate: it is how a real `None`-dereference and a
-reused request variable were found in the job runner.
+`mypy` covers all of `src/` and currently reports **zero errors with no
+override list**. Keep it that way: an override added without a comment
+explaining the specific gap is a regression.
 
-If you fix one of those modules, delete its line from the override list. That
-list should only ever shrink.
+Getting there required one structural change worth knowing about, because the
+failure mode is silent. SQLAlchemy's mypy plugin only injects attribute types
+for `Mapped[]` annotations, and only when the declarative base subclasses
+`DeclarativeBase`. With the legacy `declarative_base()` factory, `Mapped[int]`
+is **ignored** and every model attribute keeps its `Column` type. So:
+
+- Models declare `x: Mapped[int] = mapped_column(...)`, never bare `Column`.
+- `content_store.Base` subclasses `DeclarativeBase`.
+
+Nullability is load-bearing: `Mapped[str]` implies `NOT NULL` while
+`Mapped[str | None]` implies nullable, so a careless annotation can change the
+produced schema. That is why `nullable=` is spelled out on every annotation
+rather than left implicit. If you change a model, `alembic check` will tell you
+whether the ORM still matches the migrations.
+
+A third-party stub defect is the one acceptable reason to suppress narrowly
+(with a comment recording that the call was verified at runtime) rather than
+to restructure working code around a wrong stub.
 
 ## Lint exceptions
 
