@@ -14,9 +14,9 @@ logger = logging.getLogger(__name__)
 
 # Try to import prometheus_client, gracefully degrade if not available
 try:
+    from prometheus_client import REGISTRY, generate_latest
     from prometheus_client import Counter as _Counter
     from prometheus_client import Histogram as _Histogram
-    from prometheus_client import REGISTRY, generate_latest
     PROMETHEUS_AVAILABLE = True
 except ImportError:
     logger.warning("prometheus_client not installed, metrics will be no-ops")
@@ -31,10 +31,10 @@ class NoOpMetric:
     """No-op metric when prometheus_client is not available."""
     def inc(self, amount: float = 1, **labels) -> None:
         pass
-    
+
     def observe(self, amount: float, **labels) -> None:
         pass
-    
+
     def labels(self, **labels):
         return self
 
@@ -46,7 +46,7 @@ def _create_counter(name: str, documentation: str, labelnames: list[str] | None 
     return _Counter(name, documentation, labelnames or [])
 
 
-def _create_histogram(name: str, documentation: str, labelnames: list[str] | None = None, 
+def _create_histogram(name: str, documentation: str, labelnames: list[str] | None = None,
                       buckets: tuple = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0)) -> Histogram | NoOpMetric:
     """Create a Histogram metric or no-op if prometheus unavailable."""
     if not PROMETHEUS_AVAILABLE:

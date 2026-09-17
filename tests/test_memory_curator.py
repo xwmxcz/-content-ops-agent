@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from src.agent.memory_curator import MemoryCurator
 from src.api.dependencies import get_store
 from src.api.main import app
-from src.storage.file_memory import AGENT, FileMemory, USER
+from src.storage.file_memory import AGENT, USER, FileMemory
 
 
 class StubAuxLLM:

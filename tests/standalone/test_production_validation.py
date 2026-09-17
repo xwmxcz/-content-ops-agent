@@ -2,12 +2,11 @@
 """Validate account-runtime profiles in isolated subprocesses without a database."""
 
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
-
 
 ROOT = Path(__file__).resolve().parents[2]
 REMOVED_AUTH_SETTINGS = (

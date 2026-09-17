@@ -39,15 +39,15 @@ judgement to the caller.
 from __future__ import annotations
 
 import json
+import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from src.api.schemas.agent import PipelinePlanStep, SubAgentId
 from src.utils import config
-
 
 # Hard structural bounds. MAX_STEPS also caps how much work one run can schedule,
 # so it is a cost ceiling as much as a schema bound.
@@ -78,6 +78,8 @@ INVARIANT_BACKWARD_EDGES = "backward_edges_only"
 INVARIANT_FINAL_AGENT = "final_step_is_writer_or_editor"
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE | re.DOTALL)
+
+logger = logging.getLogger(__name__)
 
 
 class PlannerStepDraft(BaseModel):
@@ -292,7 +294,8 @@ def parse_planner_output(
             break
         try:
             repaired = repair(raw, payload)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 -- repair passes operate on untrusted input
+            logger.debug("plan repair pass %s raised %s", pass_name, exc.__class__.__name__)
             # A repair pass exists to rescue malformed input; letting it raise would
             # turn a recoverable planner glitch into a failed run.
             repaired = None
@@ -383,7 +386,7 @@ def _build_steps(payload: list[dict[str, Any]]) -> tuple[list[PipelinePlanStep],
                     status="pending",
                 )
             )
-        except Exception:
+        except (KeyError, TypeError, ValueError, ValidationError):
             continue
     return steps, check_plan_invariants(steps)
 

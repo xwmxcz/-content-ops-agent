@@ -19,7 +19,6 @@ from fastapi import HTTPException
 from src.api.routes.agent import _parse_last_event_id, stream_pipeline_run
 from src.utils import config
 
-
 _DEFAULT_RUN = object()
 
 

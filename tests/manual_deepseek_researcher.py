@@ -27,11 +27,10 @@ from dotenv import load_dotenv
 
 load_dotenv(ROOT / ".env")
 
-from src.api.schemas.agent import SubAgentId  # noqa: E402
+from src.api.passwords import hash_password  # noqa: E402
 from src.api.services.sub_agents import SUB_AGENTS, SubAgentRunner  # noqa: E402
 from src.storage import ContentStore  # noqa: E402
 from src.storage.account_store import AccountStore  # noqa: E402
-from src.api.passwords import hash_password  # noqa: E402
 from src.utils import config  # noqa: E402
 
 

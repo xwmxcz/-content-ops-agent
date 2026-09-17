@@ -1,5 +1,5 @@
 from copy import deepcopy
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
@@ -8,9 +8,9 @@ from src.models import ContentStyle, ContentType
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1)
-    thread_id: Optional[str] = None
-    provider: Optional[str] = None
-    model: Optional[str] = None
+    thread_id: str | None = None
+    provider: str | None = None
+    model: str | None = None
     temperature: float = Field(0.7, ge=0.0, le=1.0)
     max_tokens: int = Field(2048, ge=128, le=8192)
 
@@ -53,8 +53,8 @@ class ChatIntent(BaseModel):
     requires_confirmation: bool = False
     allowed_tools: list[str] = Field(default_factory=list)
     route_surface: Literal["chat", "studio", "publish", "none"] = "chat"
-    route_reason: Optional[str] = None
-    clarification: Optional[str] = None
+    route_reason: str | None = None
+    clarification: str | None = None
 
     def bind_server_approval(
         self,
@@ -77,7 +77,7 @@ class ChatIntent(BaseModel):
 class PlanStep(BaseModel):
     index: int
     description: str
-    tool_hint: Optional[str] = None
+    tool_hint: str | None = None
     status: Literal["pending", "running", "completed", "failed", "skipped"] = "pending"
 
 
@@ -86,13 +86,13 @@ class ChatToolEvent(BaseModel):
     args: dict[str, Any] = Field(default_factory=dict)
     output: str = ""
     status: Literal["completed", "failed", "proposed"] = "completed"
-    error: Optional[str] = None
-    plan_step_index: Optional[int] = None
+    error: str | None = None
+    plan_step_index: int | None = None
     attempt: int = 1
     duration_ms: int = 0
     # Durable proposal id a later confirmation turn must reference. Display and
     # correlation only; it is never accepted as authorization from a client.
-    action_id: Optional[str] = None
+    action_id: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -101,28 +101,28 @@ class ChatResponse(BaseModel):
     response: str
     provider: str
     model: str
-    intent: Optional[ChatIntent] = None
+    intent: ChatIntent | None = None
     tool_events: list[ChatToolEvent] = Field(default_factory=list)
     plan: list[PlanStep] = Field(default_factory=list)
 
 
 class AgentThreadResponse(BaseModel):
     id: str
-    title: Optional[str] = None
-    last_provider: Optional[str] = None
-    last_model: Optional[str] = None
+    title: str | None = None
+    last_provider: str | None = None
+    last_model: str | None = None
     pinned: bool = False
     archived: bool = False
     title_pinned: bool = False
     message_count: int = 0
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
+    created_at: str | None = None
+    updated_at: str | None = None
 
 
 class AgentThreadUpdateRequest(BaseModel):
-    title: Optional[str] = Field(default=None, min_length=1, max_length=120)
-    pinned: Optional[bool] = None
-    archived: Optional[bool] = None
+    title: str | None = Field(default=None, min_length=1, max_length=120)
+    pinned: bool | None = None
+    archived: bool | None = None
 
     @model_validator(mode="after")
     def _require_one_field(self) -> "AgentThreadUpdateRequest":
@@ -136,9 +136,9 @@ class AgentSearchHit(BaseModel):
     thread_id: str
     role: Literal["user", "assistant"]
     content: str
-    provider: Optional[str] = None
-    model: Optional[str] = None
-    created_at: Optional[str] = None
+    provider: str | None = None
+    model: str | None = None
+    created_at: str | None = None
 
 
 class AgentMessageResponse(BaseModel):
@@ -146,53 +146,53 @@ class AgentMessageResponse(BaseModel):
     thread_id: str
     role: Literal["user", "assistant"]
     content: str
-    provider: Optional[str] = None
-    model: Optional[str] = None
-    intent: Optional[ChatIntent] = None
+    provider: str | None = None
+    model: str | None = None
+    intent: ChatIntent | None = None
     tool_events: list[ChatToolEvent] = Field(default_factory=list)
     plan: list[PlanStep] = Field(default_factory=list)
     status: str
-    created_at: Optional[str] = None
+    created_at: str | None = None
 
 
 class ProposedActionCreate(BaseModel):
     thread_id: str = Field(..., min_length=1, max_length=80)
     tool_name: str = Field(..., min_length=1, max_length=80)
     args: dict[str, Any] = Field(default_factory=dict)
-    impact_summary: Optional[str] = Field(default=None, max_length=500)
+    impact_summary: str | None = Field(default=None, max_length=500)
 
 
 class ProposedActionResponse(BaseModel):
     id: str
     thread_id: str
-    requester: Optional[str] = None
+    requester: str | None = None
     tool_name: str
     args: dict[str, Any] = Field(default_factory=dict)
     args_hash: str
     impact_summary: str
     status: Literal["proposed", "confirmed", "consumed", "cancelled", "expired"]
-    proposing_message_id: Optional[int] = None
-    consuming_message_id: Optional[int] = None
-    created_at: Optional[str] = None
-    expires_at: Optional[str] = None
-    confirmed_at: Optional[str] = None
-    consumed_at: Optional[str] = None
-    cancelled_at: Optional[str] = None
+    proposing_message_id: int | None = None
+    consuming_message_id: int | None = None
+    created_at: str | None = None
+    expires_at: str | None = None
+    confirmed_at: str | None = None
+    consumed_at: str | None = None
+    cancelled_at: str | None = None
 
 
 class AgentRunRequest(BaseModel):
     topic: str = Field(..., min_length=1)
     content_type: ContentType
     style: ContentStyle = ContentStyle.CASUAL
-    keywords: Optional[list[str]] = None
+    keywords: list[str] | None = None
     length: Literal["short", "medium", "long"] = "medium"
     mode: Literal["agent", "workflow"] = "agent"
-    provider: Optional[str] = None
-    model: Optional[str] = None
+    provider: str | None = None
+    model: str | None = None
     temperature: float = Field(0.7, ge=0.0, le=1.0)
     max_tokens: int = Field(2048, ge=128, le=8192)
     save_final: bool = True
-    thread_id: Optional[str] = None
+    thread_id: str | None = None
 
 
 class AgentStep(BaseModel):
@@ -204,11 +204,11 @@ class AgentStep(BaseModel):
     output: str = ""
     tool_events: list[ChatToolEvent] = Field(default_factory=list)
     duration_ms: int = 0
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class AgentFinalContent(BaseModel):
-    title: Optional[str] = None
+    title: str | None = None
     content: str
     content_type: str
     style: str
@@ -221,7 +221,7 @@ class AgentRunResponse(BaseModel):
     thread_id: str
     steps: list[AgentStep]
     final_content: AgentFinalContent
-    saved_content_id: Optional[int] = None
+    saved_content_id: int | None = None
     provider: str
     model: str
 
@@ -235,7 +235,7 @@ class SubAgentToolEvent(BaseModel):
     args: dict[str, Any] = Field(default_factory=dict)
     status: Literal["started", "completed", "failed"] = "completed"
     preview: str = ""
-    error: Optional[str] = None
+    error: str | None = None
     duration_ms: int = 0
 
 
@@ -251,7 +251,7 @@ class PipelinePlanStep(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cost_estimate: float = 0.0
-    revised_at: Optional[int] = None
+    revised_at: int | None = None
     tool_events: list[SubAgentToolEvent] = Field(default_factory=list)
 
 
@@ -259,17 +259,17 @@ class PipelineRunRequest(BaseModel):
     topic: str = Field(..., min_length=1)
     content_type: ContentType
     style: ContentStyle = ContentStyle.CASUAL
-    keywords: Optional[list[str]] = None
+    keywords: list[str] | None = None
     length: Literal["short", "medium", "long"] = "medium"
-    provider: Optional[str] = None
-    model: Optional[str] = None
+    provider: str | None = None
+    model: str | None = None
     temperature: float = Field(0.7, ge=0.0, le=1.0)
     max_tokens: int = Field(2048, ge=128, le=8192)
     save_final: bool = True
-    thread_id: Optional[str] = None
+    thread_id: str | None = None
     use_web_search: bool = True
     use_history_search: bool = True
-    research_focus: Optional[str] = None  # optional hint, e.g. "compare alternatives", "verify claims"
+    research_focus: str | None = None  # optional hint, e.g. "compare alternatives", "verify claims"
 
 
 class PipelineRunResponse(BaseModel):
@@ -277,7 +277,7 @@ class PipelineRunResponse(BaseModel):
     thread_id: str
     plan: list[PipelinePlanStep]
     final_content: AgentFinalContent
-    saved_content_id: Optional[int] = None
+    saved_content_id: int | None = None
     provider: str
     model: str
     total_prompt_tokens: int = 0
@@ -285,7 +285,7 @@ class PipelineRunResponse(BaseModel):
     total_cost: float = 0.0
     revision_count: int = 0
     status: Literal["running", "completed", "failed", "cancelled"] = "completed"
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class PipelineRunHandle(BaseModel):

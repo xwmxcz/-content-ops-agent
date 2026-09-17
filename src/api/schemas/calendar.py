@@ -1,5 +1,4 @@
 from datetime import date
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -16,5 +15,5 @@ class CalendarEventResponse(BaseModel):
     platform: str
     scheduled_date: str
     status: str
-    content_title: Optional[str] = None
-    content_type: Optional[str] = None
+    content_title: str | None = None
+    content_type: str | None = None

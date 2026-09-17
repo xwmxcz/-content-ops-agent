@@ -92,7 +92,7 @@ class Config:
     JOB_TIMEOUT_SECONDS = int(os.getenv("JOB_TIMEOUT_SECONDS", "300"))
     REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     MAX_PROVIDER_INFLIGHT_JOBS = int(os.getenv("MAX_PROVIDER_INFLIGHT_JOBS", "8"))
-    
+
     # Job retry settings
     JOB_MAX_RETRIES = int(os.getenv("JOB_MAX_RETRIES", "5"))
     JOB_RETRY_INITIAL_DELAY_SECONDS = int(os.getenv("JOB_RETRY_INITIAL_DELAY_SECONDS", "30"))

@@ -1,22 +1,21 @@
-from pathlib import Path
 import base64
 import hashlib
 import hmac
 import json
 import time
+from pathlib import Path
 
 import pytest
-
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api.security import (
+    HttpsEnforcementMiddleware,
     create_access_token,
     create_resource_ticket,
     decode_access_token,
     decode_resource_ticket,
     is_ticket_path,
-    HttpsEnforcementMiddleware,
 )
 from src.utils import config
 

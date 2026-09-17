@@ -2,15 +2,14 @@
 import base64
 import json
 import os
-from pathlib import Path
 import sys
+from pathlib import Path
 
-from src.models.content import ContentType, GeneratedContent
 from src.api.passwords import hash_password
+from src.models.content import ContentType, GeneratedContent
 from src.storage import ContentStore
 from src.storage.account_store import AccountStore
 from src.utils import config
-
 
 system_store = ContentStore(database_url=config.DATABASE_URL)
 manifest = Path("/app/data/e2e-fixtures.json")

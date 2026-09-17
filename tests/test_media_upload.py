@@ -4,9 +4,9 @@ from pathlib import Path
 from tempfile import SpooledTemporaryFile
 from unittest.mock import Mock
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-import pytest
 
 from src.api.dependencies import get_publish_service, get_store
 from src.api.routes import media

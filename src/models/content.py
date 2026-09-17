@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, List
 from enum import Enum
 
 
@@ -27,21 +26,21 @@ class ContentRequest:
     topic: str  # 主题
     content_type: ContentType  # 内容类型
     style: ContentStyle = ContentStyle.CASUAL  # 风格
-    keywords: Optional[List[str]] = None  # 关键词
-    length: Optional[str] = "medium"  # 长度: short/medium/long
-    tone: Optional[str] = None  # 语气
-    target_audience: Optional[str] = None  # 目标受众
+    keywords: list[str] | None = None  # 关键词
+    length: str | None = "medium"  # 长度: short/medium/long
+    tone: str | None = None  # 语气
+    target_audience: str | None = None  # 目标受众
 
 
 @dataclass
 class GeneratedContent:
     """生成的内容"""
     content: str  # 内容正文
-    title: Optional[str] = None  # 标题
-    tags: Optional[List[str]] = None  # 标签
-    content_type: Optional[ContentType] = None  # 内容类型
+    title: str | None = None  # 标题
+    tags: list[str] | None = None  # 标签
+    content_type: ContentType | None = None  # 内容类型
     created_at: datetime = None  # 创建时间
-    metadata: Optional[dict] = None  # 元数据
+    metadata: dict | None = None  # 元数据
 
     def __post_init__(self):
         if self.created_at is None:

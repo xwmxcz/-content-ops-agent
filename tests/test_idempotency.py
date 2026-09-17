@@ -4,8 +4,8 @@ Every test asserts the real database side-effect count, not just the returned
 value: a retry that returns the right payload while writing a second row is the
 failure these guard against.
 """
-from concurrent.futures import ThreadPoolExecutor
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from sqlalchemy import text
@@ -23,7 +23,6 @@ from src.utils.idempotency import (
     idempotent_write,
     request_key,
 )
-
 
 ARGS = {"topic": "AI workflows", "style": "casual"}
 

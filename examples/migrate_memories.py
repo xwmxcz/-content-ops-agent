@@ -24,16 +24,15 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 # Make `python examples/migrate_memories.py` work without `pip install -e .`
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import create_engine, text
 
-from src.storage.file_memory import AGENT, FileMemory, USER
-
+from src.storage.file_memory import AGENT, USER, FileMemory
 
 PREFERENCE_CATEGORIES = {"preference"}
 

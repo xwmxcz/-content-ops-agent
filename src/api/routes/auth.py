@@ -10,8 +10,11 @@ from src.api.dependencies import get_account_store, get_current_user, get_store
 from src.api.passwords import DUMMY_PASSWORD_HASH, hash_password, verify_password
 from src.api.schemas.auth import AuthStatusResponse, LoginRequest, PublicUser, RegisterRequest, SessionResponse
 from src.api.security import (
-    RESOURCE_SESSION_COOKIE, authenticate_request, create_access_token,
-    create_resource_ticket, is_auth_configured,
+    RESOURCE_SESSION_COOKIE,
+    authenticate_request,
+    create_access_token,
+    create_resource_ticket,
+    is_auth_configured,
 )
 from src.storage import ContentStore
 from src.storage.account_store import AccountStore, UsernameTaken

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 
-from langchain_core.messages import AIMessage
 import pytest
+from langchain_core.messages import AIMessage
 
 from src.api.services.intent_recognizer import IntentRecognizer
 

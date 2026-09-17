@@ -20,11 +20,11 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.storage.account_store import AccountStore  # noqa: E402
 from src.storage.content_store import (  # noqa: E402
     AgentMessage,
     AgentThread,
@@ -33,9 +33,7 @@ from src.storage.content_store import (  # noqa: E402
     ContentMetrics,
     ContentStore,
 )
-from src.storage.account_store import AccountStore  # noqa: E402
 from src.utils import config  # noqa: E402
-
 
 DEMO_PROVIDER = "demo"
 DEMO_MODEL = "seed-data-v1"
@@ -388,7 +386,7 @@ def seed_content_rows(store: ContentStore, seed: int) -> tuple[list[Content], in
 
         # 70% of rows get metrics — closer to real life where not everything gets tracked.
         scheduled_dates: set[tuple[str, str]] = set()
-        for spec, row in zip(SPECS, rows):
+        for spec, row in zip(SPECS, rows, strict=True):
             if rng.random() < 0.7:
                 m = _generate_metrics(rng, spec["engagement"], spec["content_type"])
                 session.add(ContentMetrics(
@@ -477,7 +475,7 @@ def main() -> None:
     print(f"Content rows:     {len(rows)}")
     print(f"With metrics:     {metric_count}")
     print(f"Calendar events:  {min(6, len(rows))}")
-    print(f"Agent threads:    1")
+    print("Agent threads:    1")
     print(f"Stats:            {json.dumps(stats, ensure_ascii=False)}")
     print(f"60d performance:  {len(perf['by_type'])} content_types, top performer = "
           f"{(perf['top_performers'][0]['title'] if perf['top_performers'] else 'n/a')}")

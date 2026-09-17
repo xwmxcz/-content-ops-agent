@@ -24,7 +24,7 @@ from src.api.main import app
 from src.api.services.chat_agent import ChatAgentService
 from src.api.services.publish_service import PublishService
 from src.models import ContentType, GeneratedContent
-from src.storage.file_memory import AGENT, FileMemory, USER
+from src.storage.file_memory import AGENT, USER, FileMemory
 from src.utils.idempotency import (
     SCOPE_MEMORY_MUTATION,
     SCOPE_PUBLICATION_EXECUTE,

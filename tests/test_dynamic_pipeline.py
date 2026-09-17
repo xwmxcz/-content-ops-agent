@@ -13,13 +13,11 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from src.api.dependencies import get_store
 from src.api.main import app
 from src.api.schemas.agent import PipelineRunRequest, SubAgentId
 from src.api.services.dynamic_pipeline import DynamicPipeline
 from src.api.services.sub_agents import SubAgentSpec
-from src.models import ContentType, ContentStyle
-
+from src.models import ContentStyle, ContentType
 
 # ---------- fakes -------------------------------------------------------------
 

@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any, AsyncIterator
+from typing import Any
 
 from src.utils import config
+
+logger = logging.getLogger(__name__)
 
 
 class LLMClientError(RuntimeError):
@@ -160,14 +164,11 @@ class LiteLLMClient:
 
         try:
             response = await litellm.acompletion(**request)
-        except Exception as exc:
-            # Stream not supported → fall back to one-shot
-            import sys
-            print(
-                f"[litellm.stream] open failed, falling back to non-stream: "
-                f"{type(exc).__name__}: {_format_provider_error(provider, exc)}",
-                file=sys.stderr,
-                flush=True,
+        except Exception as exc:  # noqa: BLE001 -- provider SDKs raise arbitrary errors; degrade to one-shot
+            logger.warning(
+                "[litellm.stream] open failed, falling back to non-stream: %s: %s",
+                type(exc).__name__,
+                _format_provider_error(provider, exc),
             )
             text = await self.generate_from_prompts(
                 provider=provider,
@@ -201,13 +202,12 @@ class LiteLLMClient:
                 if delta_text:
                     accumulated += delta_text
                     yield StreamChunk(delta=delta_text)
-        except Exception as exc:
-            import sys
-            print(
-                f"[litellm.stream] iteration failed: {type(exc).__name__}: {exc} "
-                f"(accumulated={len(accumulated)} chars)",
-                file=sys.stderr,
-                flush=True,
+        except Exception as exc:  # noqa: BLE001 -- provider SDKs raise arbitrary errors mid-stream
+            logger.warning(
+                "[litellm.stream] iteration failed: %s: %s (accumulated=%d chars)",
+                type(exc).__name__,
+                exc,
+                len(accumulated),
             )
             # Mid-stream failure with usable partial output → swallow and finish gracefully.
             # Common cause: provider closes the stream when max_tokens is reached without

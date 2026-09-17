@@ -1,5 +1,5 @@
 """Prompt 模板"""
-from src.models import ContentType, ContentStyle
+from src.models import ContentStyle, ContentType
 
 
 class PromptTemplates:

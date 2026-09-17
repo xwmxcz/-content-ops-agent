@@ -10,7 +10,6 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import inspect
 from sqlalchemy.engine import Engine
 
-
 ROOT = Path(__file__).resolve().parents[2]
 
 

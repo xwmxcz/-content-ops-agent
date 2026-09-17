@@ -4,7 +4,8 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -13,7 +14,6 @@ from src.api.services.tool_policy import SIDE_EFFECT_TOOLS
 from src.utils import config
 from src.utils.canonical import args_hash
 from src.utils.structured_logging import log_event
-
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +183,8 @@ class IntentRecognizer:
             ai_message = await chat_model.ainvoke(messages)
             raw = self._message_content_to_text(ai_message.content).strip()
             payload = json.loads(self._strip_fence(raw))
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 -- LLM/JSON boundary; degrade to a clarification
+            logger.warning("intent LLM call failed, asking to clarify: %s", exc.__class__.__name__)
             return self._clarify_intent(message)
 
         if not isinstance(payload, dict):
@@ -497,7 +498,8 @@ class IntentRecognizer:
             return None
         try:
             return self.store.latest_pending_proposed_action(thread_id)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 -- fail closed on any storage error
+            logger.warning("durable proposal lookup failed: %s", exc.__class__.__name__)
             # A capability lookup failure must never widen authorization; falling
             # through leaves the confirmation without an action id.
             return None
@@ -527,7 +529,7 @@ class IntentRecognizer:
             output = event.get("output") or ""
             try:
                 payload = json.loads(output)
-            except Exception:
+            except (TypeError, ValueError):
                 continue
             if isinstance(payload, dict) and isinstance(payload.get("plan"), list):
                 return {"proposal_plan": payload["plan"]}

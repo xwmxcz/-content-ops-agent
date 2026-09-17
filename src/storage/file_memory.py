@@ -20,7 +20,6 @@ import threading
 from pathlib import Path
 from typing import Any
 
-
 AGENT = "agent"
 USER = "user"
 _VALID_TARGETS = {AGENT, USER}

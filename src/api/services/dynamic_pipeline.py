@@ -21,7 +21,6 @@ Hard guards:
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import time
@@ -33,7 +32,6 @@ from src.api.schemas.agent import (
     PipelinePlanStep,
     PipelineRunRequest,
     PipelineRunResponse,
-    SubAgentId,
     SubAgentToolEvent,
 )
 from src.api.services.content_service import resolve_provider
@@ -47,18 +45,14 @@ from src.api.services.plan_schema import (
     strip_fence,
 )
 from src.api.services.sub_agents import (
-    PRICE_PER_1K,
     SUB_AGENTS,
     SubAgentRunner,
-    SubAgentSpec,
     estimate_cost,
 )
 from src.llm.litellm_client import LiteLLMClient, LLMConfigurationError
 from src.storage import ContentStore
-from src.utils import config
-from src.utils import metrics
+from src.utils import config, metrics
 from src.utils.structured_logging import log_event
-
 
 logger = logging.getLogger(__name__)
 WORKSPACE_RESEARCH_TOOLS = ("search_history", "view_content", "list_recent_contents")
@@ -148,7 +142,7 @@ class DynamicPipeline:
             # shape problem. Falling back here would start a full run against a
             # provider that cannot answer, so surface it instead.
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 -- planner boundary; falls back to the canonical plan
             log_event(
                 logger,
                 "planner_fallback",
@@ -267,7 +261,7 @@ class DynamicPipeline:
                 })
             except LLMConfigurationError:
                 raise
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 -- sub-agent boundary; surfaced as step_failed event
                 success = False
                 duration = int((time.perf_counter() - started) * 1000)
                 step.status = "failed"
@@ -284,7 +278,14 @@ class DynamicPipeline:
             if should_revise:
                 try:
                     revised = await self._maybe_revise_plan(plan, outputs, request, provider, request.model)
-                except Exception:
+                except Exception as exc:  # noqa: BLE001 -- revision is optional; keep the known-good plan
+                    log_event(
+                        logger,
+                        "plan_revision_failed",
+                        level=logging.WARNING,
+                        run_id=run_id,
+                        error_class=exc.__class__.__name__,
+                    )
                     revised = None
                 if revised is not None:
                     plan = revised
@@ -485,7 +486,7 @@ class DynamicPipeline:
                 # An injected client predating response_format support. Retrying
                 # without it keeps custom clients and test doubles working.
                 pass
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 -- provider capability probe; logged and degraded
                 log_event(
                     logger,
                     "planner_structured_output_unsupported",

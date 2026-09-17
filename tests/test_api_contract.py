@@ -1,20 +1,20 @@
-from datetime import datetime, timedelta
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-import pytest
 from sqlalchemy import text
 
 from src.api.dependencies import get_chat_agent_service, get_litellm_client, get_publish_service, get_store
 from src.api.main import app
-from src.api.schemas.content import GenerateRequest
-from src.api.services.chat_agent import ChatAgentService
-from src.api.services.publish_service import PublishService
-from src.api.schemas.models import ModelInfo
 from src.api.routes import media as media_routes
 from src.api.routes import models as model_routes
+from src.api.schemas.content import GenerateRequest
+from src.api.schemas.models import ModelInfo
+from src.api.services.chat_agent import ChatAgentService
+from src.api.services.publish_service import PublishService
 from src.llm.litellm_client import LLMGenerationError
 from src.models import ContentType, GeneratedContent
 
@@ -308,6 +308,7 @@ def test_chat_agent_retries_failed_tool(client, store, fake_chat_factory, monkey
         return _json_module.dumps({"id": content_id, "title": "Recovered", "content": "ok"}, ensure_ascii=False)
 
     import json as _json_module
+
     from src.api.services import chat_agent as chat_agent_mod
 
     real_build_tools = chat_agent_mod.ChatAgentService._build_tools

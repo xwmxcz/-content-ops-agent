@@ -17,11 +17,10 @@ from src.api.services.agent_pipeline import PipelineExecutionError, run_agent_pi
 from src.api.services.publish_service import PublicationValidationError, create_publish_service
 from src.integrations.mcp_client import McpClientError
 from src.jobs.error_classifier import ErrorClassifier
-from src.llm.litellm_client import LLMConfigurationError, LLMGenerationError, LiteLLMClient
+from src.llm.litellm_client import LiteLLMClient, LLMConfigurationError, LLMGenerationError
 from src.storage import ContentStore
 from src.utils import config, metrics
 from src.utils.structured_logging import log_event, log_job_event
-
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +72,7 @@ async def _run_pipeline_job_async(run_id: str, request_data: dict[str, Any], sto
         request = PipelineRunRequest(**request_data)
         pipeline = DynamicPipeline(store=store, llm=create_litellm_client())
         await pipeline.run(request, run_id=run_id)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 -- job boundary: every failure must become a terminal run event
         # The run row was pre-created by the API before enqueue. Any failure here
         # — bad payload, LLM/config error, unexpected crash — must land as a terminal
         # run_failed event, otherwise SSE consumers hang until the stream deadline.
@@ -99,7 +98,7 @@ async def run_job_async(job_id: str, store: ContentStore) -> None:
     job = store.get_job(job_id)
     if not job:
         return
-    
+
     # Only scheduled failures are retryable; duplicate deliveries must not
     # revive permanent failures or jobs that exhausted their retry budget.
     if job["status"] == "failed":
@@ -109,7 +108,7 @@ async def run_job_async(job_id: str, store: ContentStore) -> None:
         if datetime.now() < next_retry_at:
             # Too early to retry, skip this execution
             return
-    
+
     if job["status"] not in {"queued", "failed"}:
         return
 
@@ -198,7 +197,7 @@ async def run_job_async(job_id: str, store: ContentStore) -> None:
             if _is_cancelled(job_id, store):
                 return
             _handle_job_error(job_id, exc, attempts, max_retries, store, job["job_type"])
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 -- job boundary: classified into retry/fail by _handle_job_error
             if _is_cancelled(job_id, store):
                 return
             _handle_job_error(job_id, exc, attempts, max_retries, store, job["job_type"])
@@ -221,7 +220,7 @@ async def _monitor_job_lease(
     job_id: str,
     job_type: str,
     store: ContentStore,
-    exec_task: "asyncio.Future[Any]",
+    exec_task: asyncio.Future[Any],
     state: dict[str, str | None],
 ) -> None:
     """Heartbeat the lease and propagate cancellation into the running job.
@@ -261,12 +260,12 @@ def _is_cancelled(job_id: str, store: ContentStore) -> bool:
 
 def _calculate_backoff_delay(attempt: int) -> int:
     """Calculate exponential backoff delay in seconds.
-    
+
     Delays: 30s, 60s, 120s, 240s, 480s (capped at max)
     """
     base_delay = config.JOB_RETRY_INITIAL_DELAY_SECONDS
     max_delay = config.JOB_RETRY_MAX_DELAY_SECONDS
-    
+
     # Exponential: 30 * 2^(attempt-1)
     delay = base_delay * (2 ** (attempt - 1))
     return min(delay, max_delay)
@@ -283,14 +282,14 @@ def _handle_job_error(
     """Handle job errors with smart retry logic based on error classification."""
     error_message = str(exc).strip() or "Job failed unexpectedly"
     error_type = ErrorClassifier.classify(exc)
-    
+
     should_retry = ErrorClassifier.should_retry(exc, current_attempt, max_retries)
-    
+
     if should_retry:
         # Calculate backoff and schedule retry
         delay_seconds = _calculate_backoff_delay(current_attempt)
         next_retry_at = datetime.now() + timedelta(seconds=delay_seconds)
-        
+
         store.update_job(
             job_id,
             status="failed",  # Keep as failed but with next_retry_at set
@@ -299,14 +298,14 @@ def _handle_job_error(
             error_type=error_type,
             next_retry_at=next_retry_at,
         )
-        
+
         # P2-01: Metrics and logging
         metrics.job_retry_attempts_total.labels(error_type=error_type, job_type=job_type).inc()
         log_job_event(
             logger, "retry_scheduled", job_id, job_type,
             error_type=error_type, retry_count=current_attempt, next_retry_at=next_retry_at.isoformat()
         )
-        
+
         log_event(
             logger,
             "job_retry_scheduled",
@@ -318,12 +317,12 @@ def _handle_job_error(
             max_retries=max_retries,
             next_retry_in_seconds=delay_seconds,
         )
-        
+
         # Requeue the job for delayed execution
         from src.jobs.queue import requeue_job_with_delay
         try:
             requeue_job_with_delay(job_id, delay_seconds, store.database_url)
-        except Exception as requeue_error:
+        except Exception as requeue_error:  # noqa: BLE001 -- queue boundary; logged and job marked failed
             log_event(
                 logger,
                 "job_requeue_failed",
@@ -341,7 +340,7 @@ def _handle_job_error(
             error_type=error_type,
             next_retry_at=None,  # Clear any scheduled retry
         )
-        
+
         # P2-01: Metrics and logging
         if current_attempt >= max_retries:
             metrics.job_retry_exhausted_total.labels(job_type=job_type).inc()
@@ -350,7 +349,7 @@ def _handle_job_error(
             logger, "failed_permanently", job_id, job_type,
             error_type=error_type, retry_count=current_attempt, max_retries=max_retries
         )
-        
+
         log_event(
             logger,
             "job_failed",

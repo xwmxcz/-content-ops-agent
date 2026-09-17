@@ -19,8 +19,8 @@ from src.api.schemas.agent import (
     ProposedActionCreate,
     ProposedActionResponse,
 )
-from src.api.services.chat_agent import ChatAgentExecutionError, ChatAgentService
 from src.api.services.agent_pipeline import PipelineExecutionError, run_agent_pipeline
+from src.api.services.chat_agent import ChatAgentExecutionError, ChatAgentService
 from src.api.services.dynamic_pipeline import DynamicPipeline
 from src.api.services.tool_policy import SIDE_EFFECT_TOOLS
 from src.jobs.queue import JobQueueError, enqueue_pipeline_run
@@ -28,7 +28,6 @@ from src.llm.litellm_client import LiteLLMClient
 from src.storage import ContentStore
 from src.storage.tenancy import TenantAccessError
 from src.utils import config
-
 
 router = APIRouter()
 

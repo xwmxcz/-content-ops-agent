@@ -13,13 +13,13 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
 from src.agent.context_engine import CompressionResult, ContextEngine
 from src.llm.litellm_client import LiteLLMClient
-
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +172,7 @@ class ContextCompressor(ContextEngine):
                 temperature=0.2,
                 max_tokens=1500,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 -- aux LLM boundary; compression is optional
             logger.warning("Context compression skipped: aux LLM call failed (%s)", exc)
             return CompressionResult(messages=messages, compressed=False)
 

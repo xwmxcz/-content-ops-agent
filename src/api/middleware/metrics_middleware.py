@@ -1,6 +1,6 @@
 """HTTP request metrics middleware for Prometheus."""
 import time
-from typing import Callable
+from collections.abc import Callable
 
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -34,7 +34,7 @@ class MetricsMiddleware(BaseHTTPMiddleware):
             ).observe(duration)
 
             return response
-        except Exception as exc:
+        except Exception:
             # Track failed requests (500)
             duration = time.time() - start_time
             metrics.http_requests_total.labels(

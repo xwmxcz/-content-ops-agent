@@ -7,9 +7,10 @@
 
 import pytest
 
+
 def pytest_collection_modifyitems(config, items):
     """Skip standalone tests when running pytest normally.
-    
+
     These tests must run as standalone scripts to avoid config module caching.
     Use: python3 tests/standalone/test_production_validation.py
     """

@@ -6,7 +6,7 @@ from datetime import datetime
 
 from src.api.schemas.content import GenerateRequest, RefineRequest, SeoRequest, TitleRequest
 from src.llm.litellm_client import LiteLLMClient
-from src.models import ContentStyle, ContentType, GeneratedContent
+from src.models import ContentType, GeneratedContent
 from src.storage import ContentStore
 from src.tools.prompt_templates import PromptTemplates
 from src.utils import config

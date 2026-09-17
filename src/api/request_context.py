@@ -10,7 +10,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.utils.structured_logging import log_event
 
-
 logger = logging.getLogger(__name__)
 
 

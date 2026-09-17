@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import json
+
 import pytest
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
 
 from src.api.schemas.agent import ChatRequest
-from src.api.services.chat_agent import ChatAgentService, _FROZEN_PROMPTS
+from src.api.services.chat_agent import _FROZEN_PROMPTS, ChatAgentService
 from src.api.services.intent_recognizer import IntentRecognizer
-from src.storage.file_memory import AGENT, FileMemory, USER
-
+from src.storage.file_memory import AGENT, USER, FileMemory
 
 # ─── Fakes mirroring test_api_contract patterns ────────────────────────────
 

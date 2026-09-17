@@ -6,7 +6,6 @@ from fastapi import APIRouter
 from src.api.schemas.models import ModelInfo, ProviderInfo
 from src.utils import config
 
-
 router = APIRouter()
 
 

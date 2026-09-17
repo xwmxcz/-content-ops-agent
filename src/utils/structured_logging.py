@@ -7,7 +7,6 @@ import sys
 from datetime import datetime, timezone
 from typing import Any
 
-
 _STANDARD_FIELDS = set(logging.makeLogRecord({}).__dict__) | {"message", "asctime"}
 
 
@@ -70,7 +69,7 @@ def log_idempotency_event(
 ) -> None:
     """
     Log idempotency events: claim, replay, conflict.
-    
+
     Args:
         outcome: "claimed", "replay", or "conflict"
         scope: idempotency scope (e.g., "generate_content")
@@ -104,7 +103,7 @@ def log_job_event(
 ) -> None:
     """
     Log job lifecycle events: retry_scheduled, failed_permanently, completed.
-    
+
     Args:
         event: "job_retry_scheduled", "job_failed_permanently", "job_completed"
         job_id: job identifier
@@ -139,7 +138,7 @@ def log_capability_event(
 ) -> None:
     """
     Log capability lifecycle events: proposed, consumed, expired, tampered.
-    
+
     Args:
         event: "capability_proposed", "capability_consumed", "capability_expired", "capability_tampered"
         action_id: unique capability/action identifier

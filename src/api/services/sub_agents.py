@@ -11,11 +11,13 @@ cost_estimate)` so DynamicPipeline can keep the per-step accounting in one place
 from __future__ import annotations
 
 import json
+import logging
 import time
-from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
 from src.api.schemas.agent import SubAgentId
@@ -23,6 +25,8 @@ from src.llm.litellm_client import LiteLLMClient
 from src.storage import ContentStore
 from src.tools.web_search import web_search as run_web_search
 from src.utils import config
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -149,6 +153,17 @@ def estimate_cost(model: str | None, prompt_tokens: int, completion_tokens: int)
 # Token emit callback signature: async (delta_text) -> None
 TokenSink = Callable[[str], Awaitable[None]]
 ToolSink = Callable[[str, dict[str, Any]], Awaitable[None]]
+
+
+async def _safe_sink(sink: ToolSink | None, event: str, payload: dict[str, Any]) -> None:
+    """Deliver a tool telemetry event; observers must never break the agent loop."""
+    if sink is None:
+        return
+    try:
+        await sink(event, payload)
+    except Exception as exc:  # noqa: BLE001 -- telemetry sink is best-effort
+        logger.debug("tool sink rejected %s event: %s", event, exc.__class__.__name__)
+
 
 
 class SubAgentRunner:
@@ -280,11 +295,7 @@ class SubAgentRunner:
                 args = call.get("args") or {}
                 tool = tools_by_name.get(name)
                 started = time.perf_counter()
-                if tool_sink is not None:
-                    try:
-                        await tool_sink("tool_call_start", {"name": name, "args": args})
-                    except Exception:
-                        pass
+                await _safe_sink(tool_sink, "tool_call_start", {"name": name, "args": args})
                 if not tool:
                     output = f"Tool `{name}` is not available to {spec.id}."
                     duration_ms = int((time.perf_counter() - started) * 1000)
@@ -292,14 +303,10 @@ class SubAgentRunner:
                         "name": name, "args": args, "status": "failed",
                         "error": output, "output": "", "duration_ms": duration_ms,
                     })
-                    if tool_sink is not None:
-                        try:
-                            await tool_sink("tool_call_result", {
-                                "name": name, "args": args, "status": "failed",
-                                "error": output, "preview": "", "duration_ms": duration_ms,
-                            })
-                        except Exception:
-                            pass
+                    await _safe_sink(tool_sink, "tool_call_result", {
+                        "name": name, "args": args, "status": "failed",
+                        "error": output, "preview": "", "duration_ms": duration_ms,
+                    })
                 else:
                     try:
                         raw = await tool.ainvoke(args) if hasattr(tool, "ainvoke") else tool.invoke(args)
@@ -309,29 +316,21 @@ class SubAgentRunner:
                             "name": name, "args": args, "status": "completed",
                             "output": output, "duration_ms": duration_ms,
                         })
-                        if tool_sink is not None:
-                            try:
-                                await tool_sink("tool_call_result", {
-                                    "name": name, "args": args, "status": "completed",
-                                    "preview": self._tool_preview(output), "duration_ms": duration_ms,
-                                })
-                            except Exception:
-                                pass
-                    except Exception as exc:
+                        await _safe_sink(tool_sink, "tool_call_result", {
+                            "name": name, "args": args, "status": "completed",
+                            "preview": self._tool_preview(output), "duration_ms": duration_ms,
+                        })
+                    except Exception as exc:  # noqa: BLE001 -- tool boundary: any tool error becomes a failed result
                         output = f"Tool failed: {exc}"
                         duration_ms = int((time.perf_counter() - started) * 1000)
                         tool_results.append({
                             "name": name, "args": args, "status": "failed",
                             "error": str(exc), "output": "", "duration_ms": duration_ms,
                         })
-                        if tool_sink is not None:
-                            try:
-                                await tool_sink("tool_call_result", {
-                                    "name": name, "args": args, "status": "failed",
-                                    "error": str(exc), "preview": "", "duration_ms": duration_ms,
-                                })
-                            except Exception:
-                                pass
+                        await _safe_sink(tool_sink, "tool_call_result", {
+                            "name": name, "args": args, "status": "failed",
+                            "error": str(exc), "preview": "", "duration_ms": duration_ms,
+                        })
                 messages.append(ToolMessage(content=output, tool_call_id=call.get("id") or name or "x"))
         final_text = self._clean_final_text(last_text)
         if final_text:

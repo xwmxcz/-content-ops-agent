@@ -7,12 +7,12 @@ operation.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 from src.api.schemas.agent import ChatIntent
 from src.utils.canonical import canonical_json
-
 
 ToolEffect = Literal["read_only", "side_effect"]
 ToolRisk = Literal["low", "medium", "high"]

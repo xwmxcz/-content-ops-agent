@@ -5,20 +5,22 @@ import json
 import logging
 import re
 import time
+from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import Any, Callable
+from typing import Any
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
+from pydantic import ValidationError
 
 from src.agent.context_engine import ContextEngine
 from src.api.schemas.agent import ChatIntent, ChatRequest, ChatResponse, ChatToolEvent, PlanStep
 from src.api.schemas.content import GenerateRequest, RefineRequest, SeoRequest, TitleRequest
-from src.api.services.publish_service import create_publish_service
 from src.api.services import content_service
 from src.api.services.content_service import resolve_provider
 from src.api.services.intent_recognizer import PLAN_EXEMPT_INTENTS, IntentRecognizer
+from src.api.services.publish_service import create_publish_service
 from src.api.services.tool_policy import (
     SIDE_EFFECT_TOOLS,
     ToolApprovalRequired,
@@ -26,10 +28,10 @@ from src.api.services.tool_policy import (
     authorize_tool_call,
     validate_tool_policy_registry,
 )
-from src.llm.litellm_client import LLMConfigurationError, LiteLLMClient
+from src.llm.litellm_client import LiteLLMClient, LLMConfigurationError
 from src.models import ContentStyle, ContentType
 from src.storage import ContentStore
-from src.storage.file_memory import AGENT as MEMORY_AGENT, USER as MEMORY_USER, FileMemory, MemoryAmbiguous, MemoryLimitExceeded, MemoryNotFound
+from src.storage.file_memory import FileMemory, MemoryAmbiguous, MemoryLimitExceeded, MemoryNotFound
 from src.utils import config
 from src.utils.canonical import args_hash
 from src.utils.idempotency import (
@@ -41,7 +43,6 @@ from src.utils.idempotency import (
     request_key,
 )
 from src.utils.structured_logging import log_event
-
 
 logger = logging.getLogger(__name__)
 MAX_LOOPS = 8
@@ -229,7 +230,8 @@ class ChatAgentService:
                 model=model,
                 thread_id=thread_id,
             )
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 -- intent recognition is best-effort; never fail the chat turn
+            logger.warning("intent recognition failed, treating as unknown: %s", exc.__class__.__name__)
             intent = ChatIntent(name="unknown", confidence=0.0)
 
         if intent.name == "clarify":
@@ -266,7 +268,8 @@ class ChatAgentService:
                     model=model,
                     intent=intent,
                 )
-            except Exception:
+            except Exception as exc:  # noqa: BLE001 -- planning is an optimisation; agent runs unplanned
+                logger.warning("chat planner failed, running without a plan: %s", exc.__class__.__name__)
                 plan = []
 
         try:
@@ -346,7 +349,7 @@ class ChatAgentService:
                         status="pending",
                     )
                 )
-            except Exception:
+            except (TypeError, ValueError, ValidationError):
                 continue
         return [s for s in steps if s.description and ((not s.tool_hint) or s.tool_hint in intent.allowed_tools)]
 
@@ -410,8 +413,8 @@ class ChatAgentService:
                         status="completed",
                         attempt=1,
                     ))
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 -- compression is optional; continue with full history
+                logger.warning("context compression failed, using uncompressed history: %s", exc.__class__.__name__)
 
         attempt_count: dict[str, int] = {}
         failure_count: dict[str, int] = {}
@@ -476,7 +479,7 @@ class ChatAgentService:
                         plan_step_index=step_index,
                     )
                     messages.append(ToolMessage(content=output_text, tool_call_id=call.get("id") or name))
-                except ToolApprovalRequired as exc:
+                except ToolApprovalRequired:
                     duration_ms = int((time.perf_counter() - started) * 1000)
                     failure_count[name] = MAX_FAILURES_PER_TOOL + 1
                     action_id = self._persist_proposed_action(
@@ -524,7 +527,7 @@ class ChatAgentService:
                         "in a new message."
                     )
                     messages.append(ToolMessage(content=feedback, tool_call_id=call.get("id") or name))
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 -- tool boundary: any tool error becomes a failed tool event
                     duration_ms = int((time.perf_counter() - started) * 1000)
                     failure_count[name] = failure_count.get(name, 0) + 1
                     error_text = str(exc) or exc.__class__.__name__
@@ -1175,7 +1178,7 @@ class ChatAgentService:
                 ttl_seconds=config.ACTION_CAPABILITY_TTL_SECONDS,
                 requester=self.store.user_id,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 -- logged below; persistence failure must not widen authorization
             # Failing to persist the capability must not turn into an unbounded
             # approval: the proposal stays unconfirmable and the user re-asks.
             log_event(

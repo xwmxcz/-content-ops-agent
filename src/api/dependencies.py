@@ -1,6 +1,5 @@
 """Share the database pool while binding request stores and file memory to one user."""
 from functools import lru_cache
-
 from pathlib import Path
 
 from fastapi import Depends, HTTPException, Request
@@ -8,13 +7,13 @@ from fastapi import Depends, HTTPException, Request
 from src.agent.context_compressor import ContextCompressor
 from src.agent.context_engine import ContextEngine
 from src.agent.memory_curator import MemoryCurator
+from src.api.services.chat_agent import ChatAgentService
 from src.api.services.publish_service import PublishService, create_publish_service
 from src.llm.litellm_client import LiteLLMClient
-from src.api.services.chat_agent import ChatAgentService
 from src.storage import ContentStore
 from src.storage.account_store import AccountStore
-from src.storage.schema import assert_schema_current
 from src.storage.file_memory import FileMemory
+from src.storage.schema import assert_schema_current
 from src.utils import config
 
 

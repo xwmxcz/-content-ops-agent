@@ -12,7 +12,7 @@ router = APIRouter()
 async def metrics() -> Response:
     """
     Prometheus metrics endpoint.
-    
+
     Returns metrics in Prometheus text format, or 503 if prometheus_client is not available.
     """
     metrics_text = get_metrics_text()
@@ -22,7 +22,7 @@ async def metrics() -> Response:
             status_code=503,
             media_type="text/plain"
         )
-    
+
     return Response(
         content=metrics_text,
         media_type="text/plain; version=0.0.4; charset=utf-8"

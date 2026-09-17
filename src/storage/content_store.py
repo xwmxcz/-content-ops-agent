@@ -5,21 +5,36 @@ for_user share the engine, not mutable request identity; existing databases are
 upgraded only by Alembic.
 """
 import json
+import logging
 import re
-from datetime import datetime, date, timedelta, timezone
-from typing import Optional, List, Dict, Any
+from datetime import date, datetime, timedelta, timezone
+from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, create_engine, func, inspect, or_, text
+from sqlalchemy import (
+    Boolean,
+    Column,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    create_engine,
+    func,
+    inspect,
+    or_,
+    text,
+)
 from sqlalchemy.engine import make_url
-from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
-
-import logging
-
-from src.utils import metrics
-from src.utils.structured_logging import log_idempotency_event, log_capability_event
 from src.storage.tenancy import OwnedMixin, TenantSession
+from src.utils import metrics
+from src.utils.structured_logging import log_capability_event, log_idempotency_event
 
 logger = logging.getLogger(__name__)
 
@@ -484,7 +499,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def get_content(self, content_id: int) -> Optional[Dict[str, Any]]:
+    def get_content(self, content_id: int) -> dict[str, Any] | None:
         session = self._get_session()
         try:
             content = session.query(Content).filter(Content.id == content_id).first()
@@ -512,7 +527,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def list_contents(self, status=None, content_type=None, limit=50, offset=0) -> List[Dict[str, Any]]:
+    def list_contents(self, status=None, content_type=None, limit=50, offset=0) -> list[dict[str, Any]]:
         session = self._get_session()
         try:
             query = session.query(Content)
@@ -537,7 +552,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def search_contents(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+    def search_contents(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
         if not query or not query.strip():
             return []
         pattern = f"%{query.strip()}%"
@@ -578,7 +593,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def get_calendar_events(self, start_date=None, end_date=None) -> List[Dict[str, Any]]:
+    def get_calendar_events(self, start_date=None, end_date=None) -> list[dict[str, Any]]:
         session = self._get_session()
         try:
             query = session.query(CalendarEvent, Content).join(
@@ -605,7 +620,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def get_content_stats(self) -> Dict[str, Any]:
+    def get_content_stats(self) -> dict[str, Any]:
         session = self._get_session()
         try:
             total = session.query(Content).count()
@@ -631,7 +646,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def aggregate_performance(self, days: int = 30) -> Dict[str, Any]:
+    def aggregate_performance(self, days: int = 30) -> dict[str, Any]:
         """Group contents from the last `days` days by content_type + style and aggregate
         engagement metrics. Used by the chat Agent's analyze_content_performance tool.
 
@@ -749,7 +764,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def get_calendar_conflicts(self, start_date: date, end_date: date) -> List[Dict[str, Any]]:
+    def get_calendar_conflicts(self, start_date: date, end_date: date) -> list[dict[str, Any]]:
         """Return calendar events between [start_date, end_date], minimal shape used
         by the schedule planner to avoid double-booking a date+platform pair."""
         session = self._get_session()
@@ -774,7 +789,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def list_optimization_candidates(self, criteria: str = "underperforming", limit: int = 5) -> List[Dict[str, Any]]:
+    def list_optimization_candidates(self, criteria: str = "underperforming", limit: int = 5) -> list[dict[str, Any]]:
         """Find contents that may benefit from refinement. Used by the chat Agent's
         find_optimization_candidates tool.
 
@@ -787,7 +802,7 @@ class ContentStore:
         try:
             criteria = (criteria or "underperforming").lower()
             now = datetime.now()
-            results: List[Dict[str, Any]] = []
+            results: list[dict[str, Any]] = []
 
             if criteria == "underperforming":
                 contents = session.query(Content).all()
@@ -886,7 +901,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def delete_content(self, content_id: int) -> Optional[Dict[str, Any]]:
+    def delete_content(self, content_id: int) -> dict[str, Any] | None:
         session = self._get_session()
         try:
             content = session.query(Content).filter(Content.id == content_id).first()
@@ -933,7 +948,7 @@ class ContentStore:
         mime_type: str | None = None,
         provider: str | None = None,
         generation_params: dict[str, Any] | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         session = self._get_session()
         try:
             current_order = (
@@ -966,7 +981,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def get_media_asset(self, media_id: int) -> Optional[Dict[str, Any]]:
+    def get_media_asset(self, media_id: int) -> dict[str, Any] | None:
         session = self._get_session()
         try:
             asset = session.query(MediaAsset).filter(MediaAsset.id == media_id).first()
@@ -976,7 +991,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def list_media_assets(self, content_id: int, media_type: str | None = None) -> List[Dict[str, Any]]:
+    def list_media_assets(self, content_id: int, media_type: str | None = None) -> list[dict[str, Any]]:
         session = self._get_session()
         try:
             query = session.query(MediaAsset).filter(MediaAsset.content_id == content_id)
@@ -987,7 +1002,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def delete_media_asset(self, media_id: int) -> Optional[Dict[str, Any]]:
+    def delete_media_asset(self, media_id: int) -> dict[str, Any] | None:
         session = self._get_session()
         try:
             asset = session.query(MediaAsset).filter(MediaAsset.id == media_id).first()
@@ -1013,7 +1028,7 @@ class ContentStore:
         body: str,
         scheduled_at: datetime | None = None,
         request_payload: dict[str, Any] | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         session = self._get_session()
         try:
             publication = PlatformPublication(
@@ -1036,7 +1051,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def get_publication(self, publication_id: int) -> Optional[Dict[str, Any]]:
+    def get_publication(self, publication_id: int) -> dict[str, Any] | None:
         session = self._get_session()
         try:
             publication = session.query(PlatformPublication).filter(PlatformPublication.id == publication_id).first()
@@ -1046,7 +1061,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def list_publications(self, content_id: int) -> List[Dict[str, Any]]:
+    def list_publications(self, content_id: int) -> list[dict[str, Any]]:
         session = self._get_session()
         try:
             publications = (
@@ -1059,7 +1074,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def update_publication(self, publication_id: int, **fields) -> Optional[Dict[str, Any]]:
+    def update_publication(self, publication_id: int, **fields) -> dict[str, Any] | None:
         session = self._get_session()
         try:
             publication = session.query(PlatformPublication).filter(PlatformPublication.id == publication_id).first()
@@ -1090,7 +1105,7 @@ class ContentStore:
         payload: dict,
         provider: str | None = None,
         model: str | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         session = self._get_session()
         try:
             now = datetime.now()
@@ -1115,7 +1130,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
+    def get_job(self, job_id: str) -> dict[str, Any] | None:
         session = self._get_session()
         try:
             job = session.query(Job).filter(Job.id == job_id).first()
@@ -1125,7 +1140,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def update_job(self, job_id: str, **fields) -> Optional[Dict[str, Any]]:
+    def update_job(self, job_id: str, **fields) -> dict[str, Any] | None:
         session = self._get_session()
         try:
             job = session.query(Job).filter(Job.id == job_id).first()
@@ -1161,7 +1176,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def start_job(self, job_id: str, attempts: int, progress: int = 5) -> Optional[Dict[str, Any]]:
+    def start_job(self, job_id: str, attempts: int, progress: int = 5) -> dict[str, Any] | None:
         """Mark a queued/failed job as running without reviving a cancelled job."""
         session = self._get_session()
         try:
@@ -1308,7 +1323,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def find_expired_lease_jobs(self, limit: int = 50) -> List[Dict[str, Any]]:
+    def find_expired_lease_jobs(self, limit: int = 50) -> list[dict[str, Any]]:
         """Running jobs whose lease lapsed, i.e. the owning worker stopped heartbeating."""
         session = self._get_session()
         try:
@@ -1328,7 +1343,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def reclaim_job_lease(self, job_id: str, worker_id: str) -> Optional[Dict[str, Any]]:
+    def reclaim_job_lease(self, job_id: str, worker_id: str) -> dict[str, Any] | None:
         """Move an expired-lease job back to ``queued`` so it can be retried.
 
         The ``lease_expires_at < now`` predicate stays in the WHERE clause: between
@@ -1381,8 +1396,8 @@ class ContentStore:
         step_index: int,
         step_name: str,
         status: str = "completed",
-        result_data: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        result_data: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Upsert one step's checkpoint.
 
         Upsert rather than insert because a step may be checkpointed twice: once
@@ -1421,7 +1436,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def load_run_step_checkpoints(self, run_id: str) -> List[Dict[str, Any]]:
+    def load_run_step_checkpoints(self, run_id: str) -> list[dict[str, Any]]:
         """All persisted steps for a run, ordered by step index."""
         session = self._get_session()
         try:
@@ -1435,7 +1450,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def get_run_step_checkpoint(self, run_id: str, step_index: int) -> Optional[Dict[str, Any]]:
+    def get_run_step_checkpoint(self, run_id: str, step_index: int) -> dict[str, Any] | None:
         session = self._get_session()
         try:
             step = (
@@ -1490,7 +1505,7 @@ class ContentStore:
             session.close()
 
     @staticmethod
-    def _run_step_to_dict(step: RunStep) -> Dict[str, Any]:
+    def _run_step_to_dict(step: RunStep) -> dict[str, Any]:
         return {
             "id": step.id,
             "run_id": step.run_id,
@@ -1518,7 +1533,7 @@ class ContentStore:
         title: str | None = None,
         provider: str | None = None,
         model: str | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Create or touch a thread row.
 
         Auto-title path: `title` is only written when the thread is brand-new
@@ -1561,7 +1576,7 @@ class ContentStore:
         offset: int = 0,
         include_archived: bool = False,
         q: str | None = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """List threads with pin-first ordering, optional archived filter, optional title/id search.
 
         Uses a single LEFT JOIN + GROUP BY to fetch message_count, replacing the
@@ -1596,7 +1611,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def get_agent_thread(self, thread_id: str) -> Optional[Dict[str, Any]]:
+    def get_agent_thread(self, thread_id: str) -> dict[str, Any] | None:
         session = self._get_session()
         try:
             thread = session.query(AgentThread).filter(AgentThread.id == thread_id).first()
@@ -1613,7 +1628,7 @@ class ContentStore:
         title: str | None = None,
         pinned: bool | None = None,
         archived: bool | None = None,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Manual edits to a thread row.
 
         - Passing `title` writes it and sets `title_pinned=True`, which locks
@@ -1700,7 +1715,7 @@ class ContentStore:
         thread_id: str,
         limit: int = 50,
         before_id: int | None = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """List messages oldest-first.
 
         Without `before_id`, returns the most recent `limit` messages.
@@ -1722,7 +1737,7 @@ class ContentStore:
         query: str,
         limit: int = 10,
         thread_id: str | None = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Substring search over agent_messages content using ILIKE."""
         query = (query or "").strip()
         if not query:
@@ -1769,7 +1784,7 @@ class ContentStore:
         requester: str | None = None,
         proposing_message_id: int | None = None,
         action_id: str | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Persist an unconfirmed proposal and return its durable action id."""
         from src.utils.canonical import args_hash, canonical_json
 
@@ -1804,7 +1819,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def get_proposed_action(self, action_id: str) -> Optional[Dict[str, Any]]:
+    def get_proposed_action(self, action_id: str) -> dict[str, Any] | None:
         session = self._get_session()
         try:
             action = (
@@ -1822,7 +1837,7 @@ class ContentStore:
         *,
         statuses: tuple[str, ...] | set[str] | None = None,
         limit: int = 20,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         session = self._get_session()
         try:
             query = session.query(ProposedAction).filter(ProposedAction.thread_id == thread_id)
@@ -1842,7 +1857,7 @@ class ContentStore:
         thread_id: str,
         *,
         tool_name: str | None = None,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Most recent unexpired ``proposed`` row for a thread.
 
         Expiry is evaluated against the stored ``expires_at`` using the same
@@ -1869,7 +1884,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def confirm_proposed_action(self, action_id: str) -> Optional[Dict[str, Any]]:
+    def confirm_proposed_action(self, action_id: str) -> dict[str, Any] | None:
         """Move exactly one ``proposed`` row to ``confirmed``.
 
         Two concurrent confirmations of the same proposal serialize on the row
@@ -1908,7 +1923,7 @@ class ContentStore:
         tool_name: str,
         args: dict[str, Any],
         consuming_message_id: int | None = None,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Atomically claim a confirmed capability for one tool invocation.
 
         The row lock plus the ``status == 'confirmed'`` predicate make this the
@@ -1962,7 +1977,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def cancel_proposed_action(self, action_id: str) -> Optional[Dict[str, Any]]:
+    def cancel_proposed_action(self, action_id: str) -> dict[str, Any] | None:
         """Cancel a proposal or an unused confirmation; consumed rows are final."""
         session = self._get_session()
         try:
@@ -2009,7 +2024,7 @@ class ContentStore:
             session.close()
 
     @staticmethod
-    def _proposed_action_to_dict(action: ProposedAction) -> Dict[str, Any]:
+    def _proposed_action_to_dict(action: ProposedAction) -> dict[str, Any]:
         try:
             args = json.loads(action.args_json)
         except (TypeError, ValueError):
@@ -2039,9 +2054,9 @@ class ContentStore:
         *,
         scope: str,
         key: str,
-        args: Dict[str, Any],
+        args: dict[str, Any],
         external_request_id: str | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Claim ``(user_id, scope, key)`` or report this user's prior outcome.
 
         The claim is an INSERT guarded by the unique constraint, so two racing
@@ -2240,7 +2255,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def get_idempotency_record(self, *, scope: str, key: str) -> Optional[Dict[str, Any]]:
+    def get_idempotency_record(self, *, scope: str, key: str) -> dict[str, Any] | None:
         session = self._get_session()
         try:
             record = (
@@ -2287,7 +2302,7 @@ class ContentStore:
         provider: str | None = None,
         model: str | None = None,
         thread_id: str | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         session = self._get_session()
         try:
             run = AgentRun(
@@ -2309,7 +2324,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def update_run(self, run_id: str, **fields) -> Optional[Dict[str, Any]]:
+    def update_run(self, run_id: str, **fields) -> dict[str, Any] | None:
         if fields.get("status") in {"completed", "failed", "cancelled"}:
             raise ValueError(
                 "Terminal run states must use transition_run_and_append_event()"
@@ -2334,7 +2349,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def get_run(self, run_id: str) -> Optional[Dict[str, Any]]:
+    def get_run(self, run_id: str) -> dict[str, Any] | None:
         session = self._get_session()
         try:
             run = session.query(AgentRun).filter(AgentRun.id == run_id).first()
@@ -2342,7 +2357,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def list_runs(self, thread_id: str | None = None, limit: int = 30) -> List[Dict[str, Any]]:
+    def list_runs(self, thread_id: str | None = None, limit: int = 30) -> list[dict[str, Any]]:
         session = self._get_session()
         try:
             query = session.query(AgentRun)
@@ -2353,7 +2368,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def append_run_event(self, run_id: str, event_type: str, payload: dict[str, Any]) -> Optional[int]:
+    def append_run_event(self, run_id: str, event_type: str, payload: dict[str, Any]) -> int | None:
         """Append a non-terminal event while the run is still active.
 
         The run-row lock serializes this check with terminal CAS transitions. If
@@ -2400,7 +2415,7 @@ class ContentStore:
         total_prompt_tokens: int,
         total_completion_tokens: int,
         total_cost: float,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Atomically persist final content, complete the run, and append its event.
 
         Cancellation and completion serialize on the run row. If cancellation
@@ -2461,7 +2476,7 @@ class ContentStore:
         event_type: str,
         payload: dict[str, Any],
         **fields: Any,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Compare-and-set a run state and append its event in one transaction.
 
         Returns ``None`` when another actor already moved the run out of an
@@ -2509,7 +2524,7 @@ class ContentStore:
         run_id: str,
         after_seq: int = 0,
         limit: int = 200,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         session = self._get_session()
         try:
             events = (
@@ -2532,7 +2547,7 @@ class ContentStore:
             session.close()
 
     @staticmethod
-    def _agent_run_to_dict(run: AgentRun) -> Dict[str, Any]:
+    def _agent_run_to_dict(run: AgentRun) -> dict[str, Any]:
         return {
             "id": run.id,
             "user_id": run.user_id,
@@ -2561,7 +2576,7 @@ class ContentStore:
         return title[:40] or "Untitled thread"
 
     @staticmethod
-    def _agent_message_to_dict(message: AgentMessage) -> Dict[str, Any]:
+    def _agent_message_to_dict(message: AgentMessage) -> dict[str, Any]:
         return {
             "id": message.id,
             "thread_id": message.thread_id,
@@ -2581,7 +2596,7 @@ class ContentStore:
         thread: AgentThread,
         session: Session,
         message_count: int | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if message_count is None:
             message_count = (
                 session.query(AgentMessage).filter(AgentMessage.thread_id == thread.id).count()
@@ -2600,7 +2615,7 @@ class ContentStore:
         }
 
     @staticmethod
-    def _content_to_dict(content: Content) -> Dict[str, Any]:
+    def _content_to_dict(content: Content) -> dict[str, Any]:
         return {
             "id": content.id,
             "title": content.title,
@@ -2617,7 +2632,7 @@ class ContentStore:
         }
 
     @staticmethod
-    def _media_asset_to_dict(asset: MediaAsset) -> Dict[str, Any]:
+    def _media_asset_to_dict(asset: MediaAsset) -> dict[str, Any]:
         return {
             "id": asset.id,
             "content_id": asset.content_id,
@@ -2633,7 +2648,7 @@ class ContentStore:
         }
 
     @staticmethod
-    def _publication_to_dict(publication: PlatformPublication) -> Dict[str, Any]:
+    def _publication_to_dict(publication: PlatformPublication) -> dict[str, Any]:
         return {
             "id": publication.id,
             "content_id": publication.content_id,
@@ -2653,7 +2668,7 @@ class ContentStore:
         }
 
     @staticmethod
-    def _job_to_dict(job: Job) -> Dict[str, Any]:
+    def _job_to_dict(job: Job) -> dict[str, Any]:
         return {
             "id": job.id,
             "user_id": job.user_id,

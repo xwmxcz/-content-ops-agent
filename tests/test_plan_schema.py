@@ -11,6 +11,7 @@ import logging
 import random
 
 import pytest
+from pydantic import ValidationError
 
 from src.api.schemas.agent import PipelinePlanStep
 from src.api.services.dynamic_pipeline import DynamicPipeline
@@ -19,7 +20,6 @@ from src.api.services.plan_schema import (
     INVARIANT_CONTIGUOUS_INDICES,
     INVARIANT_FINAL_AGENT,
     INVARIANT_PAYLOAD_SHAPE,
-    INVARIANT_SCHEMA,
     INVARIANT_STEP_COUNT,
     MAX_STEPS,
     REPAIR_PASS_NAMES,
@@ -35,7 +35,6 @@ from src.api.services.plan_schema import (
 from src.llm.litellm_client import LLMConfigurationError
 from src.utils import config
 from src.utils.config import Config
-
 
 # ---------- helpers -----------------------------------------------------------
 
@@ -143,7 +142,7 @@ def test_sibling_keys_beside_the_steps_array_are_ignored():
 
 
 def test_draft_model_rejects_blank_description():
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         PlannerPlanDraft(steps=[{"index": 1, "agent_id": "writer", "description": ""}])
 
 

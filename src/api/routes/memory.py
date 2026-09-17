@@ -22,8 +22,7 @@ from pydantic import BaseModel, Field
 from src.api.dependencies import get_file_memory, get_store
 from src.api.services.chat_agent import ChatAgentService
 from src.storage import ContentStore
-from src.storage.file_memory import AGENT, FileMemory, MemoryLimitExceeded, USER
-
+from src.storage.file_memory import AGENT, USER, FileMemory, MemoryLimitExceeded
 
 router = APIRouter()
 

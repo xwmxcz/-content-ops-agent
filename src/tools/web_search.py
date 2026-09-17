@@ -15,7 +15,6 @@ import httpx
 
 from src.utils import config
 
-
 SearchResult = dict[str, str]
 SearchResponse = list[SearchResult] | dict[str, Any]
 
@@ -57,7 +56,7 @@ async def web_search(query: str, limit: int = 5) -> SearchResponse:
         except SearchProviderError as exc:
             errors.append(f"{provider}: {exc}")
             continue
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 -- provider boundary: fall through to the next search provider
             errors.append(f"{provider}: {exc.__class__.__name__}")
             continue
 

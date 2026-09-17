@@ -9,7 +9,6 @@ from src.storage.schema import assert_schema_current
 from src.utils import config
 from src.utils.structured_logging import configure_logging
 
-
 if __name__ == "__main__":
     configure_logging(config.LOG_LEVEL)
     config.validate_runtime()

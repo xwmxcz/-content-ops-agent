@@ -9,7 +9,6 @@ import pytest
 
 from src.utils import config
 
-
 # Tests require a PostgreSQL database (SQLite support has been removed).
 # Point TEST_DATABASE_URL at a disposable database, e.g.:
 #   export TEST_DATABASE_URL=postgresql+psycopg://content_ops:content_ops@localhost:5432/content_ops_test
@@ -61,8 +60,8 @@ def store(pg_engine, monkeypatch):
     `config.DATABASE_URL` is redirected and the cached singleton cleared so the
     app lifespan and request-time `get_store()` share this same database.
     """
+    from src.api.dependencies import _file_memory_for, get_system_store
     from src.storage.content_store import Base, ContentStore, User
-    from src.api.dependencies import get_system_store, _file_memory_for
 
     monkeypatch.setattr(config, "DATABASE_URL", TEST_DATABASE_URL)
     Base.metadata.drop_all(pg_engine)

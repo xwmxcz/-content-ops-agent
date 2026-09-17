@@ -3,9 +3,9 @@
 Every test asserts the real database side-effect count, not only the returned
 status: a denial that still writes a row is the failure these guard against.
 """
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
-import threading
 
 import pytest
 from sqlalchemy import inspect, text
@@ -13,7 +13,6 @@ from sqlalchemy import inspect, text
 from src.api.schemas.agent import ChatIntent
 from src.api.services.tool_policy import ToolPolicyDenied, authorize_tool_call
 from src.utils.canonical import args_hash
-
 
 MEMORY_ARGS = {"target": "user", "text": "durable capability"}
 
@@ -244,7 +243,7 @@ def test_policy_gate_denies_replay_against_the_real_store(store):
 
 def test_legacy_proposal_without_durable_row_cannot_write(store):
     """Pre-existing threads have no capability, so they must fail closed."""
-    thread_id = _thread(store, "thread_legacy")
+    _thread(store, "thread_legacy")
     intent = ChatIntent(
         name="action_confirm",
         confidence=0.99,

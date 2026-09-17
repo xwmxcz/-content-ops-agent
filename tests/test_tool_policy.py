@@ -12,7 +12,7 @@ from src.api.services.tool_policy import (
     authorize_tool_call,
     validate_tool_policy_registry,
 )
-from src.storage.file_memory import FileMemory, USER
+from src.storage.file_memory import USER, FileMemory
 from src.utils.canonical import canonical_json
 
 

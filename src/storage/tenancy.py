@@ -11,7 +11,6 @@ from sqlalchemy import Column, ForeignKey, String, event, inspect, select
 from sqlalchemy.orm import Session, with_loader_criteria
 from sqlalchemy.sql.elements import BindParameter, Null
 
-
 LEGACY_USER_ID = "00000000000000000000000000000001"
 
 

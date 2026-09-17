@@ -15,7 +15,7 @@ from src.api.schemas.content import (
     TitleRequest,
 )
 from src.api.services import content_service
-from src.llm.litellm_client import LLMConfigurationError, LLMGenerationError, LiteLLMClient
+from src.llm.litellm_client import LiteLLMClient, LLMConfigurationError, LLMGenerationError
 from src.storage import ContentStore
 from src.utils import config
 from src.utils.idempotency import (
@@ -23,7 +23,6 @@ from src.utils.idempotency import (
     IdempotencyKeyConflict,
     request_key,
 )
-
 
 router = APIRouter()
 

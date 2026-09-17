@@ -12,7 +12,6 @@ from src.api.security import RESOURCE_SESSION_COOKIE, create_access_token, decod
 from src.storage.content_store import AuthSession, User
 from src.utils import config
 
-
 pytestmark = pytest.mark.real_auth
 PASSWORD = "Local-test-password-28!"
 
@@ -116,6 +115,7 @@ def test_bad_password_unknown_and_disabled_accounts_have_same_login_response(sto
 def test_migrated_legacy_workspace_is_not_claimed_by_registration(store):
     from alembic import command
     from sqlalchemy import text
+
     from src.models import ContentType, GeneratedContent
     from src.storage.content_store import Base
     from src.storage.schema import alembic_config

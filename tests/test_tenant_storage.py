@@ -7,9 +7,21 @@ from sqlalchemy.orm import aliased
 
 from src.models import ContentType, GeneratedContent
 from src.storage.content_store import (
-    AgentMessage, AgentRun, AgentRunEvent, AgentThread, CalendarEvent, Content,
-    ContentMetrics, ContentStore, IdempotencyRecord, Job, MediaAsset,
-    PlatformPublication, ProposedAction, RunStep, User,
+    AgentMessage,
+    AgentRun,
+    AgentRunEvent,
+    AgentThread,
+    CalendarEvent,
+    Content,
+    ContentMetrics,
+    ContentStore,
+    IdempotencyRecord,
+    Job,
+    MediaAsset,
+    PlatformPublication,
+    ProposedAction,
+    RunStep,
+    User,
 )
 from src.storage.tenancy import TenantAccessError
 
@@ -230,6 +242,7 @@ def test_idempotency_and_background_discovery_carry_the_real_owner(workspaces):
 
 def test_workspace_migration_preserves_legacy_data_without_public_claim(pg_engine):
     from alembic import command
+
     from src.storage.content_store import Base
     from src.storage.schema import alembic_config, assert_schema_current
     from src.storage.tenancy import LEGACY_USER_ID

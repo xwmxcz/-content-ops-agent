@@ -6,8 +6,12 @@ from fastapi import Depends
 from fastapi.testclient import TestClient
 
 from src.api.dependencies import (
-    _file_memory_for, get_chat_agent_service, get_file_memory, get_litellm_client,
-    get_store, get_system_store,
+    _file_memory_for,
+    get_chat_agent_service,
+    get_file_memory,
+    get_litellm_client,
+    get_store,
+    get_system_store,
 )
 from src.api.main import app
 from src.api.schemas.agent import ChatIntent
@@ -15,7 +19,6 @@ from src.api.services.chat_agent import ChatAgentService
 from src.llm.litellm_client import LiteLLMClient
 from src.models import ContentType, GeneratedContent
 from src.utils import config
-
 
 pytestmark = pytest.mark.real_auth
 

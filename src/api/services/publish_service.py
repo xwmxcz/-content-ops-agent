@@ -7,15 +7,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from src.integrations.mcp_client import McpClientError, XiaohongshuMcpClient
+from src.integrations.mcp_client import XiaohongshuMcpClient
 from src.storage import ContentStore
-from src.utils import config
+from src.utils import config, metrics
 from src.utils.idempotency import (
     SCOPE_PUBLICATION_EXECUTE,
     idempotent_write_async,
     publication_request_id,
 )
-from src.utils import metrics
 from src.utils.structured_logging import log_event
 
 logger = logging.getLogger(__name__)
@@ -131,7 +130,7 @@ class PublishService:
     ) -> dict[str, Any]:
         request_payload = publication.get("request_payload") or {}
         self.store.update_publication(publication_id, status="running", error_message=None)
-        
+
         # P2-01: Track publication request and duration
         start_time = time.time()
         platform = publication.get("platform", "xiaohongshu")
@@ -163,7 +162,7 @@ class PublishService:
                 self.store.update_content(publication["content_id"], status="scheduled")
                 scheduled_date = datetime.fromisoformat(request_payload["scheduled_at"]).date()
                 self.store.save_calendar_event(publication["content_id"], "xiaohongshu", scheduled_date)
-            
+
             # P2-01: Track success
             duration = time.time() - start_time
             metrics.publication_requests_total.labels(platform=platform, status=final_status).inc()
@@ -173,11 +172,11 @@ class PublishService:
                 publication_id=publication_id, platform=platform,
                 status=final_status, duration_seconds=duration
             )
-            
+
             return updated or publication
         except Exception as exc:
             self.store.update_publication(publication_id, status="failed", error_message=str(exc))
-            
+
             # P2-01: Track failure
             duration = time.time() - start_time
             metrics.publication_requests_total.labels(platform=platform, status="failed").inc()

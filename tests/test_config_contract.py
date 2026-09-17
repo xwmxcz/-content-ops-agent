@@ -1,13 +1,13 @@
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
+from src.llm.litellm_client import _format_provider_error
 from src.utils import config
 from src.utils.config import Config
-from src.llm.litellm_client import _format_provider_error
 
 
 @pytest.fixture(autouse=True)

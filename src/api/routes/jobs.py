@@ -12,7 +12,6 @@ from src.api.schemas.jobs import (
 from src.jobs.queue import JobCapacityError, JobQueueError, create_and_enqueue_job
 from src.storage import ContentStore
 
-
 router = APIRouter()
 
 

@@ -1,8 +1,8 @@
 """PostgreSQL account, revocable-session, and atomic authentication throttling storage."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import hashlib
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from sqlalchemy import case
