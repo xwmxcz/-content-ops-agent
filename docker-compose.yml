@@ -110,12 +110,16 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # Probe /health/ready, not /health: the liveness endpoint is dependency-free
+    # and would report the container healthy while PostgreSQL is unreachable,
+    # which is exactly the state a dependent service must not start against.
+    # /health/ready returns 503 when the DB (or Redis in rq mode) is down.
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=5).read()\""]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health/ready', timeout=5).read()\""]
       interval: 10s
       timeout: 5s
       retries: 12
-      start_period: 20s
+      start_period: 30s
 
   worker:
     build:
@@ -137,6 +141,22 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      # RQ has no HTTP surface, so readiness means "a live worker is registered
+      # with Redis" -- the state dependents actually care about. Worker.all()
+      # prunes registrations whose heartbeat has expired, so a wedged worker
+      # drops out of the list and this fails. That is a weaker guarantee than a
+      # real liveness ping, and it is deliberately not claimed to be one.
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import sys; from redis import Redis; from rq import Worker;
+          from src.utils import config;
+          sys.exit(0 if Worker.all(connection=Redis.from_url(config.REDIS_URL)) else 1)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   frontend:
     build:

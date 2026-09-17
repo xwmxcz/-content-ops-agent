@@ -57,6 +57,12 @@ USER app
 
 EXPOSE 8000
 
+# Probe the dependency-aware endpoint, not /health: an API that cannot reach
+# PostgreSQL should be reported unhealthy, and /health/ready already returns 503
+# in that case. --start-period covers Alembic head validation and pool warmup.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8000/health/ready || exit 1
+
 CMD ["python", "server.py"]
 
 
@@ -77,3 +83,7 @@ COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=frontend-build /app/frontend/dist /usr/share/nginx/html
 
 EXPOSE 80
+
+# wget ships with the alpine base image, so this needs no extra package.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget -q -O /dev/null http://127.0.0.1/ || exit 1
