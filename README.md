@@ -172,6 +172,7 @@ Copy one env template to `.env`, then fill in the keys you need.
 | Stable web research | Set one of `SERPER_API_KEY`, `TAVILY_API_KEY`, or `BRAVE_SEARCH_API_KEY`. Without a key, the app falls back to keyless HTML search that may be blocked. |
 | All environments | Set a non-empty `AUTH_SECRET_KEY`; register individual accounts on the login page. |
 | Production security | Strong independent signing/PostgreSQL/Redis secrets; `SCHEMA_MANAGEMENT=validate`; exact HTTPS `CORS_ORIGINS`. Unsafe defaults fail startup. |
+| Cost control | Set `LLM_RATE_LIMIT_PER_MINUTE` (0 disables it). It caps per-user calls to the endpoints that spend provider credit — chat, Studio runs, generate, refine, titles, SEO. Leave it at 0 locally. |
 | Xiaohongshu publishing demo | Keep or adjust `XHS_MCP_URL` to point at your local MCP server. |
 
 Docker reads `.env` automatically. For host-based development, copy
