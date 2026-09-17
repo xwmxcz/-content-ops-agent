@@ -57,3 +57,7 @@ pytest_out.txt
 CHANGELOG_TODAY.md
 NEXT_STEPS.md
 TEST_PLAN.md
+
+# User-uploaded media: runtime data, never source. The directory is created on
+# first launch; only the .gitkeep placeholder is tracked.
+data/media/

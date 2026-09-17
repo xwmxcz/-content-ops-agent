@@ -61,5 +61,5 @@ Playwright 报告写入 `frontend/test-results/e2e-results.json`（git 忽略）
 首次 `up` 失败的诊断可用控制台日志；运行被 SIGKILL 或宿主机断电打断时，需按输出中的
 `content-ops-e2e-*` 项目名识别并手动清理残留。
 
-最新执行结果见 [当前交接记录](WORKFLOW_CHECKPOINT.md) 和
-[外部证据报告](phase0_external_evidence.md)。
+最新执行结果见 [当前交接记录](archive/WORKFLOW_CHECKPOINT_2026-09-05.md) 和
+[外部证据报告](archive/phase0_external_evidence.md)。

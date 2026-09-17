@@ -314,15 +314,41 @@ budgets, and can refresh frozen snapshots.
 
 ## Verification
 
-Backend (the test fixture drops/recreates tables, so use a disposable PostgreSQL database only):
+Everything CI enforces is available through the `Makefile`, so a green
+`make check` locally means a green pipeline. CI (`.github/workflows/ci.yml`)
+runs lint, the full backend suite against a PostgreSQL service container,
+the frontend typecheck/tests/build, a Docker image build, and a dependency
+audit.
+
+```bash
+make check          # ruff + mypy + backend tests + frontend typecheck/tests
+```
+
+Individually:
+
+```bash
+make lint           # ruff check + ruff format --check
+make typecheck      # mypy (see the ratchet notes in pyproject.toml)
+make db-up          # throwaway PostgreSQL on port 55432, for the targets below
+make test-db        # full pytest; REQUIRE_TEST_DATABASE=1 forbids silent skips
+make test           # fast unit tests only; database-backed tests skip
+make test-frontend  # vue-tsc + vitest
+make audit          # pip-audit + npm audit
+```
+
+The backend suite needs a disposable PostgreSQL database and drops/recreates
+tables around every test, so never point `TEST_DATABASE_URL` at real data:
 
 ```bash
 export TEST_DATABASE_URL='postgresql+psycopg://user:password@localhost:5432/content_ops_test'
 python -m pytest tests -q
-python -m compileall src tests migrations examples
 ```
 
-Frontend:
+Without `TEST_DATABASE_URL` roughly half the suite skips. `make test-db` sets
+`REQUIRE_TEST_DATABASE=1`, which turns that skip into a failure on purpose — a
+half-skipped suite should not be able to report success.
+
+Frontend, without the Makefile:
 
 ```bash
 cd frontend
@@ -338,6 +364,7 @@ Migrations and Docker production validation:
 
 ```bash
 alembic upgrade head
+alembic check        # fails if ORM metadata has drifted from the migrations
 alembic current
 docker compose up -d --build
 docker compose ps
