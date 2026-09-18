@@ -4,12 +4,8 @@ import logging
 from datetime import date
 from typing import Any
 
-from src.storage.models import (
-    CalendarEvent,
-    Content,
-    assigned_pk,
-)
-from src.storage.repositories.base import RepositoryMixin
+from src.storage.models import CalendarEvent, Content
+from src.storage.repositories.base import RepositoryMixin, assigned_pk
 
 logger = logging.getLogger(__name__)
 

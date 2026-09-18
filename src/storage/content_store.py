@@ -35,7 +35,6 @@ from src.storage.models import (  # noqa: F401 -- re-exported public surface
     ProposedAction,
     RunStep,
     User,
-    assigned_pk,
 )
 from src.storage.repositories.action_repository import ActionRepositoryMixin
 from src.storage.repositories.calendar_repository import CalendarRepositoryMixin

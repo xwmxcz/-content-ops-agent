@@ -18,21 +18,19 @@ from src.storage.models import (
     ContentMetrics,
     MediaAsset,
     PlatformPublication,
-    assigned_pk,
 )
-from src.storage.repositories.base import RepositoryMixin
+from src.storage.repositories.base import RepositoryMixin, assigned_pk
 from src.storage.repositories.media_repository import MediaRepositoryMixin
 
 logger = logging.getLogger(__name__)
 
 
 class ContentRepositoryMixin(MediaRepositoryMixin, RepositoryMixin):
-    """Content, plus the media serializer that ``delete_content`` reports."""
+    """Content, plus the media serializer that ``delete_content`` reports.
 
-    """See :class:`src.storage.content_store.ContentStore` for the shared contract.
-
-    Mixed into ``ContentStore``; ``session``/``_get_session`` come from the host
-    class, which is why this is a mixin rather than a standalone object.
+    See :class:`src.storage.content_store.ContentStore` for the shared contract.
+    Mixed into ``ContentStore``; ``_get_session`` and ``user_id`` come from the
+    host class, which is why this is a mixin rather than a standalone object.
     """
 
     def save_content(

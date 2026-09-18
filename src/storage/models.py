@@ -4,10 +4,12 @@ Separated from :mod:`src.storage.content_store` so that importing the models —
 which Alembic, tests, and type checkers all do — does not pull in the store's
 query surface. The store imports these; nothing here imports the store.
 
-Nullability is load-bearing. ``Mapped[X]`` implies ``NOT NULL`` and
-``Mapped[X | None]`` implies nullable, so every column states ``nullable=``
-explicitly: changing an annotation can change the emitted DDL. ``alembic check``
-is what catches a mistake.
+Nullability is load-bearing, and the annotation is what sets it. ``Mapped[X]``
+maps to ``NOT NULL`` and ``Mapped[X | None]`` maps to nullable; ``nullable=`` is
+passed only where a column is a deliberate exception (primary keys, and a few
+columns whose SQLAlchemy default would otherwise disagree with the annotation).
+Changing an annotation can therefore change the emitted DDL, which
+``alembic check`` is what catches.
 """
 
 from __future__ import annotations
@@ -404,17 +406,3 @@ Index("ix_idempotency_records_scope_created", IdempotencyRecord.scope, Idempoten
 
 
 IDEMPOTENCY_RECORD_STATUSES = ("in_progress", "completed", "failed")
-
-
-def assigned_pk(instance: object, field: str) -> int:
-    """Return an integer primary key that the database has already assigned.
-
-    SQLAlchemy types a primary key as Optional because it is unset before the
-    flush. Every caller reads it immediately after ``commit()``, so a None would
-    mean the flush silently did nothing -- a real bug worth failing loudly on
-    rather than a case to paper over.
-    """
-    value = getattr(instance, field)
-    if value is None:
-        raise RuntimeError(f"{type(instance).__name__}.{field} is unset after flush")
-    return int(value)

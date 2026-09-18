@@ -12,9 +12,8 @@ from src.storage.models import (
     AgentMessage,
     AgentThread,
     ProposedAction,
-    assigned_pk,
 )
-from src.storage.repositories.base import RepositoryMixin
+from src.storage.repositories.base import RepositoryMixin, assigned_pk
 
 logger = logging.getLogger(__name__)
 

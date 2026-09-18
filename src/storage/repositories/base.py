@@ -41,3 +41,21 @@ class RepositoryMixin:
     def _get_session(self) -> Session:
         """Open a session scoped to :attr:`user_id`."""
         raise NotImplementedError
+
+
+def assigned_pk(instance: object, field: str) -> int:
+    """Return an integer primary key that the database has already assigned.
+
+    SQLAlchemy types a primary key as Optional because it is unset before the
+    flush. Every caller reads it immediately after ``commit()``, so a None would
+    mean the flush silently did nothing -- a real bug worth failing loudly on
+    rather than a case to paper over.
+
+    This lives with the kernel contract rather than with the models: it asserts a
+    store-side invariant (a commit populated the key), not a property of the
+    schema.
+    """
+    value = getattr(instance, field)
+    if value is None:
+        raise RuntimeError(f"{type(instance).__name__}.{field} is unset after flush")
+    return int(value)
