@@ -1,0 +1,19 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "//": [
+    "This project deploys as a Docker Compose stack (see DEPLOYMENT.md) and is",
+    "not a Vercel application. No 'builds' or 'framework' entry is defined,",
+    "which is not an oversight: Vercel applies zero-config framework detection",
+    "and will otherwise attempt a FastAPI build for any repository containing a",
+    "pyproject.toml. That build cannot succeed here -- the API is served by",
+    "server.py via gunicorn/uvicorn, so there is no module-level ASGI 'app' for",
+    "Vercel to call.",
+    "Leaving the attempted build in place produces a permanently failing check on",
+    "every pull request, which trains reviewers to ignore red checks. Stating the",
+    "unsupported target is clearer than a build nobody can fix.",
+    "If a Vercel deployment is ever wanted, it must target the frontend with",
+    "'rootDirectory: frontend' and a VITE_API_BASE pointing at a separately",
+    "hosted API, not this repository root."
+  ],
+  "framework": null
+}
