@@ -979,4 +979,181 @@ summary:focus-visible, .load-older:focus-visible {
   }
 
 }
+
+/* Rules for THIS file's own markup. They cannot live in a child component:
+   scoped CSS stamps each component with its own data-v attribute, so a rule
+   declared in ChatThreadPanel would match none of these elements. */
+.settings-body {
+  padding: 5px 0 20px;
+}
+
+.chat-log {
+  min-height: 0;
+  max-height: none;
+  padding: 28px;
+  overflow-y: auto;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  scroll-behavior: smooth;
+}
+
+.chat-empty {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  min-height: 100%;
+  gap: 12px;
+  padding: 24px 16px;
+  text-align: center;
+}
+
+.empty-label {
+  padding: 7px 13px;
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+  border-radius: var(--r-pill);
+  font-size: 11px;
+}
+
+.chat-empty strong {
+  font-family: var(--font-editorial);
+  font-size: clamp(25px, 2.5vw, 34px);
+  font-weight: 500;
+  letter-spacing: -.03em;
+}
+
+.chat-empty p {
+  max-width: 330px;
+  margin: 0;
+  color: var(--c-text-secondary);
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.intent-chip {
+  padding: 3px 9px;
+  border-radius: var(--r-pill);
+  background: var(--c-bg-soft);
+  color: var(--c-text-secondary);
+  font-size: 11px;
+}
+
+.plan-head, .tool-events-head {
+  margin-bottom: 8px;
+  color: var(--c-text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.tool-events {
+  display: grid;
+  gap: 6px;
+  margin-top: 18px;
+}
+
+.tool-events-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 2px;
+}
+
+.tool-events-head strong {
+  font-weight: 500;
+}
+
+.tool-event {
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-control);
+  overflow: hidden;
+  background: var(--c-bg-soft);
+}
+
+.tool-event.failed {
+  border-color: var(--c-fail);
+}
+
+.tool-event.proposed {
+  border-color: var(--c-warn);
+}
+
+.tool-event > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 11px;
+}
+
+.tool-event > summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-event > summary::before {
+  content: '›';
+  color: var(--c-text-tertiary);
+  font-size: 14px;
+}
+
+.tool-event[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.tool-event-name {
+  color: var(--c-text-secondary);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.tool-event-badge, .tool-event-attempt {
+  padding: 2px 6px;
+  border-radius: var(--r-pill);
+  font-size: 10px;
+}
+
+.tool-event-badge.completed {
+  color: var(--c-ok);
+  background: var(--c-ok-soft);
+}
+
+.tool-event-badge.failed {
+  color: var(--c-fail);
+  background: var(--c-fail-soft);
+}
+
+.tool-event-badge.proposed, .tool-event-attempt {
+  color: var(--c-warn);
+  background: var(--c-warn-soft);
+}
+
+.tool-event-body {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border-top: 1px solid var(--c-border);
+}
+
+.tool-event-label {
+  color: var(--c-text-tertiary);
+  font-size: 10px;
+}
+
+.composer {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 18px 24px 20px;
+  border-top: 1px solid var(--c-border-soft);
+}
+
+.composer :deep(.el-textarea__inner) {
+  padding: 14px 16px;
+  line-height: 1.7;
+  background: var(--c-bg-soft);
+}
 </style>

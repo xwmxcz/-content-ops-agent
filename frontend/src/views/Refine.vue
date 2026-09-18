@@ -333,10 +333,16 @@ onMounted(async () => {
 
 .refine-grid {
   display: grid;
-  grid-template-columns: minmax(270px, 320px) minmax(0, 1fr);
+  /* A hard right-column cap rather than `1fr`: on a 1600px page the right column
+     otherwise took roughly three times the left and the textarea stretched to a
+     measure that is unpleasant to read and write in. */
+  grid-template-columns: minmax(270px, 340px) minmax(0, 760px);
   grid-template-areas: 'source action' 'source result';
   gap: 24px;
   align-items: start;
+  /* Keeps the two columns optically together on very wide screens instead of
+     pinning the left column to the page edge. */
+  justify-content: center;
 }
 
 .source-section,
@@ -359,7 +365,13 @@ onMounted(async () => {
 
 .result-section {
   grid-area: result;
-  min-height: 360px;
+  /* Tall enough that the empty state has room to sit centred. The panel's height
+     is otherwise content-driven, so a smaller floor made `1fr` a no-op and left
+     the copy pinned near the top. */
+  min-height: 420px;
+  align-content: stretch;
+  /* Header on the first row; the body or empty state takes the remaining height. */
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .section-head {
@@ -570,6 +582,8 @@ onMounted(async () => {
   display: grid;
   justify-items: center;
   align-content: center;
+  /* Stretches to the grid row so the copy sits optically centred instead of at
+     the top of a fixed-height box, which left dead space beneath it. */
   min-height: 260px;
   padding: 24px 16px;
   text-align: center;

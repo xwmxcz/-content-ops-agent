@@ -1626,13 +1626,6 @@ onBeforeUnmount(() => {
   font-size: 11.5px;
 }
 
-.is-loading {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
 
 
 .final-surface {
@@ -1771,9 +1764,6 @@ onBeforeUnmount(() => {
     transition: none;
   }
 
-  .is-loading {
-    animation: none;
-  }
 }
 
 </style>

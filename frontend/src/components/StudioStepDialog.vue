@@ -276,4 +276,18 @@ function displayOutput(): string {
   color: var(--c-fail);
   background: var(--c-fail-soft);
 }
+.is-loading {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* The spinner is decorative motion; match the page's reduced-motion contract. */
+@media (prefers-reduced-motion: reduce) {
+  .is-loading {
+    animation: none;
+  }
+}
 </style>
