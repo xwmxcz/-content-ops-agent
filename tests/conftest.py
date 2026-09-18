@@ -87,8 +87,9 @@ def _require_reachable_database(database_url: str) -> None:
         pytest.exit(
             "\nTEST_DATABASE_URL is not reachable "
             f"({type(exc).__name__}: {exc}).\n"
-            "Start the disposable test database first, e.g. `make db-up`"
-            " (or `mingw32-make db-up` if make is not on PATH).\n",
+            "Start the disposable test database first:\n"
+            "    python scripts/dev.py db-up    # works without GNU Make\n"
+            "    make db-up                     # macOS/Linux, or mingw32-make\n",
             returncode=2,
         )
     finally:
