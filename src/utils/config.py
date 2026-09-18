@@ -83,6 +83,12 @@ class Config:
     DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "10"))
     DB_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "20"))
     DB_POOL_TIMEOUT_SECONDS = int(os.getenv("DB_POOL_TIMEOUT_SECONDS", "30"))
+    # Driver-level TCP connect timeout. pool_timeout only bounds waiting for a
+    # pooled connection; it does not bound the initial handshake, so an
+    # unreachable host (wrong port, container not started) lets the kernel
+    # retry SYN indefinitely and the process hangs with no output instead of
+    # reporting the misconfiguration.
+    DB_CONNECT_TIMEOUT_SECONDS = int(os.getenv("DB_CONNECT_TIMEOUT_SECONDS", "10"))
 
     # Background job settings
     JOB_QUEUE_MODE = os.getenv("JOB_QUEUE_MODE", "background").lower()  # background or rq

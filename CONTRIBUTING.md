@@ -8,6 +8,18 @@ make install                                    # backend dev deps + npm ci
 pre-commit install                              # optional but recommended
 ```
 
+**GNU Make is not bundled with Git for Windows.** If `make` is not on your PATH,
+every target in this document has an identical fallback, and `mingw32-make` also
+works if installed:
+
+```bash
+python scripts/dev.py install    # same target, no make required
+python scripts/dev.py            # list all targets
+```
+
+`scripts/dev.py` shells out to the same commands as the `Makefile`, so the two
+cannot drift.
+
 `make install` reads `requirements.txt` (intent) via `requirements-dev.txt`; the
 resolved, cross-platform pin set is `requirements.lock`, which is what Docker and
 CI actually install. Change a dependency by editing `requirements.txt` and running

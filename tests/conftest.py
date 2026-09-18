@@ -53,6 +53,49 @@ def authenticated_fixture_user(monkeypatch, request):
     )
 
 
+_REACHABILITY_CHECKED: set[str] = set()
+
+
+def _require_reachable_database(database_url: str) -> None:
+    """Fail once, with the real reason, if the test database is unreachable.
+
+    Without this, every database-backed test opens its own connection and
+    reports a connection error, so a stopped container looks like 250 broken
+    tests and takes minutes to say so. Probing the URL once here turns that
+    into a single actionable message.
+    """
+    if database_url in _REACHABILITY_CHECKED:
+        return
+
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine(
+        database_url,
+        pool_pre_ping=True,
+        # Bounds the TCP handshake: pool_timeout does not cover it, so without
+        # this an unreachable host hangs the process instead of reporting the
+        # misconfiguration.
+        connect_args={"connect_timeout": 10},
+    )
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+    except Exception as exc:  # noqa: BLE001 -- any failure means "not usable"
+        # Abort the whole session: an unreachable database is an environment
+        # problem, not a test failure, and reporting it once is both faster and
+        # more honest than 250 errors that all say the same thing.
+        pytest.exit(
+            "\nTEST_DATABASE_URL is not reachable "
+            f"({type(exc).__name__}: {exc}).\n"
+            "Start the disposable test database first, e.g. `make db-up`"
+            " (or `mingw32-make db-up` if make is not on PATH).\n",
+            returncode=2,
+        )
+    finally:
+        engine.dispose()
+    _REACHABILITY_CHECKED.add(database_url)
+
+
 @pytest.fixture(scope="session")
 def pg_engine():
     if not TEST_DATABASE_URL:
@@ -61,7 +104,14 @@ def pg_engine():
         pytest.skip(_MISSING_DB_REASON)
     from sqlalchemy import create_engine
 
-    engine = create_engine(TEST_DATABASE_URL, echo=False, pool_pre_ping=True)
+    _require_reachable_database(TEST_DATABASE_URL)
+
+    engine = create_engine(
+        TEST_DATABASE_URL,
+        echo=False,
+        pool_pre_ping=True,
+        connect_args={"connect_timeout": 10},
+    )
     try:
         yield engine
     finally:

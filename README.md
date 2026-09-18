@@ -325,17 +325,32 @@ audit.
 make check          # ruff + mypy + backend tests + frontend typecheck/tests
 ```
 
+GNU Make ships with macOS and Linux, but **not with Git for Windows** and it is
+not always on PATH on Windows. If `make` is unavailable, use the equivalent
+Python runner — it invokes the same commands, so the two cannot drift:
+
+```bash
+python scripts/dev.py check     # same targets, no make required
+python scripts/dev.py           # list every target
+```
+
+On Windows, `mingw32-make` also works if you have it installed.
+
 Individually:
 
 ```bash
 make lint           # ruff check + ruff format --check
-make typecheck      # mypy (see the ratchet notes in pyproject.toml)
+make typecheck      # mypy
 make db-up          # throwaway PostgreSQL on port 55432, for the targets below
 make test-db        # full pytest; REQUIRE_TEST_DATABASE=1 forbids silent skips
 make test           # fast unit tests only; database-backed tests skip
 make test-frontend  # vue-tsc + vitest
 make audit          # pip-audit + npm audit
 ```
+
+Substitute `python scripts/dev.py <target>` for any of these when `make` is not
+available. Running a database target before starting the database now exits
+immediately with `TEST_DATABASE_URL is not reachable` rather than hanging.
 
 The backend suite needs a disposable PostgreSQL database and drops/recreates
 tables around every test, so never point `TEST_DATABASE_URL` at real data:

@@ -464,6 +464,10 @@ class ContentStore:
             max_overflow=config.DB_MAX_OVERFLOW,
             pool_timeout=config.DB_POOL_TIMEOUT_SECONDS,
             pool_pre_ping=True,
+            # Bounds the TCP handshake. Without it an unreachable host hangs the
+            # process indefinitely instead of failing fast: pool_timeout applies
+            # to pool checkout, not to establishing the socket.
+            connect_args={"connect_timeout": config.DB_CONNECT_TIMEOUT_SECONDS},
         )
         if initialize_schema:
             inspector = inspect(self.engine)
