@@ -229,57 +229,12 @@
           </ol>
         </section>
 
-        <el-dialog
-          v-model="stepDialogOpen"
-          :title="stepDialogStep ? `Step ${stepDialogStep.index} · ${agentLabel(stepDialogStep.agent_id)}` : ''"
-          width="720px"
-          append-to-body
-          destroy-on-close
-        >
-          <template v-if="stepDialogStep">
-            <div class="step-dialog-meta">
-              <span class="surface-kicker">
-                {{ stepDialogStep.agent_id }}
-                <span v-if="isResearchStep(stepDialogStep.agent_id)" class="research-tag">research</span>
-              </span>
-              <span class="surface-pill" :class="statusToPill(stepDialogStep.status)">{{ statusLabel(stepDialogStep.status) }}</span>
-              <small v-if="stepDialogStep.duration_ms" class="step-dialog-duration">{{ stepDialogStep.duration_ms }} ms</small>
-            </div>
-            <p class="step-description">{{ stepDialogStep.description }}</p>
-            <ul v-if="toolEventsFor(stepDialogStep.index).length" class="tool-trace">
-              <li
-                v-for="(event, idx) in toolEventsFor(stepDialogStep.index)"
-                :key="`${stepDialogStep.index}-${idx}-${event.name}`"
-                class="tool-row"
-                :class="event.status"
-              >
-                <span class="tool-arrow">▸</span>
-                <span class="tool-name">{{ event.name }}</span>
-                <span v-if="formatToolArgs(event.args)" class="tool-args">({{ formatToolArgs(event.args) }})</span>
-                <span v-if="event.status === 'started'" class="tool-status">运行中…</span>
-                <template v-else>
-                  <span class="tool-arrow">→</span>
-                  <span v-if="event.status === 'failed'" class="tool-error">{{ event.error || '失败' }}</span>
-                  <span v-else class="tool-preview">{{ formatToolPreview(event.preview) }}</span>
-                  <span v-if="event.duration_ms" class="tool-duration">{{ event.duration_ms }} ms</span>
-                </template>
-              </li>
-            </ul>
-            <pre v-if="stepDialogStep.output || streamingOutputs[stepDialogStep.index]" class="step-output">{{ stepDialogStep.output || streamingOutputs[stepDialogStep.index] }}</pre>
-            <div v-else-if="stepDialogStep.status === 'running'" class="step-running">
-              <el-icon class="is-loading"><Loading /></el-icon>
-              <span>正在生成…</span>
-            </div>
-            <div v-else-if="stepDialogStep.status === 'completed'" class="step-empty">
-              该步骤未产出文本输出，仅记录上方工具调用。
-            </div>
-            <div v-else-if="stepDialogStep.status === 'failed'" class="step-empty failed">
-              步骤失败，未产出输出
-            </div>
-            <div v-else-if="stepDialogStep.status === 'skipped'" class="step-empty">已跳过</div>
-            <div v-else class="step-pending">等待执行</div>
-          </template>
-        </el-dialog>
+        <StudioStepDialog
+          v-model:open="stepDialogOpen"
+          :step="stepDialogStep"
+          :tool-events="stepDialogStep ? toolEventsFor(stepDialogStep.index) : []"
+          :streaming-output="stepDialogStep ? (streamingOutputs[stepDialogStep.index] || '') : ''"
+        />
 
         <section v-if="finalContent" class="studio-surface final-surface">
           <div class="surface-head">
@@ -342,6 +297,7 @@ import {
   VideoPlay
 } from '@element-plus/icons-vue'
 import ModelSelector from '../components/ModelSelector.vue'
+import StudioStepDialog from '../components/StudioStepDialog.vue'
 import {
   cancelPipelineRun,
   createPipelineRun,
@@ -963,6 +919,9 @@ onBeforeUnmount(() => {
 <!-- STYLE_PLACEHOLDER -->
 
 <style scoped>
+
+
+
 .studio-page {
   max-width: 1520px;
   margin: 0 auto;
@@ -1070,6 +1029,7 @@ onBeforeUnmount(() => {
 }
 
 .ghost-action:focus-visible,
+
 .stop-action:focus-visible {
   outline: 2px solid var(--c-accent);
   outline-offset: 3px;
@@ -1199,7 +1159,6 @@ onBeforeUnmount(() => {
   gap: 20px;
   align-content: start;
 }
-
 
 .studio-surface {
   min-width: 0;
@@ -1334,6 +1293,7 @@ onBeforeUnmount(() => {
 }
 
 .length-group,
+
 .style-segmented {
   width: 100%;
 }
@@ -1597,22 +1557,6 @@ onBeforeUnmount(() => {
 }
 
 /* Dialog header that replaces the inline step card surface-head. */
-.step-dialog-meta {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
-}
-
-.step-dialog-duration {
-  margin-left: auto;
-  color: var(--c-text-tertiary);
-  font-size: 11px;
-  font-family: var(--font-mono);
-  font-feature-settings: 'tnum';
-  font-variant-numeric: tabular-nums;
-}
 
 .research-surface {
   border-color: var(--c-border);
@@ -1682,139 +1626,6 @@ onBeforeUnmount(() => {
   font-size: 11.5px;
 }
 
-.step-description {
-  margin: 0 0 12px;
-  color: var(--c-text-secondary);
-  font-size: 12.5px;
-  line-height: 1.55;
-}
-
-.tool-trace {
-  list-style: none;
-  margin: 0 0 12px;
-  padding: 8px 12px;
-  border: 1px solid var(--c-border);
-  border-radius: 6px;
-  background: var(--c-bg-soft);
-  display: grid;
-  gap: 4px;
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  line-height: 1.55;
-}
-
-.tool-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 6px;
-  color: var(--c-text-secondary);
-}
-
-.tool-row.failed {
-  color: var(--c-fail);
-}
-
-.tool-row.completed .tool-name {
-  color: var(--c-text);
-}
-
-.tool-arrow {
-  color: var(--c-text-tertiary);
-}
-
-.tool-name {
-  color: var(--c-accent);
-  font-weight: 600;
-}
-
-.tool-args {
-  color: var(--c-text-tertiary);
-  word-break: break-word;
-}
-
-.tool-status {
-  color: var(--c-warn);
-  font-style: italic;
-}
-
-.tool-preview {
-  flex: 1 0 100%;
-  min-width: 0;
-  margin-left: 18px;
-  color: var(--c-text-secondary);
-  word-break: break-word;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-
-.tool-error {
-  flex: 1 0 100%;
-  min-width: 0;
-  margin-left: 18px;
-  color: var(--c-fail);
-  word-break: break-word;
-  overflow-wrap: anywhere;
-}
-
-.tool-duration {
-  color: var(--c-text-tertiary);
-  font-feature-settings: 'tnum';
-  font-variant-numeric: tabular-nums;
-}
-
-.step-output {
-  margin: 0;
-  padding: 14px;
-  max-height: 420px;
-  overflow-y: auto;
-  border: 1px solid var(--c-border);
-  border-radius: 6px;
-  background: var(--c-bg-code);
-  color: var(--c-text);
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  line-height: 1.6;
-}
-
-.step-running {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 12px 14px;
-  border: 1px solid var(--c-accent);
-  border-radius: 6px;
-  background: var(--c-accent-soft);
-  color: var(--c-accent);
-  font-size: 13px;
-}
-
-.step-pending {
-  padding: 12px 14px;
-  border: 1px dashed var(--c-border);
-  border-radius: 6px;
-  color: var(--c-text-tertiary);
-  font-size: 13px;
-}
-
-.step-empty {
-  padding: 12px 14px;
-  border: 1px solid var(--c-border);
-  border-radius: 6px;
-  background: var(--c-bg-soft);
-  color: var(--c-text-tertiary);
-  font-size: 12.5px;
-  line-height: 1.55;
-}
-
-.step-empty.failed {
-  border-color: var(--c-fail);
-  color: var(--c-fail);
-  background: var(--c-fail-soft);
-}
-
 .is-loading {
   animation: spin 1s linear infinite;
 }
@@ -1822,6 +1633,7 @@ onBeforeUnmount(() => {
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
 
 .final-surface {
   padding: 28px;
@@ -1910,6 +1722,7 @@ onBeforeUnmount(() => {
   }
 }
 
+
 @media (max-width: 800px) {
   .studio-page {
     padding: 24px 18px;
@@ -1950,6 +1763,7 @@ onBeforeUnmount(() => {
   }
 }
 
+
 @media (prefers-reduced-motion: reduce) {
   .progress-bar-fill,
   .timeline-step,
@@ -1961,4 +1775,5 @@ onBeforeUnmount(() => {
     animation: none;
   }
 }
+
 </style>

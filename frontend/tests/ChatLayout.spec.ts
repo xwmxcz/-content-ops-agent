@@ -1,12 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { parse } from 'vue/compiler-sfc'
-import chatSource from '../src/views/Chat.vue?raw'
+// The thread list (and its stylesheet) now lives in its own component, so the
+// layout invariants are asserted against that file rather than the page.
+import threadPanelSource from '../src/components/ChatThreadPanel.vue?raw'
 
 describe('chat thread action layout', () => {
   const stylesheet = document.createElement('style')
 
   beforeAll(() => {
-    stylesheet.textContent = parse(chatSource).descriptor.styles[0].content
+    stylesheet.textContent = parse(threadPanelSource).descriptor.styles[0].content
     document.head.append(stylesheet)
   })
 

@@ -12,97 +12,28 @@
     </section>
 
     <section class="chat-workbench">
-      <aside class="thread-panel">
-        <div class="panel-head">
-          <span>我的会话</span>
-          <strong>{{ chat.threads.length }}</strong>
-        </div>
-
-        <div class="thread-search">
-          <el-input
-            v-model="searchInput"
-            placeholder="搜索消息内容"
-            size="small"
-            clearable
-            :prefix-icon="Search"
-            @input="onSearchInput"
-            @clear="onSearchClear"
-          />
-        </div>
-
-        <label class="thread-toggle">
-          <input type="checkbox" :checked="chat.includeArchived" @change="onIncludeArchivedChange" />
-          <span>显示已归档</span>
-        </label>
-
-        <div class="thread-list">
-          <!-- Search results override the thread list when a query is active. -->
-          <div v-if="isSearchActive" class="search-results">
-            <div v-if="chat.searching" class="thread-empty">搜索中…</div>
-            <div v-else-if="!chat.searchResults.length" class="thread-empty">无匹配结果</div>
-            <button
-              v-for="hit in chat.searchResults"
-              :key="`${hit.thread_id}-${hit.message_id}`"
-              type="button"
-              class="thread-item"
-              :class="{ active: hit.thread_id === chat.activeThreadId }"
-              @click="jumpToThread(hit.thread_id)"
-            >
-              <span class="thread-title">{{ threadLabel(hit.thread_id) }}</span>
-              <small class="search-snippet">{{ snippet(hit.content) }}</small>
-              <small>{{ hit.role === 'user' ? '我' : '内容助手' }} · {{ formatTime(hit.created_at) }}</small>
-            </button>
-          </div>
-
-          <template v-else>
-            <div v-if="!chat.threads.length && !chat.threadsLoading" class="thread-empty">暂无会话</div>
-            <div
-              v-for="thread in chat.threads"
-              :key="thread.id"
-              class="thread-item"
-              :class="{ active: thread.id === chat.activeThreadId, pinned: thread.pinned, archived: thread.archived }"
-            >
-              <button type="button" class="thread-item-body" @click="selectThread(thread.id)">
-                <span class="thread-title">
-                  <span v-if="thread.pinned" class="pin-mark" title="已置顶">📌</span>
-                  <span v-if="thread.archived" class="archive-mark" title="已归档">🗄</span>
-                  {{ thread.title || thread.id }}
-                </span>
-                <small>{{ thread.message_count }} 条消息</small>
-              </button>
-              <div class="thread-actions" @click.stop>
-                <el-button text size="small" :icon="Edit" aria-label="重命名" @click="renameThread(thread)" />
-                <el-button
-                  text
-                  size="small"
-                  :icon="Top"
-                  :class="{ 'is-active': thread.pinned }"
-                  :aria-label="thread.pinned ? '取消置顶' : '置顶'"
-                  @click="togglePin(thread)"
-                />
-                <el-button
-                  text
-                  size="small"
-                  :icon="thread.archived ? FolderOpened : FolderRemove"
-                  :class="{ 'is-active': thread.archived }"
-                  :aria-label="thread.archived ? '取消归档' : '归档'"
-                  @click="toggleArchive(thread)"
-                />
-                <el-button text size="small" type="danger" :icon="Delete" aria-label="删除" @click="removeThread(thread)" />
-              </div>
-            </div>
-            <button
-              v-if="chat.hasMoreThreads"
-              type="button"
-              class="thread-load-more"
-              :disabled="chat.threadsLoading"
-              @click="chat.loadMoreThreads()"
-            >
-              {{ chat.threadsLoading ? '加载中…' : '加载更多' }}
-            </button>
-          </template>
-        </div>
-      </aside>
+      <ChatThreadPanel
+        v-model:search-input="searchInput"
+        :threads="chat.threads"
+        :threads-loading="chat.threadsLoading"
+        :include-archived="chat.includeArchived"
+        :has-more-threads="chat.hasMoreThreads"
+        :active-thread-id="chat.activeThreadId"
+        :search-active="isSearchActive"
+        :searching="chat.searching"
+        :search-results="chat.searchResults"
+        :thread-label="threadLabel"
+        @search-input="onSearchInput"
+        @search-clear="onSearchClear"
+        @toggle-archived="onIncludeArchivedChange"
+        @select="selectThread"
+        @jump="jumpToThread"
+        @rename="renameThread"
+        @toggle-pin="togglePin"
+        @toggle-archive="toggleArchive"
+        @remove="removeThread"
+        @load-more="chat.loadMoreThreads()"
+      />
 
       <main class="dialog-panel">
         <div class="dialog-head">
@@ -283,6 +214,7 @@ import {
   Search,
   Top
 } from '@element-plus/icons-vue'
+import ChatThreadPanel from '../components/ChatThreadPanel.vue'
 import ModelSelector from '../components/ModelSelector.vue'
 import { useChatStore } from '../stores/chat'
 import {
@@ -544,15 +476,13 @@ onMounted(async () => {
   color: var(--c-text);
 }
 
-.chat-topline, .hero-actions, .panel-head, .dialog-head, .dialog-head-actions,
-.composer-actions, .message-meta, .intent-head, .studio-suggestion {
+.chat-topline, .hero-actions, .dialog-head, .dialog-head-actions,.composer-actions, .message-meta, .intent-head, .studio-suggestion {
   display: flex;
   align-items: center;
   gap: 12px;
 }
 
-.chat-topline, .panel-head, .dialog-head, .composer-actions, .message-meta,
-.studio-suggestion {
+.chat-topline, .dialog-head, .composer-actions, .message-meta,.studio-suggestion {
   justify-content: space-between;
 }
 
@@ -572,6 +502,7 @@ onMounted(async () => {
   font-weight: 600;
   letter-spacing: .08em;
 }
+
 .chat-topline .page-title {
   margin: 0 0 8px;
   font-family: var(--font-display);
@@ -579,12 +510,12 @@ onMounted(async () => {
   line-height: 1.3;
   letter-spacing: -.04em;
 }
+
 .chat-topline .page-subtitle {
   margin: 0;
   color: var(--c-text-secondary);
   font-size: 13px;
 }
-
 
 .chat-workbench {
   display: grid;
@@ -593,157 +524,15 @@ onMounted(async () => {
   gap: 20px;
   min-height: 0;
 }
-.thread-panel, .dialog-panel {
+
+.dialog-panel {
   min-width: 0;
   border: 1px solid var(--c-border);
   border-radius: var(--r-card);
   background: var(--c-surface);
 }
-.thread-panel {
-  display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr);
-  align-self: stretch;
-  gap: 16px;
-  padding: 20px 12px 12px;
-  min-height: 0;
-  overflow: hidden;
-  background: var(--c-bg-soft);
-}
-.panel-head, .thread-search, .thread-toggle {
-  margin: 0 6px;
-}
 
-.panel-head span {
-  color: var(--c-text-secondary);
-  font-weight: 600;
-  font-size: 13px;
-}
-
-.panel-head strong {
-  padding: 1px 8px;
-  border-radius: var(--r-pill);
-  background: var(--c-surface);
-  color: var(--c-text-tertiary);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-.thread-toggle {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--c-text-tertiary);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.thread-toggle input {
-  margin: 0;
-  accent-color: var(--c-accent);
-}
-
-.thread-list, .search-results {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.thread-list {
-  min-height: 0;
-  overflow-y: auto;
-}
-
-.thread-empty {
-  padding: 42px 12px;
-  color: var(--c-text-tertiary);
-  text-align: center;
-  font-size: 13px;
-}
-
-.thread-item {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 4px;
-  flex-shrink: 0;
-  width: 100%;
-  padding: 12px 12px 6px;
-  border: 1px solid transparent;
-  border-radius: var(--r-control);
-  background: transparent;
-  color: var(--c-text);
-  text-align: left;
-  transition: background-color 120ms ease, border-color 120ms ease;
-}
-.thread-item:hover {
-  background: var(--c-surface);
-}
-
-.thread-item.active {
-  background: var(--c-surface);
-  border-color: var(--c-border);
-  box-shadow: inset 3px 0 var(--c-accent);
-}
-
-.thread-item.archived {
-  opacity: .65;
-}
-
-.thread-item-body {
-  display: grid;
-  gap: 7px;
-  min-width: 0;
-  width: 100%;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.thread-title {
-  overflow: hidden;
-  font-size: 13px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.pin-mark, .archive-mark {
-  font-size: 11px;
-}
-
-.thread-item small {
-  overflow: hidden;
-  color: var(--c-text-tertiary);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.thread-actions {
-  /* Keep this row reserved so revealing actions never moves the title target. */
-  display: flex;
-  visibility: hidden;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 2px;
-}
-.thread-item:hover .thread-actions,
-.thread-item:focus-within .thread-actions,
-.thread-item.active .thread-actions {
-  visibility: visible;
-}
-
-.thread-actions :deep(.el-button) {
-  padding: 4px 5px;
-  height: 24px;
-  margin: 0;
-}
-
-.thread-actions :deep(.is-active) {
-  color: var(--c-accent);
-}
-
-.thread-load-more, .load-older {
+.load-older {
   padding: 7px 14px;
   border: 1px solid var(--c-border);
   border-radius: var(--r-control);
@@ -752,20 +541,16 @@ onMounted(async () => {
   font-size: 12px;
   cursor: pointer;
 }
-.thread-load-more:hover:not(:disabled), .load-older:hover:not(:disabled) {
+
+.load-older:hover:not(:disabled) {
   color: var(--c-accent);
   border-color: var(--c-accent);
 }
 
-.thread-load-more:disabled, .load-older:disabled {
+.load-older:disabled {
   opacity: .6;
   cursor: not-allowed;
 }
-
-.search-snippet {
-  color: var(--c-text-secondary);
-}
-
 
 .dialog-panel {
   display: grid;
@@ -773,6 +558,7 @@ onMounted(async () => {
   overflow: hidden;
   box-shadow: var(--shadow-panel);
 }
+
 .dialog-head {
   padding: 19px 26px;
 }
@@ -804,6 +590,7 @@ onMounted(async () => {
   max-height: min(32dvh, 260px);
   overflow-y: auto;
 }
+
 .model-settings, .tool-panel {
   min-width: 0;
 }
@@ -818,6 +605,7 @@ onMounted(async () => {
   cursor: pointer;
   list-style: none;
 }
+
 .control-panel summary::-webkit-details-marker {
   display: none;
 }
@@ -842,10 +630,6 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
-.settings-body {
-  padding: 5px 0 20px;
-}
-
 .tool-grid {
   display: grid;
   gap: 8px;
@@ -859,55 +643,10 @@ onMounted(async () => {
   overflow-wrap: anywhere;
 }
 
-
-.chat-log {
-  min-height: 0;
-  max-height: none;
-  padding: 28px;
-  overflow-y: auto;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-  scroll-behavior: smooth;
-}
-
 .load-older {
   display: block;
   margin: 0 auto 24px;
   border-radius: var(--r-pill);
-}
-
-.chat-empty {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  min-height: 100%;
-  gap: 12px;
-  padding: 24px 16px;
-  text-align: center;
-}
-.empty-label {
-  padding: 7px 13px;
-  background: var(--c-accent-soft);
-  color: var(--c-accent);
-  border-radius: var(--r-pill);
-  font-size: 11px;
-}
-
-.chat-empty strong {
-  font-family: var(--font-editorial);
-  font-size: clamp(25px, 2.5vw, 34px);
-  font-weight: 500;
-  letter-spacing: -.03em;
-}
-
-.chat-empty p {
-  max-width: 330px;
-  margin: 0;
-  color: var(--c-text-secondary);
-  font-size: 13px;
-  line-height: 1.8;
 }
 
 .empty-capabilities {
@@ -989,14 +728,6 @@ onMounted(async () => {
   font-size: 11px;
 }
 
-.intent-chip {
-  padding: 3px 9px;
-  border-radius: var(--r-pill);
-  background: var(--c-bg-soft);
-  color: var(--c-text-secondary);
-  font-size: 11px;
-}
-
 .studio-suggestion {
   padding: 12px;
   border: 1px solid var(--c-border);
@@ -1012,13 +743,6 @@ onMounted(async () => {
   border-left: 2px solid var(--c-border);
   background: var(--c-bg-soft);
   border-radius: 0 var(--r-control) var(--r-control) 0;
-}
-
-.plan-head, .tool-events-head {
-  margin-bottom: 8px;
-  color: var(--c-text-tertiary);
-  font-size: 11px;
-  font-weight: 600;
 }
 
 .plan-board ol {
@@ -1067,93 +791,9 @@ onMounted(async () => {
   overflow-wrap: anywhere;
 }
 
-.tool-events {
-  display: grid;
-  gap: 6px;
-  margin-top: 18px;
-}
-
-.tool-events-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 2px;
-}
-
-.tool-events-head strong {
-  font-weight: 500;
-}
-
-.tool-event {
-  border: 1px solid var(--c-border);
-  border-radius: var(--r-control);
-  overflow: hidden;
-  background: var(--c-bg-soft);
-}
-
-.tool-event.failed {
-  border-color: var(--c-fail);
-}
-
-.tool-event.proposed {
-  border-color: var(--c-warn);
-}
-
-.tool-event > summary {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 5px 8px;
-  padding: 10px 12px;
-  cursor: pointer;
-  list-style: none;
-  font-size: 11px;
-}
-
-.tool-event > summary::-webkit-details-marker {
-  display: none;
-}
-
-.tool-event > summary::before {
-  content: '›';
-  color: var(--c-text-tertiary);
-  font-size: 14px;
-}
-
-.tool-event[open] > summary::before {
-  transform: rotate(90deg);
-}
-
 .tool-event-index, .tool-event-summary {
   color: var(--c-text-tertiary);
   font-size: 10px;
-}
-
-.tool-event-name {
-  color: var(--c-text-secondary);
-  font-family: var(--font-mono);
-  overflow-wrap: anywhere;
-}
-
-.tool-event-badge, .tool-event-attempt {
-  padding: 2px 6px;
-  border-radius: var(--r-pill);
-  font-size: 10px;
-}
-
-.tool-event-badge.completed {
-  color: var(--c-ok);
-  background: var(--c-ok-soft);
-}
-
-.tool-event-badge.failed {
-  color: var(--c-fail);
-  background: var(--c-fail-soft);
-}
-
-.tool-event-badge.proposed, .tool-event-attempt {
-  color: var(--c-warn);
-  background: var(--c-warn-soft);
 }
 
 .tool-event-summary {
@@ -1164,22 +804,10 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
-.tool-event-body {
-  display: grid;
-  gap: 12px;
-  padding: 12px;
-  border-top: 1px solid var(--c-border);
-}
-
 .tool-event-section {
   min-width: 0;
   display: grid;
   gap: 5px;
-}
-
-.tool-event-label {
-  color: var(--c-text-tertiary);
-  font-size: 10px;
 }
 
 .tool-event-section pre {
@@ -1204,20 +832,6 @@ onMounted(async () => {
   background: var(--c-fail-soft);
 }
 
-.composer {
-  display: grid;
-  gap: 12px;
-  min-width: 0;
-  padding: 18px 24px 20px;
-  border-top: 1px solid var(--c-border-soft);
-}
-
-.composer :deep(.el-textarea__inner) {
-  padding: 14px 16px;
-  line-height: 1.7;
-  background: var(--c-bg-soft);
-}
-
 .composer-actions span {
   min-width: 0;
   color: var(--c-text-tertiary);
@@ -1228,12 +842,11 @@ onMounted(async () => {
   min-width: 94px;
 }
 
-.thread-item-body:focus-visible, summary:focus-visible, .load-older:focus-visible, .thread-load-more:focus-visible {
+summary:focus-visible, .load-older:focus-visible {
   outline: 2px solid var(--c-accent);
   outline-offset: 3px;
   border-radius: var(--r-control);
 }
-
 
 @media (max-width: 1100px) {
   .chat-workbench {
@@ -1307,15 +920,6 @@ onMounted(async () => {
     grid-template-rows: auto auto minmax(280px, 1fr) auto;
   }
 
-  .thread-panel {
-    order: 2;
-    max-height: 350px;
-  }
-
-  .thread-actions {
-    visibility: visible;
-  }
-
   .dialog-head {
     padding: 16px 18px;
   }
@@ -1372,10 +976,6 @@ onMounted(async () => {
 @media (prefers-reduced-motion: reduce) {
   .chat-log {
     scroll-behavior: auto;
-  }
-
-  .thread-item {
-    transition: none;
   }
 
 }

@@ -111,3 +111,29 @@ export function planMarker(status: PlanStep['status']): string {
   }
   return markers[status] ?? '○'
 }
+
+/** Search-hit snippet length, in characters. */
+const SNIPPET_LIMIT = 90
+
+/** One-line snippet of a message body for the search results list. */
+export function snippet(content: string): string {
+  const text = content.replace(/\s+/g, ' ').trim()
+  return text.length > SNIPPET_LIMIT ? `${text.slice(0, SNIPPET_LIMIT)}…` : text
+}
+
+/**
+ * Format a timestamp for display.
+ *
+ * Falls back to the raw value when the string is unparseable, so a malformed
+ * timestamp shows as-is rather than as "Invalid Date".
+ */
+export function formatTime(iso?: string): string {
+  if (!iso) return ''
+  try {
+    const parsed = new Date(iso)
+    if (Number.isNaN(parsed.getTime())) return iso
+    return parsed.toLocaleString()
+  } catch {
+    return iso
+  }
+}
