@@ -58,10 +58,14 @@ USER app
 EXPOSE 8000
 
 # Probe the dependency-aware endpoint, not /health: an API that cannot reach
-# PostgreSQL should be reported unhealthy, and /health/ready already returns 503
-# in that case. --start-period covers Alembic head validation and pool warmup.
+# PostgreSQL should be reported unhealthy, and /api/health/ready already returns
+# 503 in that case. Every route is mounted under /api (see src/api/main.py), so
+# dropping that prefix makes this 404 and the container permanently unhealthy -- the
+# comment states the full path deliberately, because the mistake is invisible
+# to `docker build` and only shows up when the image is actually run.
+# --start-period covers Alembic head validation and pool warmup.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8000/health/ready || exit 1
+    CMD curl -fsS http://127.0.0.1:8000/api/health/ready || exit 1
 
 CMD ["python", "server.py"]
 

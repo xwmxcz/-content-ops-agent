@@ -126,6 +126,34 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # A HEALTHCHECK that returns 404 is invisible to `docker build` and only
+      # shows up when the image is actually run. Verify the probe the image
+      # ships with, against a real container and a real database, rather than
+      # trusting that the directive exists.
+      - name: Verify the API image healthcheck actually passes
+        run: |
+          set -euo pipefail
+          docker network create hc-net
+          docker run -d --name pg-hc --network hc-net             -e POSTGRES_USER=content_ops -e POSTGRES_PASSWORD=content_ops             -e POSTGRES_DB=content_ops_hc postgres:16-alpine
+          for _ in $(seq 1 30); do
+            docker exec pg-hc pg_isready -U content_ops >/dev/null 2>&1 && break
+            sleep 2
+          done
+          docker build --target api -t content-ops-hc:verify             --build-arg APT_MIRROR=http://deb.debian.org             --build-arg PIP_INDEX_URL=https://pypi.org/simple .
+          docker run -d --name api-hc --network hc-net             -e APP_ENV=test -e SCHEMA_MANAGEMENT=create             -e DATABASE_URL="postgresql+psycopg://content_ops:content_ops@pg-hc:5432/content_ops_hc"             -e AUTH_SECRET_KEY="verify-signing-key-with-at-least-32-characters"             -e JOB_QUEUE_MODE=background             content-ops-hc:verify
+          for _ in $(seq 1 30); do
+            status=$(docker inspect api-hc --format '{{.State.Health.Status}}')
+            if [ "$status" = "healthy" ]; then break; fi
+            if [ "$status" = "unhealthy" ]; then
+              echo "::error::container healthcheck reported unhealthy"
+              docker inspect api-hc --format '{{json .State.Health}}'
+              exit 1
+            fi
+            sleep 3
+          done
+          docker inspect api-hc --format '{{json .State.Health}}'
+          test "$(docker inspect api-hc --format '{{.State.Health.Status}}')" = "healthy"
+
   audit:
     name: Dependency audit
     runs-on: ubuntu-latest
