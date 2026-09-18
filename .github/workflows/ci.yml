@@ -129,17 +129,28 @@ jobs:
   audit:
     name: Dependency audit
     runs-on: ubuntu-latest
-    # Advisory only: a new CVE upstream should not block unrelated merges,
-    # but it must be visible on every run.
-    continue-on-error: true
+    # Blocking for the *production* dependency surface, advisory for dev tooling.
+    # A new upstream CVE in a dev-only package should be visible without
+    # blocking an unrelated merge, but a vulnerability in something that ships
+    # to users (or into the image) must fail the build.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install pip-audit
-      - run: pip-audit -r requirements.lock --strict
+      - name: Python dependencies (blocking)
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.lock --strict
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - run: cd frontend && npm audit --audit-level=high
+      - name: Frontend production dependencies (blocking)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm audit --omit=dev --audit-level=high
+      - name: Frontend full audit, dev tooling included (advisory)
+        continue-on-error: true
+        working-directory: frontend
+        run: npm audit --audit-level=high
