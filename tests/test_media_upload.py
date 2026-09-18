@@ -4,9 +4,9 @@ from pathlib import Path
 from tempfile import SpooledTemporaryFile
 from unittest.mock import Mock
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-import pytest
 
 from src.api.dependencies import get_publish_service, get_store
 from src.api.routes import media
@@ -85,6 +85,7 @@ def test_partial_write_failure_removes_file(client, upload_store, tmp_path, monk
     def failing_open(path, *args, **kwargs):
         with original_open(path, *args, **kwargs) as destination:
             if path.parent == tmp_path / "1" / "image":
+
                 def write_then_fail(chunk):
                     destination.write(chunk[:4])
                     raise OSError("disk full")

@@ -6,12 +6,12 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, 
 
 from src.api.dependencies import get_publish_service, get_store
 from src.api.schemas.publish import (
-    PublishActionResponse,
     PublicationResponse,
+    PublishActionResponse,
     XiaohongshuLoginStatusResponse,
     XiaohongshuPublishRequest,
 )
-from src.api.services.publish_service import PublicationValidationError, PublishService, _NO_IDEMPOTENCY_KEY
+from src.api.services.publish_service import _NO_IDEMPOTENCY_KEY, PublicationValidationError, PublishService
 from src.jobs.queue import JobCapacityError, JobQueueError, create_and_enqueue_job
 from src.storage import ContentStore
 from src.utils.idempotency import (
@@ -20,7 +20,6 @@ from src.utils.idempotency import (
     IdempotencyKeyConflict,
     idempotent_write,
 )
-
 
 router = APIRouter()
 

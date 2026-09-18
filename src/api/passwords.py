@@ -1,11 +1,11 @@
 """Own password hashing and credential validation for registration and migration."""
+
 from __future__ import annotations
 
 import re
 
 from argon2 import PasswordHasher, Type
 from argon2.exceptions import InvalidHashError, VerificationError
-
 
 _hasher = PasswordHasher(time_cost=2, memory_cost=19456, parallelism=1, type=Type.ID)
 

@@ -36,18 +36,19 @@ researcher step here would override a decision the prompt delegates to the
 planner, so this module reports whether research is present and leaves the
 judgement to the caller.
 """
+
 from __future__ import annotations
 
 import json
+import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from src.api.schemas.agent import PipelinePlanStep, SubAgentId
 from src.utils import config
-
 
 # Hard structural bounds. MAX_STEPS also caps how much work one run can schedule,
 # so it is a cost ceiling as much as a schema bound.
@@ -78,6 +79,8 @@ INVARIANT_BACKWARD_EDGES = "backward_edges_only"
 INVARIANT_FINAL_AGENT = "final_step_is_writer_or_editor"
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE | re.DOTALL)
+
+logger = logging.getLogger(__name__)
 
 
 class PlannerStepDraft(BaseModel):
@@ -292,7 +295,8 @@ def parse_planner_output(
             break
         try:
             repaired = repair(raw, payload)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 -- repair passes operate on untrusted input
+            logger.debug("plan repair pass %s raised %s", pass_name, exc.__class__.__name__)
             # A repair pass exists to rescue malformed input; letting it raise would
             # turn a recoverable planner glitch into a failed run.
             repaired = None
@@ -383,7 +387,7 @@ def _build_steps(payload: list[dict[str, Any]]) -> tuple[list[PipelinePlanStep],
                     status="pending",
                 )
             )
-        except Exception:
+        except (KeyError, TypeError, ValueError, ValidationError):
             continue
     return steps, check_plan_invariants(steps)
 
@@ -473,8 +477,7 @@ def _repair_coerce_steps(raw: str, payload: Any) -> list[dict[str, Any]] | None:
         refs = [
             int(ref)
             for ref in (entry.get("inputs_from") or [])
-            if (isinstance(ref, int) and not isinstance(ref, bool))
-            or (isinstance(ref, str) and ref.isdigit())
+            if (isinstance(ref, int) and not isinstance(ref, bool)) or (isinstance(ref, str) and ref.isdigit())
         ]
         description = str(entry.get("description") or "").strip() or f"{agent_id} step"
         instruction = str(entry.get("instruction") or "").strip()
@@ -497,11 +500,7 @@ def _repair_coerce_steps(raw: str, payload: Any) -> list[dict[str, Any]] | None:
     for entry in coerced:
         new_index = old_to_new[entry["index"]]
         entry["inputs_from"] = sorted(
-            {
-                old_to_new[ref]
-                for ref in entry["inputs_from"]
-                if ref in old_to_new and old_to_new[ref] < new_index
-            }
+            {old_to_new[ref] for ref in entry["inputs_from"] if ref in old_to_new and old_to_new[ref] < new_index}
         )
         entry["index"] = new_index
     return coerced
@@ -537,9 +536,7 @@ def _repair_enforce_structure(raw: str, payload: Any) -> list[dict[str, Any]] | 
             "agent_id": "writer",
             "description": "Compose the final draft using prior outputs.",
             "instruction": "Write the final draft based on the strategy and any reviewer notes above.",
-            "inputs_from": [
-                int(entry["index"]) for entry in steps_payload if isinstance(entry.get("index"), int)
-            ],
+            "inputs_from": [int(entry["index"]) for entry in steps_payload if isinstance(entry.get("index"), int)],
         }
     )
     return appended

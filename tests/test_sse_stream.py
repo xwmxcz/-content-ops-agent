@@ -19,7 +19,6 @@ from fastapi import HTTPException
 from src.api.routes.agent import _parse_last_event_id, stream_pipeline_run
 from src.utils import config
 
-
 _DEFAULT_RUN = object()
 
 
@@ -52,9 +51,7 @@ def event(seq, event_type, payload=None):
 
 async def collect(store, *, after_seq=None, last_event_id=None, limit=50):
     """Drains the stream, stopping at the terminal event or a frame budget."""
-    response = await stream_pipeline_run(
-        "run-1", store=store, after_seq=after_seq, last_event_id=last_event_id
-    )
+    response = await stream_pipeline_run("run-1", store=store, after_seq=after_seq, last_event_id=last_event_id)
     frames = []
     async for chunk in response.body_iterator:
         frames.append(chunk)
@@ -99,9 +96,7 @@ def test_every_event_carries_its_sequence_as_the_sse_id():
 
 
 def test_terminal_event_ends_the_stream():
-    store = FakeStore(
-        [event(1, "run_complete", {}), event(2, "step_token", {"index": 1, "delta": "late"})]
-    )
+    store = FakeStore([event(1, "run_complete", {}), event(2, "step_token", {"index": 1, "delta": "late"})])
 
     frames = asyncio.run(collect(store))
 

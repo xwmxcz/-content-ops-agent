@@ -1,4 +1,5 @@
 """Schema-version checks shared by API and worker startup."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -9,7 +10,6 @@ from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import inspect
 from sqlalchemy.engine import Engine
-
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -25,10 +25,8 @@ def _expected_schema_columns() -> dict[str, set[str]]:
     # Imported lazily to keep Alembic/config imports free of avoidable cycles.
     from src.storage.content_store import Base
 
-    return {
-        table_name: {column.name for column in table.columns}
-        for table_name, table in Base.metadata.tables.items()
-    }
+    return {table_name: {column.name for column in table.columns} for table_name, table in Base.metadata.tables.items()}
+
 
 # A database can be stamped manually at head while still missing constraints or
 # indexes. Validate the correctness-critical event invariant and the indexes
@@ -108,10 +106,7 @@ def assert_schema_current(engine: Engine) -> None:
         for table, required_indexes in REQUIRED_SCHEMA_INDEXES.items():
             if table not in table_names:
                 continue
-            actual_indexes = {
-                tuple(index.get("column_names") or [])
-                for index in inspector.get_indexes(table)
-            }
+            actual_indexes = {tuple(index.get("column_names") or []) for index in inspector.get_indexes(table)}
             missing_indexes = sorted(required_indexes - actual_indexes)
             if missing_indexes:
                 rendered = ", ".join("(" + ", ".join(columns) + ")" for columns in missing_indexes)
@@ -121,8 +116,7 @@ def assert_schema_current(engine: Engine) -> None:
             if table not in table_names:
                 continue
             actual_constraints = {
-                tuple(constraint.get("column_names") or [])
-                for constraint in inspector.get_unique_constraints(table)
+                tuple(constraint.get("column_names") or []) for constraint in inspector.get_unique_constraints(table)
             }
             missing_constraints = sorted(required_constraints - actual_constraints)
             if missing_constraints:

@@ -1,0 +1,85 @@
+[project]
+name = "content-ops-agent"
+version = "0.1.0"
+description = "AI Content Ops Agent: FastAPI + Vue 3 content operations workspace built around LLM agents."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+# Runtime dependencies are pinned in requirements.txt (Docker + local installs).
+# Reproducible builds come from requirements.lock (see `make lock`).
+dynamic = ["dependencies"]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+    "pip-audit>=2.7.0",
+    "pre-commit>=4.0.0",
+    "pip-tools>=7.4.0",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+extend-exclude = [
+    "data",
+    "frontend",
+    "migrations/versions",
+    "docs",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "BLE", # flake8-blind-except: flag bare `except Exception:` without logging/re-raise
+    "T20", # flake8-print: no stray print() in library code
+]
+ignore = [
+    "E501",  # line length is enforced by the formatter
+    "B008",  # FastAPI Depends() in defaults is idiomatic
+    "B904",  # `raise ... from err` inside except is nice-to-have, not blocking
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["BLE001", "T201", "B011"]
+"tests/manual_*.py" = ["E402"]          # sys.path bootstrap before imports
+"examples/**" = ["T201", "BLE001"]
+"scripts/**" = ["T201", "BLE001", "E402"]
+"src/jobs/cleanup.py" = ["T201"]        # CLI entrypoint prints its own report
+"src/jobs/reaper.py" = ["T201"]         # CLI entrypoint prints its own report
+"server.py" = ["T201"]
+"worker.py" = ["T201"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.10"
+files = ["src"]
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+check_untyped_defs = true
+plugins = ["sqlalchemy.ext.mypy.plugin"]
+
+# Nothing is waived any more. The legacy SQLAlchemy models were migrated to
+# `Mapped[]` annotations on a `DeclarativeBase` subclass, which is what the
+# SQLAlchemy mypy plugin actually reads -- with the old `declarative_base()`
+# factory the annotations were silently ignored and every model attribute kept
+# its `Column` type. If a new module ever needs an override, add it here with a
+# comment explaining the specific gap, and treat it as debt to remove.
+[tool.pytest.ini_options]
+addopts = "-p no:cacheprovider"
+asyncio_mode = "auto"
+markers = [
+    "real_auth: exercise database authentication without the business-test identity fixture",
+]

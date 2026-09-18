@@ -6,6 +6,7 @@ of `add` / `replace` / `remove` operations. Thread deletion never invokes this
 component. Curator output is untrusted and is never applied directly; only
 user-confirmed Chat memory tools may mutate the files.
 """
+
 from __future__ import annotations
 
 import json
@@ -14,8 +15,7 @@ import re
 from typing import Any
 
 from src.llm.litellm_client import LiteLLMClient
-from src.storage.file_memory import AGENT, FileMemory, USER
-
+from src.storage.file_memory import AGENT, USER, FileMemory
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +92,7 @@ class MemoryCurator:
                 temperature=0.3,
                 max_tokens=1024,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 -- aux LLM boundary; curation is optional
             logger.warning("memory curator: aux LLM failed error_class=%s", exc.__class__.__name__)
             return {"skipped": True, "reason": f"llm error: {exc.__class__.__name__}", "applied": [], "rejected": []}
 

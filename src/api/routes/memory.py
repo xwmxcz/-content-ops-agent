@@ -14,16 +14,16 @@ Endpoints (relative to `/api/memory`):
 The path was previously `/api/memories` (CRUD over `agent_memories` rows);
 that mount has been retired together with the vector-backed memory.
 """
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from src.api.dependencies import get_file_memory, get_store
+from src.api.dependencies import get_current_user, get_file_memory, get_store
 from src.api.services.chat_agent import ChatAgentService
 from src.storage import ContentStore
-from src.storage.file_memory import AGENT, FileMemory, MemoryLimitExceeded, USER
-
+from src.storage.file_memory import AGENT, USER, FileMemory, MemoryLimitExceeded
 
 router = APIRouter()
 
@@ -130,8 +130,15 @@ def search_messages(
 
 
 @router.post("/refresh-snapshot")
-def refresh_snapshot(req: RefreshSnapshotRequest, store: ContentStore = Depends(get_store)):
+def refresh_snapshot(
+    req: RefreshSnapshotRequest,
+    store: ContentStore = Depends(get_store),
+    user: dict = Depends(get_current_user),
+):
     if req.thread_id and not store.get_agent_thread(req.thread_id):
         raise HTTPException(status_code=404, detail="Thread not found")
-    ChatAgentService.invalidate_frozen(req.thread_id, user_id=store.user_id)
+    # Take the workspace id from the authenticated request rather than
+    # store.user_id, which is Optional because an unscoped system store has no
+    # owner. A scoped request store always has one.
+    ChatAgentService.invalidate_frozen(req.thread_id, user_id=user["id"])
     return {"refreshed": True, "thread_id": req.thread_id}

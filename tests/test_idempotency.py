@@ -4,8 +4,9 @@ Every test asserts the real database side-effect count, not just the returned
 value: a retry that returns the right payload while writing a second row is the
 failure these guard against.
 """
-from concurrent.futures import ThreadPoolExecutor
+
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from sqlalchemy import text
@@ -23,7 +24,6 @@ from src.utils.idempotency import (
     idempotent_write,
     request_key,
 )
-
 
 ARGS = {"topic": "AI workflows", "style": "casual"}
 
@@ -132,12 +132,8 @@ def test_idempotent_write_runs_the_write_once_for_one_key(store):
         calls.append(1)
         return {"event_id": len(calls)}
 
-    first = idempotent_write(
-        store, scope=SCOPE_CALENDAR_COMMIT, key="w-1", args=ARGS, write=write
-    )
-    second = idempotent_write(
-        store, scope=SCOPE_CALENDAR_COMMIT, key="w-1", args=ARGS, write=write
-    )
+    first = idempotent_write(store, scope=SCOPE_CALENDAR_COMMIT, key="w-1", args=ARGS, write=write)
+    second = idempotent_write(store, scope=SCOPE_CALENDAR_COMMIT, key="w-1", args=ARGS, write=write)
     assert first == second == {"event_id": 1}
     assert len(calls) == 1
 
@@ -166,9 +162,7 @@ def test_idempotent_write_releases_the_key_when_the_write_raises(store):
     assert record["status"] == "failed"
 
     # The user must be able to retry after a transient failure.
-    assert idempotent_write(
-        store, scope=SCOPE_CALENDAR_COMMIT, key="w-err", args=ARGS, write=lambda: "ok"
-    ) == "ok"
+    assert idempotent_write(store, scope=SCOPE_CALENDAR_COMMIT, key="w-err", args=ARGS, write=lambda: "ok") == "ok"
 
 
 def test_calendar_writes_are_deduplicated_per_key_not_per_business_columns(store):

@@ -14,6 +14,7 @@ Usage:
     python -m src.jobs.reaper --execute
     python -m src.jobs.reaper --execute --loop
 """
+
 from __future__ import annotations
 
 import argparse
@@ -129,7 +130,7 @@ def _requeue_reclaimed(store: ContentStore, job_ids: list[str]) -> int:
         try:
             requeue_job_with_delay(job_id, 0, store.database_url)
             requeued += 1
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 -- per-job isolation: one bad requeue must not stop the sweep
             log_event(
                 logger,
                 "job_reaper_requeue_failed",
@@ -163,7 +164,7 @@ async def run_reaper_loop(
                     reclaimed=result["reclaimed"],
                     requeued=result["requeued"],
                 )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 -- daemon loop must survive any sweep failure
             log_event(
                 logger,
                 "job_reaper_sweep_failed",

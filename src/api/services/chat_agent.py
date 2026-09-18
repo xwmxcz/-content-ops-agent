@@ -1,24 +1,27 @@
 """User-scoped persistent chat; tools and frozen memory snapshots retain workspace identity."""
+
 from __future__ import annotations
 
 import json
 import logging
 import re
 import time
+from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import Any, Callable
+from typing import Any
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
+from pydantic import ValidationError
 
 from src.agent.context_engine import ContextEngine
 from src.api.schemas.agent import ChatIntent, ChatRequest, ChatResponse, ChatToolEvent, PlanStep
 from src.api.schemas.content import GenerateRequest, RefineRequest, SeoRequest, TitleRequest
-from src.api.services.publish_service import create_publish_service
 from src.api.services import content_service
 from src.api.services.content_service import resolve_provider
 from src.api.services.intent_recognizer import PLAN_EXEMPT_INTENTS, IntentRecognizer
+from src.api.services.publish_service import create_publish_service
 from src.api.services.tool_policy import (
     SIDE_EFFECT_TOOLS,
     ToolApprovalRequired,
@@ -26,10 +29,10 @@ from src.api.services.tool_policy import (
     authorize_tool_call,
     validate_tool_policy_registry,
 )
-from src.llm.litellm_client import LLMConfigurationError, LiteLLMClient
+from src.llm.litellm_client import LiteLLMClient, LLMConfigurationError
 from src.models import ContentStyle, ContentType
 from src.storage import ContentStore
-from src.storage.file_memory import AGENT as MEMORY_AGENT, USER as MEMORY_USER, FileMemory, MemoryAmbiguous, MemoryLimitExceeded, MemoryNotFound
+from src.storage.file_memory import FileMemory, MemoryAmbiguous, MemoryLimitExceeded, MemoryNotFound
 from src.utils import config
 from src.utils.canonical import args_hash
 from src.utils.idempotency import (
@@ -42,19 +45,33 @@ from src.utils.idempotency import (
 )
 from src.utils.structured_logging import log_event
 
-
 logger = logging.getLogger(__name__)
 MAX_LOOPS = 8
 MAX_FAILURES_PER_TOOL = 2
 PLANNER_TEMPERATURE = 0.3
 PLANNER_MAX_TOKENS = 1024
 AVAILABLE_TOOL_NAMES = [
-    "create_content", "refine_content", "generate_title_options", "optimize_seo",
-    "view_content", "list_recent_contents", "add_to_calendar", "view_calendar",
-    "get_content_stats", "check_xiaohongshu_login", "search_history",
-    "web_search", "analyze_content_performance", "find_optimization_candidates",
-    "propose_topics", "propose_publishing_schedule", "commit_publishing_schedule",
-    "memory_add", "memory_replace", "memory_remove", "session_search",
+    "create_content",
+    "refine_content",
+    "generate_title_options",
+    "optimize_seo",
+    "view_content",
+    "list_recent_contents",
+    "add_to_calendar",
+    "view_calendar",
+    "get_content_stats",
+    "check_xiaohongshu_login",
+    "search_history",
+    "web_search",
+    "analyze_content_performance",
+    "find_optimization_candidates",
+    "propose_topics",
+    "propose_publishing_schedule",
+    "commit_publishing_schedule",
+    "memory_add",
+    "memory_replace",
+    "memory_remove",
+    "session_search",
 ]
 
 
@@ -198,9 +215,7 @@ class ChatAgentService:
         self.model_factory = model_factory or self._create_chat_model
         self.file_memory = file_memory
         self.context_engine = context_engine
-        self.intent_recognizer = intent_recognizer or IntentRecognizer(
-            self.model_factory, store=store
-        )
+        self.intent_recognizer = intent_recognizer or IntentRecognizer(self.model_factory, store=store)
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         provider = resolve_provider(request.provider)
@@ -229,7 +244,8 @@ class ChatAgentService:
                 model=model,
                 thread_id=thread_id,
             )
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 -- intent recognition is best-effort; never fail the chat turn
+            logger.warning("intent recognition failed, treating as unknown: %s", exc.__class__.__name__)
             intent = ChatIntent(name="unknown", confidence=0.0)
 
         if intent.name == "clarify":
@@ -266,7 +282,8 @@ class ChatAgentService:
                     model=model,
                     intent=intent,
                 )
-            except Exception:
+            except Exception as exc:  # noqa: BLE001 -- planning is an optimisation; agent runs unplanned
+                logger.warning("chat planner failed, running without a plan: %s", exc.__class__.__name__)
                 plan = []
 
         try:
@@ -346,7 +363,7 @@ class ChatAgentService:
                         status="pending",
                     )
                 )
-            except Exception:
+            except (TypeError, ValueError, ValidationError):
                 continue
         return [s for s in steps if s.description and ((not s.tool_hint) or s.tool_hint in intent.allowed_tools)]
 
@@ -381,8 +398,7 @@ class ChatAgentService:
             messages.append(SystemMessage(content=self._build_intent_prompt_block(intent)))
         if plan:
             numbered = "\n".join(
-                f"  {step.index}. {step.description}"
-                + (f" [hint: {step.tool_hint}]" if step.tool_hint else "")
+                f"  {step.index}. {step.description}" + (f" [hint: {step.tool_hint}]" if step.tool_hint else "")
                 for step in plan
             )
             plan_block = (
@@ -398,20 +414,20 @@ class ChatAgentService:
         tool_events: list[ChatToolEvent] = []
         if self.context_engine is not None:
             try:
-                result = await self.context_engine.maybe_compress(
-                    messages, provider=provider, model=model
-                )
+                result = await self.context_engine.maybe_compress(messages, provider=provider, model=model)
                 if result.compressed:
                     messages = result.messages
-                    tool_events.append(ChatToolEvent(
-                        name="context_compress",
-                        args={"dropped": result.dropped_count},
-                        output=(result.summary or "")[:1200],
-                        status="completed",
-                        attempt=1,
-                    ))
-            except Exception:
-                pass
+                    tool_events.append(
+                        ChatToolEvent(
+                            name="context_compress",
+                            args={"dropped": result.dropped_count},
+                            output=(result.summary or "")[:1200],
+                            status="completed",
+                            attempt=1,
+                        )
+                    )
+            except Exception as exc:  # noqa: BLE001 -- compression is optional; continue with full history
+                logger.warning("context compression failed, using uncompressed history: %s", exc.__class__.__name__)
 
         attempt_count: dict[str, int] = {}
         failure_count: dict[str, int] = {}
@@ -455,18 +471,14 @@ class ChatAgentService:
                         name,
                         args,
                         intent,
-                        consume_capability=self._make_capability_consumer(
-                            thread_id, claimed_action
-                        ),
+                        consume_capability=self._make_capability_consumer(thread_id, claimed_action),
                     )
                     with request_key(claimed_action.get("action_id")):
                         output = await tool.ainvoke(args)
                     output_text = self._stringify_tool_output(output)
                     duration_ms = int((time.perf_counter() - started) * 1000)
                     step_index = self._associate_plan_step(plan, name, success=True)
-                    persisted_output = (
-                        output_text if name == "propose_publishing_schedule" else output_text[:1200]
-                    )
+                    persisted_output = output_text if name == "propose_publishing_schedule" else output_text[:1200]
                     event = ChatToolEvent(
                         name=name,
                         args=args,
@@ -476,7 +488,7 @@ class ChatAgentService:
                         plan_step_index=step_index,
                     )
                     messages.append(ToolMessage(content=output_text, tool_call_id=call.get("id") or name))
-                except ToolApprovalRequired as exc:
+                except ToolApprovalRequired:
                     duration_ms = int((time.perf_counter() - started) * 1000)
                     failure_count[name] = MAX_FAILURES_PER_TOOL + 1
                     action_id = self._persist_proposed_action(
@@ -524,7 +536,7 @@ class ChatAgentService:
                         "in a new message."
                     )
                     messages.append(ToolMessage(content=feedback, tool_call_id=call.get("id") or name))
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 -- tool boundary: any tool error becomes a failed tool event
                     duration_ms = int((time.perf_counter() - started) * 1000)
                     failure_count[name] = failure_count.get(name, 0) + 1
                     error_text = str(exc) or exc.__class__.__name__
@@ -620,12 +632,16 @@ class ChatAgentService:
             length: str = "medium",
         ) -> str:
             """Create and save a new content draft."""
+            # `length` comes from a model-authored tool call, so it is untrusted
+            # free text; GenerateRequest only accepts the three known sizes.
+            if length not in ("short", "medium", "long"):
+                length = "medium"
             request = GenerateRequest(
                 topic=topic,
                 content_type=ContentType(content_type),
                 style=ContentStyle(style),
                 keywords=self._split_keywords(keywords),
-                length=length,
+                length=length,  # type: ignore[arg-type]
                 provider=provider,
                 model=model,
                 temperature=temperature,
@@ -784,6 +800,7 @@ class ChatAgentService:
             library does not cover.
             """
             from src.tools.web_search import web_search as run_web_search
+
             results = await run_web_search(query, limit=limit)
             return json.dumps(results, ensure_ascii=False)
 
@@ -829,13 +846,16 @@ class ChatAgentService:
                 "requested_count": count,
                 "user_hint": hint,
                 "winning_content_types": [
-                    {"content_type": t["content_type"], "avg_engagement_rate": t["avg_engagement_rate"],
-                     "avg_views": t["avg_views"], "sample_size": t["with_metrics"]}
+                    {
+                        "content_type": t["content_type"],
+                        "avg_engagement_rate": t["avg_engagement_rate"],
+                        "avg_views": t["avg_views"],
+                        "sample_size": t["with_metrics"],
+                    }
                     for t in winners[:3]
                 ],
                 "underrepresented_content_types": [
-                    {"content_type": t["content_type"], "count": t["count"]}
-                    for t in underrepresented
+                    {"content_type": t["content_type"], "count": t["count"]} for t in underrepresented
                 ],
                 "top_performers": perf.get("top_performers") or [],
                 "recently_published_titles": [r.get("title") for r in recent if r.get("title")][:10],
@@ -862,6 +882,7 @@ class ChatAgentService:
             wait for confirmation, then call commit_publishing_schedule with the same plan.
             """
             from datetime import date as _date
+
             try:
                 start = datetime.strptime(start_date, "%Y-%m-%d").date()
                 end = datetime.strptime(end_date, "%Y-%m-%d").date()
@@ -913,29 +934,36 @@ class ChatAgentService:
                     occupied.add((d.isoformat(), platform))
                     break
                 if slot is None:
-                    plan.append({
-                        "content_id": content["id"],
-                        "title": content.get("title"),
-                        "platform": platform,
-                        "scheduled_date": None,
-                        "warning": "no available date in range under given cadence",
-                    })
+                    plan.append(
+                        {
+                            "content_id": content["id"],
+                            "title": content.get("title"),
+                            "platform": platform,
+                            "scheduled_date": None,
+                            "warning": "no available date in range under given cadence",
+                        }
+                    )
                 else:
-                    plan.append({
-                        "content_id": content["id"],
-                        "title": content.get("title"),
-                        "platform": platform,
-                        "scheduled_date": slot.isoformat(),
-                    })
+                    plan.append(
+                        {
+                            "content_id": content["id"],
+                            "title": content.get("title"),
+                            "platform": platform,
+                            "scheduled_date": slot.isoformat(),
+                        }
+                    )
 
-            return json.dumps({
-                "plan": plan,
-                "cadence": cadence,
-                "start_date": start.isoformat(),
-                "end_date": end.isoformat(),
-                "committed": False,
-                "reminder": "This is a PROPOSAL. Show it to the user as a markdown table and wait for confirmation before calling commit_publishing_schedule.",
-            }, ensure_ascii=False)
+            return json.dumps(
+                {
+                    "plan": plan,
+                    "cadence": cadence,
+                    "start_date": start.isoformat(),
+                    "end_date": end.isoformat(),
+                    "committed": False,
+                    "reminder": "This is a PROPOSAL. Show it to the user as a markdown table and wait for confirmation before calling commit_publishing_schedule.",
+                },
+                ensure_ascii=False,
+            )
 
         def commit_publishing_schedule(plan: list[dict[str, Any]]) -> str:
             """Persist a previously-proposed publishing schedule to the calendar.
@@ -978,12 +1006,14 @@ class ChatAgentService:
                         cid, plat, day
                     ),
                 )
-                saved.append({
-                    "event_id": event_id,
-                    "content_id": content_id,
-                    "platform": item.get("platform"),
-                    "scheduled_date": item["scheduled_date"],
-                })
+                saved.append(
+                    {
+                        "event_id": event_id,
+                        "content_id": content_id,
+                        "platform": item.get("platform"),
+                        "scheduled_date": item["scheduled_date"],
+                    }
+                )
             return json.dumps({"saved": saved, "skipped": skipped, "committed": True}, ensure_ascii=False)
 
         def _memory_mutation(operation: str, args: dict, apply) -> dict:
@@ -1001,9 +1031,19 @@ class ChatAgentService:
             matching capability consumption in P1-01; it is not exactly-once,
             which a filesystem store cannot provide without a write-ahead log.
             """
+
+            # All callers guard on file_memory, but the guard is lost across the
+            # closure boundary; re-assert it so a disabled memory fails closed
+            # with a clean reason instead of an AttributeError.
+            # Bind to a local before the closure: mypy cannot narrow
+            # `self.file_memory` inside `write()`.
+            memory = self.file_memory
+            if not memory:
+                return {"saved": False, "reason": "memory disabled"}
+
             def write() -> dict:
                 apply()
-                stats = self.file_memory.stats(args["target"])
+                stats = memory.stats(args["target"])
                 return {
                     "target": args["target"],
                     "char_count": stats["char_count"],
@@ -1175,7 +1215,7 @@ class ChatAgentService:
                 ttl_seconds=config.ACTION_CAPABILITY_TTL_SECONDS,
                 requester=self.store.user_id,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 -- logged below; persistence failure must not widen authorization
             # Failing to persist the capability must not turn into an unbounded
             # approval: the proposal stays unconfirmable and the user re-asks.
             log_event(
@@ -1192,10 +1232,7 @@ class ChatAgentService:
     def _describe_action_impact(tool_name: str, args: dict[str, Any]) -> str:
         """Short human-readable description of what confirming will do."""
         if tool_name == "add_to_calendar":
-            return (
-                f"Schedule content {args.get('content_id')} on "
-                f"{args.get('platform')} for {args.get('publish_date')}"
-            )
+            return f"Schedule content {args.get('content_id')} on {args.get('platform')} for {args.get('publish_date')}"
         if tool_name == "commit_publishing_schedule":
             return f"Commit {len(args.get('plan') or [])} calendar entries"
         if tool_name == "create_content":
@@ -1314,8 +1351,12 @@ class ChatAgentService:
         if provider == "claude":
             from langchain_anthropic import ChatAnthropic
 
-            return ChatAnthropic(
-                api_key=api_key,
+            # langchain-anthropic 1.4.x ships stubs whose __init__ is just
+            # (*args, **kwargs), so mypy cannot see model/max_tokens and types
+            # api_key as SecretStr-only. Verified at runtime: all three are
+            # accepted, and pydantic coerces a plain str to SecretStr.
+            return ChatAnthropic(  # type: ignore[call-arg]
+                api_key=api_key,  # type: ignore[arg-type]
                 model=model,
                 temperature=temperature,
                 max_tokens=max_tokens,

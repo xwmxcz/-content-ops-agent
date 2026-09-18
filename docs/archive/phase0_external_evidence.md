@@ -20,7 +20,7 @@
 ## 0. 2026-09-05 续验
 
 新增可重复运行入口 `python3 scripts/verify_browser.py`，详见
-[浏览器验证指南](BROWSER_VERIFICATION.md)。当前源码与前端构建产物挂载到独立 Compose 项目，
+[浏览器验证指南](../BROWSER_VERIFICATION.md)。当前源码与前端构建产物挂载到独立 Compose 项目，
 使用真实 Chromium → TLS Nginx → 生产前端 Nginx → Gunicorn API → PostgreSQL。
 证书为临时自签，测试浏览器将 `content-ops.test` 解析到回环地址；未使用公网证书或实际社交账号。
 
@@ -28,7 +28,7 @@
 
 - **SSE 注释心跳不可见**：原生 EventSource 不派发注释；未指定 ID 的 ping 又会继承上一条 ID，
   被原前端去重逻辑忽略。真实浏览器在长步骤中进入 stale；后端改发不占序号的 ping，
-  前端 liveness 独立于业务序号处理。详见 [实施日志](IMPROVEMENT_LOG.md)。
+  前端 liveness 独立于业务序号处理。详见 [实施日志](../IMPROVEMENT_LOG.md)。
 - **Nginx 默认日志仍记录查询凭据**：请求虽返回 400，但镜像默认 main 日志仍输出查询值，
   与额外的 sanitized 日志同时存在。改在 server 层设置 access_log，覆盖父层默认日志。
   回归不仅检查探测值消失，也检查每个请求仍有且仅有一条脱敏记录。
@@ -301,7 +301,7 @@ $ TEST_DATABASE_URL=postgresql+psycopg://... python3 -m pytest tests/ -q
 ### 3.3 Git Repository State（2026-09-05）
 
 基线 `e7e9744`，`main` 领先本地记录的 `origin/main` 3 个提交；验证结束时改动未提交、未推送、未部署。
-之后用户请求启动项目，最新代码已用于本机开发容器；入口及模型 Key 的待配置状态见 [当前交接记录](WORKFLOW_CHECKPOINT.md)。
+之后用户请求启动项目，最新代码已用于本机开发容器；入口及模型 Key 的待配置状态见 [当前交接记录](WORKFLOW_CHECKPOINT_2026-09-05.md)。
 此前此节的“与 origin 同步且工作树干净”是旧记录，已替换。
 
 ---

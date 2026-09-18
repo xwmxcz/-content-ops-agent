@@ -1,5 +1,8 @@
 """Prompt 模板"""
-from src.models import ContentType, ContentStyle
+
+from __future__ import annotations
+
+from src.models import ContentStyle, ContentType
 
 
 class PromptTemplates:
@@ -20,13 +23,9 @@ class PromptTemplates:
         return f"{base}\n{style_prompts.get(style, '')}"
 
     @staticmethod
-    def get_xiaohongshu_prompt(topic: str, keywords: list = None, length: str = "medium") -> str:
+    def get_xiaohongshu_prompt(topic: str, keywords: list[str] | None = None, length: str = "medium") -> str:
         """小红书文案生成 Prompt"""
-        length_guide = {
-            "short": "100-200字",
-            "medium": "200-400字",
-            "long": "400-600字"
-        }
+        length_guide = {"short": "100-200字", "medium": "200-400字", "long": "400-600字"}
 
         keywords_text = f"关键词：{', '.join(keywords)}" if keywords else ""
 
@@ -34,7 +33,7 @@ class PromptTemplates:
 
 要求：
 1. 标题：吸引眼球，使用emoji，控制在20字以内
-2. 正文：{length_guide.get(length, '200-400字')}
+2. 正文：{length_guide.get(length, "200-400字")}
 3. 风格：真实、接地气、有共鸣感
 4. 结构：开头抓人 → 干货内容 → 互动引导
 5. 标签：提供5-8个相关标签
@@ -52,7 +51,7 @@ class PromptTemplates:
 """
 
     @staticmethod
-    def get_weibo_prompt(topic: str, keywords: list = None) -> str:
+    def get_weibo_prompt(topic: str, keywords: list[str] | None = None) -> str:
         """微博文案生成 Prompt"""
         keywords_text = f"关键词：{', '.join(keywords)}" if keywords else ""
 
@@ -69,13 +68,9 @@ class PromptTemplates:
 """
 
     @staticmethod
-    def get_blog_prompt(topic: str, keywords: list = None, length: str = "medium") -> str:
+    def get_blog_prompt(topic: str, keywords: list[str] | None = None, length: str = "medium") -> str:
         """博客文章生成 Prompt"""
-        length_guide = {
-            "short": "500-800字",
-            "medium": "800-1500字",
-            "long": "1500-3000字"
-        }
+        length_guide = {"short": "500-800字", "medium": "800-1500字", "long": "1500-3000字"}
 
         keywords_text = f"关键词：{', '.join(keywords)}" if keywords else ""
 
@@ -83,7 +78,7 @@ class PromptTemplates:
 
 要求：
 1. 标题：清晰明确，包含关键词
-2. 字数：{length_guide.get(length, '800-1500字')}
+2. 字数：{length_guide.get(length, "800-1500字")}
 3. 结构：引言 → 主体（2-4个小节）→ 总结
 4. 风格：有深度、有见解、有价值
 5. SEO：自然融入关键词
@@ -100,16 +95,12 @@ class PromptTemplates:
     @staticmethod
     def get_video_script_prompt(topic: str, length: str = "medium") -> str:
         """视频脚本生成 Prompt"""
-        length_guide = {
-            "short": "1-3分钟",
-            "medium": "3-5分钟",
-            "long": "5-10分钟"
-        }
+        length_guide = {"short": "1-3分钟", "medium": "3-5分钟", "long": "5-10分钟"}
 
         return f"""请为「{topic}」创作一个视频脚本。
 
 要求：
-1. 时长：{length_guide.get(length, '3-5分钟')}
+1. 时长：{length_guide.get(length, "3-5分钟")}
 2. 结构：开场（吸引注意）→ 主体（核心内容）→ 结尾（行动号召）
 3. 风格：口语化、节奏感强
 4. 标注：画面提示、停顿位置

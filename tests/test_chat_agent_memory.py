@@ -1,15 +1,16 @@
 """Tests for the chat agent's file-based memory integration."""
+
 from __future__ import annotations
 
 import json
+
 import pytest
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
 
 from src.api.schemas.agent import ChatRequest
-from src.api.services.chat_agent import ChatAgentService, _FROZEN_PROMPTS
+from src.api.services.chat_agent import _FROZEN_PROMPTS, ChatAgentService
 from src.api.services.intent_recognizer import IntentRecognizer
-from src.storage.file_memory import AGENT, FileMemory, USER
-
+from src.storage.file_memory import AGENT, USER, FileMemory
 
 # ─── Fakes mirroring test_api_contract patterns ────────────────────────────
 
@@ -200,10 +201,12 @@ class TestMemoryTools:
                 return AIMessage(content='{"name":"action_confirm","confidence":0.99,"slots":{}}')
 
         svc.intent_recognizer = IntentRecognizer(lambda *unused: RejectAsConfirmModel())
-        rejected = await svc.chat(ChatRequest(
-            message="No, I have not approved that proposal and need more time",
-            thread_id="policy-reject",
-        ))
+        rejected = await svc.chat(
+            ChatRequest(
+                message="No, I have not approved that proposal and need more time",
+                thread_id="policy-reject",
+            )
+        )
         assert rejected.intent.name == "unknown"
         assert rejected.intent.allowed_tools == []
         assert "UNAUTHORIZED" not in file_memory.load(USER)
@@ -253,7 +256,9 @@ class TestMemoryTools:
 
     def test_session_search_uses_store(self, service, store):
         store.upsert_agent_thread("t1", title="t", provider="claude", model="m")
-        store.save_agent_message(thread_id="t1", role="user", content="小红书种草文案怎么写", provider="claude", model="m")
+        store.save_agent_message(
+            thread_id="t1", role="user", content="小红书种草文案怎么写", provider="claude", model="m"
+        )
         svc, _ = service
         tools = {t.name: t for t in svc._build_tools("claude", "m", 0.7, 1024)}
         out = tools["session_search"].invoke({"query": "小红书", "limit": 5})

@@ -1,4 +1,5 @@
 """Minimal JSON logging with request correlation and no payload logging."""
+
 from __future__ import annotations
 
 import json
@@ -6,7 +7,6 @@ import logging
 import sys
 from datetime import datetime, timezone
 from typing import Any
-
 
 _STANDARD_FIELDS = set(logging.makeLogRecord({}).__dict__) | {"message", "asctime"}
 
@@ -58,6 +58,7 @@ def _json_safe(value: Any) -> Any:
 # Event-Specific Logging Helpers (Phase 2)
 # ============================================================================
 
+
 def log_idempotency_event(
     logger: logging.Logger,
     outcome: str,
@@ -66,11 +67,11 @@ def log_idempotency_event(
     *,
     record_id: int | None = None,
     args_hash: str | None = None,
-    conflict: bool = False
+    conflict: bool = False,
 ) -> None:
     """
     Log idempotency events: claim, replay, conflict.
-    
+
     Args:
         outcome: "claimed", "replay", or "conflict"
         scope: idempotency scope (e.g., "generate_content")
@@ -87,7 +88,7 @@ def log_idempotency_event(
         idempotency_key=idempotency_key,
         record_id=record_id,
         args_hash=args_hash,
-        conflict=conflict
+        conflict=conflict,
     )
 
 
@@ -100,11 +101,11 @@ def log_job_event(
     error_type: str | None = None,
     retry_count: int | None = None,
     max_retries: int | None = None,
-    next_retry_at: str | None = None
+    next_retry_at: str | None = None,
 ) -> None:
     """
     Log job lifecycle events: retry_scheduled, failed_permanently, completed.
-    
+
     Args:
         event: "job_retry_scheduled", "job_failed_permanently", "job_completed"
         job_id: job identifier
@@ -122,7 +123,7 @@ def log_job_event(
         error_type=error_type,
         retry_count=retry_count,
         max_retries=max_retries,
-        next_retry_at=next_retry_at
+        next_retry_at=next_retry_at,
     )
 
 
@@ -135,11 +136,11 @@ def log_capability_event(
     thread_id: str | None = None,
     consumed: bool = False,
     expired: bool = False,
-    tampered: bool = False
+    tampered: bool = False,
 ) -> None:
     """
     Log capability lifecycle events: proposed, consumed, expired, tampered.
-    
+
     Args:
         event: "capability_proposed", "capability_consumed", "capability_expired", "capability_tampered"
         action_id: unique capability/action identifier
@@ -157,5 +158,5 @@ def log_capability_event(
         thread_id=thread_id,
         consumed=consumed,
         expired=expired,
-        tampered=tampered
+        tampered=tampered,
     )

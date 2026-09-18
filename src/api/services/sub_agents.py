@@ -8,14 +8,17 @@ plus a public web search.
 The runner returns a uniform tuple `(text, prompt_tokens, completion_tokens, duration_ms,
 cost_estimate)` so DynamicPipeline can keep the per-step accounting in one place.
 """
+
 from __future__ import annotations
 
 import json
+import logging
 import time
-from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
 from src.api.schemas.agent import SubAgentId
@@ -23,6 +26,8 @@ from src.llm.litellm_client import LiteLLMClient
 from src.storage import ContentStore
 from src.tools.web_search import web_search as run_web_search
 from src.utils import config
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -149,6 +154,16 @@ def estimate_cost(model: str | None, prompt_tokens: int, completion_tokens: int)
 # Token emit callback signature: async (delta_text) -> None
 TokenSink = Callable[[str], Awaitable[None]]
 ToolSink = Callable[[str, dict[str, Any]], Awaitable[None]]
+
+
+async def _safe_sink(sink: ToolSink | None, event: str, payload: dict[str, Any]) -> None:
+    """Deliver a tool telemetry event; observers must never break the agent loop."""
+    if sink is None:
+        return
+    try:
+        await sink(event, payload)
+    except Exception as exc:  # noqa: BLE001 -- telemetry sink is best-effort
+        logger.debug("tool sink rejected %s event: %s", event, exc.__class__.__name__)
 
 
 class SubAgentRunner:
@@ -280,58 +295,82 @@ class SubAgentRunner:
                 args = call.get("args") or {}
                 tool = tools_by_name.get(name)
                 started = time.perf_counter()
-                if tool_sink is not None:
-                    try:
-                        await tool_sink("tool_call_start", {"name": name, "args": args})
-                    except Exception:
-                        pass
+                await _safe_sink(tool_sink, "tool_call_start", {"name": name, "args": args})
                 if not tool:
                     output = f"Tool `{name}` is not available to {spec.id}."
                     duration_ms = int((time.perf_counter() - started) * 1000)
-                    tool_results.append({
-                        "name": name, "args": args, "status": "failed",
-                        "error": output, "output": "", "duration_ms": duration_ms,
-                    })
-                    if tool_sink is not None:
-                        try:
-                            await tool_sink("tool_call_result", {
-                                "name": name, "args": args, "status": "failed",
-                                "error": output, "preview": "", "duration_ms": duration_ms,
-                            })
-                        except Exception:
-                            pass
+                    tool_results.append(
+                        {
+                            "name": name,
+                            "args": args,
+                            "status": "failed",
+                            "error": output,
+                            "output": "",
+                            "duration_ms": duration_ms,
+                        }
+                    )
+                    await _safe_sink(
+                        tool_sink,
+                        "tool_call_result",
+                        {
+                            "name": name,
+                            "args": args,
+                            "status": "failed",
+                            "error": output,
+                            "preview": "",
+                            "duration_ms": duration_ms,
+                        },
+                    )
                 else:
                     try:
                         raw = await tool.ainvoke(args) if hasattr(tool, "ainvoke") else tool.invoke(args)
                         output = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)
                         duration_ms = int((time.perf_counter() - started) * 1000)
-                        tool_results.append({
-                            "name": name, "args": args, "status": "completed",
-                            "output": output, "duration_ms": duration_ms,
-                        })
-                        if tool_sink is not None:
-                            try:
-                                await tool_sink("tool_call_result", {
-                                    "name": name, "args": args, "status": "completed",
-                                    "preview": self._tool_preview(output), "duration_ms": duration_ms,
-                                })
-                            except Exception:
-                                pass
-                    except Exception as exc:
+                        tool_results.append(
+                            {
+                                "name": name,
+                                "args": args,
+                                "status": "completed",
+                                "output": output,
+                                "duration_ms": duration_ms,
+                            }
+                        )
+                        await _safe_sink(
+                            tool_sink,
+                            "tool_call_result",
+                            {
+                                "name": name,
+                                "args": args,
+                                "status": "completed",
+                                "preview": self._tool_preview(output),
+                                "duration_ms": duration_ms,
+                            },
+                        )
+                    except Exception as exc:  # noqa: BLE001 -- tool boundary: any tool error becomes a failed result
                         output = f"Tool failed: {exc}"
                         duration_ms = int((time.perf_counter() - started) * 1000)
-                        tool_results.append({
-                            "name": name, "args": args, "status": "failed",
-                            "error": str(exc), "output": "", "duration_ms": duration_ms,
-                        })
-                        if tool_sink is not None:
-                            try:
-                                await tool_sink("tool_call_result", {
-                                    "name": name, "args": args, "status": "failed",
-                                    "error": str(exc), "preview": "", "duration_ms": duration_ms,
-                                })
-                            except Exception:
-                                pass
+                        tool_results.append(
+                            {
+                                "name": name,
+                                "args": args,
+                                "status": "failed",
+                                "error": str(exc),
+                                "output": "",
+                                "duration_ms": duration_ms,
+                            }
+                        )
+                        await _safe_sink(
+                            tool_sink,
+                            "tool_call_result",
+                            {
+                                "name": name,
+                                "args": args,
+                                "status": "failed",
+                                "error": str(exc),
+                                "preview": "",
+                                "duration_ms": duration_ms,
+                            },
+                        )
                 messages.append(ToolMessage(content=output, tool_call_id=call.get("id") or name or "x"))
         final_text = self._clean_final_text(last_text)
         if final_text:
@@ -375,7 +414,9 @@ class SubAgentRunner:
         catalog = {
             "search_history": StructuredTool.from_function(func=search_history, name="search_history"),
             "view_content": StructuredTool.from_function(func=view_content, name="view_content"),
-            "list_recent_contents": StructuredTool.from_function(func=list_recent_contents, name="list_recent_contents"),
+            "list_recent_contents": StructuredTool.from_function(
+                func=list_recent_contents, name="list_recent_contents"
+            ),
             "web_search": StructuredTool.from_function(coroutine=web_search, name="web_search"),
         }
         return [catalog[name] for name in allowed if name in catalog]
@@ -388,7 +429,16 @@ class SubAgentRunner:
         if provider == "claude":
             from langchain_anthropic import ChatAnthropic
 
-            return ChatAnthropic(api_key=api_key, model=model, temperature=temperature, max_tokens=max_tokens)
+            # langchain-anthropic 1.4.x ships stubs whose __init__ is just
+            # (*args, **kwargs), so mypy cannot see model/max_tokens and types
+            # api_key as SecretStr-only. Verified at runtime: all three are
+            # accepted, and pydantic coerces a plain str to SecretStr.
+            return ChatAnthropic(  # type: ignore[call-arg]
+                api_key=api_key,  # type: ignore[arg-type]
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
         from langchain_openai import ChatOpenAI
 
         kwargs: dict[str, Any] = {
@@ -440,15 +490,19 @@ class SubAgentRunner:
             f"Original request:\n{user_prompt}\n\n"
             f"Tool results:\n{self._tool_results_for_prompt(tool_results)}"
         )
-        ai_message = await base_chat_model.ainvoke([
-            SystemMessage(content=(
-                "You are a synthesis assistant. Tools are NOT available in this turn. "
-                "Do not call tools. Do not emit <tool_call>, function-call JSON, or arguments. "
-                "Write a concise, human-readable answer in the same language as the original request. "
-                "Use only the provided tool results and be explicit when search failed or returned no reliable data."
-            )),
-            HumanMessage(content=synthesis_prompt),
-        ])
+        ai_message = await base_chat_model.ainvoke(
+            [
+                SystemMessage(
+                    content=(
+                        "You are a synthesis assistant. Tools are NOT available in this turn. "
+                        "Do not call tools. Do not emit <tool_call>, function-call JSON, or arguments. "
+                        "Write a concise, human-readable answer in the same language as the original request. "
+                        "Use only the provided tool results and be explicit when search failed or returned no reliable data."
+                    )
+                ),
+                HumanMessage(content=synthesis_prompt),
+            ]
+        )
         usage = getattr(ai_message, "usage_metadata", None) or {}
         return (
             self._message_text(ai_message.content),
@@ -479,13 +533,16 @@ class SubAgentRunner:
         if not tool_results:
             return "No tools were called."
         return "\n".join(
-            json.dumps({
-                "tool": result.get("name", ""),
-                "args": result.get("args") or {},
-                "status": result.get("status", "completed"),
-                "error": result.get("error"),
-                "output": result.get("output", ""),
-            }, ensure_ascii=False)
+            json.dumps(
+                {
+                    "tool": result.get("name", ""),
+                    "args": result.get("args") or {},
+                    "status": result.get("status", "completed"),
+                    "error": result.get("error"),
+                    "output": result.get("output", ""),
+                },
+                ensure_ascii=False,
+            )
             for result in tool_results
         )
 
@@ -512,9 +569,9 @@ class SubAgentRunner:
             results = parsed.get("results")
             if error and isinstance(results, list) and not results:
                 return f"搜索失败：{error}"
-            preview = parsed.get("title") or parsed.get("name") or parsed.get("content") or parsed.get("text")
-            if preview:
-                return str(preview)[:limit]
+            dict_preview = parsed.get("title") or parsed.get("name") or parsed.get("content") or parsed.get("text")
+            if dict_preview:
+                return str(dict_preview)[:limit]
             keys = ", ".join(list(parsed.keys())[:6])
             return f"返回对象：{keys}" if keys else "无结果"
         return text[:limit]

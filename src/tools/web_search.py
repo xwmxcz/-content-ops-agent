@@ -4,6 +4,7 @@ Stable search APIs are tried first when configured. Keyless HTML fallbacks are
 kept only as a best-effort local/demo option because search engines may return
 anti-bot pages instead of results.
 """
+
 from __future__ import annotations
 
 import re
@@ -15,14 +16,12 @@ import httpx
 
 from src.utils import config
 
-
 SearchResult = dict[str, str]
 SearchResponse = list[SearchResult] | dict[str, Any]
 
 _TIMEOUT_SECONDS = 15.0
 _USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
 )
 _TAG_PATTERN = re.compile(r"<[^>]+>")
 _DDG_RESULT_PATTERN = re.compile(
@@ -57,7 +56,7 @@ async def web_search(query: str, limit: int = 5) -> SearchResponse:
         except SearchProviderError as exc:
             errors.append(f"{provider}: {exc}")
             continue
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 -- provider boundary: fall through to the next search provider
             errors.append(f"{provider}: {exc.__class__.__name__}")
             continue
 
@@ -165,7 +164,9 @@ async def _search_brave(query: str, limit: int) -> list[SearchResult]:
     if response.status_code >= 400:
         raise SearchProviderError(f"HTTP {response.status_code}")
     data = response.json()
-    return _normalize_items(data.get("web", {}).get("results", []), title_key="title", url_key="url", snippet_key="description")
+    return _normalize_items(
+        data.get("web", {}).get("results", []), title_key="title", url_key="url", snippet_key="description"
+    )
 
 
 async def _search_searxng(query: str, limit: int) -> list[SearchResult]:
@@ -247,7 +248,9 @@ async def _search_bing(query: str, limit: int) -> list[SearchResult]:
     return results
 
 
-def _normalize_items(items: list[dict[str, Any]], *, title_key: str, url_key: str, snippet_key: str) -> list[SearchResult]:
+def _normalize_items(
+    items: list[dict[str, Any]], *, title_key: str, url_key: str, snippet_key: str
+) -> list[SearchResult]:
     results: list[SearchResult] = []
     for item in items:
         title = str(item.get(title_key) or "").strip()
@@ -282,6 +285,7 @@ def _looks_relevant(result: SearchResult, query: str) -> bool:
         return False
 
     return bool(haystack)
+
 
 def _result(title: str, url: str, snippet: str, source: str) -> SearchResult:
     result = {"title": title[:200], "url": url, "snippet": snippet[:500]}

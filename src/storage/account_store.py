@@ -1,8 +1,9 @@
 """PostgreSQL account, revocable-session, and atomic authentication throttling storage."""
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import hashlib
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from sqlalchemy import case
@@ -61,8 +62,12 @@ class AccountStore:
             user = (
                 session.query(User)
                 .join(AuthSession, AuthSession.user_id == User.id)
-                .filter(AuthSession.id == session_id, User.id == user_id,
-                        AuthSession.expires_at > utcnow(), User.is_active.is_(True))
+                .filter(
+                    AuthSession.id == session_id,
+                    User.id == user_id,
+                    AuthSession.expires_at > utcnow(),
+                    User.is_active.is_(True),
+                )
                 .first()
             )
             return {"id": user.id, "username": user.username, "session_id": session_id} if user else None
@@ -70,7 +75,8 @@ class AccountStore:
     def revoke_session(self, session_id: str, user_id: str) -> None:
         with self.store._get_session() as session:
             session.query(AuthSession).filter(
-                AuthSession.id == session_id, AuthSession.user_id == user_id,
+                AuthSession.id == session_id,
+                AuthSession.user_id == user_id,
             ).delete(synchronize_session=False)
             session.commit()
 
@@ -78,14 +84,18 @@ class AccountStore:
         key = hashlib.sha256(f"{scope}:{client}".encode()).hexdigest()
         now = utcnow()
         expired = AuthRateLimit.window_started_at <= now - timedelta(seconds=seconds)
-        statement = insert(AuthRateLimit).values(key=key, window_started_at=now, attempts=1)
-        statement = statement.on_conflict_do_update(
+        # Separate names: the pre-upsert Insert and the post-upsert statement are
+        # different types, and reusing one variable conflates them.
+        insert_statement = insert(AuthRateLimit).values(key=key, window_started_at=now, attempts=1)
+        upsert_statement = insert_statement.on_conflict_do_update(
             index_elements=[AuthRateLimit.key],
-            set_={"window_started_at": case((expired, now), else_=AuthRateLimit.window_started_at),
-                  "attempts": case((expired, 1), else_=AuthRateLimit.attempts + 1)},
+            set_={
+                "window_started_at": case((expired, now), else_=AuthRateLimit.window_started_at),
+                "attempts": case((expired, 1), else_=AuthRateLimit.attempts + 1),
+            },
         ).returning(AuthRateLimit.attempts)
         with self.store._get_session() as session:
-            attempts = session.execute(statement).scalar_one()
+            attempts = session.execute(upsert_statement).scalar_one()
             session.query(AuthRateLimit).filter(
                 AuthRateLimit.window_started_at < now - timedelta(days=1),
             ).delete(synchronize_session=False)
@@ -94,5 +104,9 @@ class AccountStore:
 
     @staticmethod
     def _user_dict(user: User) -> dict:
-        return {"id": user.id, "username": user.username,
-                "password_hash": user.password_hash, "is_active": user.is_active}
+        return {
+            "id": user.id,
+            "username": user.username,
+            "password_hash": user.password_hash,
+            "is_active": user.is_active,
+        }

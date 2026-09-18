@@ -1,4 +1,5 @@
 """Multi-agent content pipeline for the API layer."""
+
 from __future__ import annotations
 
 import time
@@ -7,7 +8,7 @@ from dataclasses import dataclass
 
 from src.api.schemas.agent import AgentFinalContent, AgentRunRequest, AgentRunResponse, AgentStep
 from src.api.services.content_service import resolve_provider
-from src.llm.litellm_client import LLMConfigurationError, LLMGenerationError, LiteLLMClient
+from src.llm.litellm_client import LiteLLMClient, LLMConfigurationError, LLMGenerationError
 from src.models import GeneratedContent
 from src.storage import ContentStore
 from src.utils import config
@@ -181,10 +182,7 @@ def _build_user_prompt(step_id: str, request: AgentRunRequest, outputs: dict[str
             "Produce the final polished content."
         )
     if step_id == "review":
-        return (
-            f"{context}\n\nFinal content:\n{outputs['editor']}\n\n"
-            "Review the final content."
-        )
+        return f"{context}\n\nFinal content:\n{outputs['editor']}\n\nReview the final content."
     raise ValueError(f"Unknown agent step: {step_id}")
 
 

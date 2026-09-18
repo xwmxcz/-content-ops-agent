@@ -2,7 +2,7 @@
 
 ## 2026-09-05 — 浏览器/TLS 验证与运行期缺陷修复
 
-当前进度以 [WORKFLOW_CHECKPOINT.md](WORKFLOW_CHECKPOINT.md) 为准，本文后续章节为历史记录。
+当前进度以 [WORKFLOW_CHECKPOINT.md](archive/WORKFLOW_CHECKPOINT_2026-09-05.md) 为准，本文后续章节为历史记录。
 
 新增 `scripts/verify_browser.py`、`frontend/e2e/browser.spec.ts` 和测试配置，
 将生产 Compose 配置放进独立项目，通过真实 Chromium、TLS 代理、前端 Nginx、

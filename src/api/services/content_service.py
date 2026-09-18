@@ -1,4 +1,5 @@
 """Content generation helpers for the API layer."""
+
 from __future__ import annotations
 
 import re
@@ -6,7 +7,7 @@ from datetime import datetime
 
 from src.api.schemas.content import GenerateRequest, RefineRequest, SeoRequest, TitleRequest
 from src.llm.litellm_client import LiteLLMClient
-from src.models import ContentStyle, ContentType, GeneratedContent
+from src.models import ContentType, GeneratedContent
 from src.storage import ContentStore
 from src.tools.prompt_templates import PromptTemplates
 from src.utils import config
@@ -97,7 +98,7 @@ def parse_generated_content(content_text: str, content_type: ContentType) -> Gen
     if body_match:
         content = body_match.group(1).strip()
     elif title_match:
-        content = normalized[title_match.end():].strip()
+        content = normalized[title_match.end() :].strip()
 
     tags_match = re.search(r"【\s*标签\s*】\s*\n(.+?)\s*$", normalized, re.DOTALL)
     if tags_match:

@@ -12,7 +12,6 @@ from src.utils.idempotency import (
     idempotent_write,
 )
 
-
 router = APIRouter()
 
 

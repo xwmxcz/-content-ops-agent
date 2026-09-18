@@ -1,26 +1,27 @@
 """Tests for P1-03: Automatic job retry with error classification and exponential backoff."""
+
 from __future__ import annotations
 
-import asyncio
 import uuid
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from src.jobs.error_classifier import ErrorClassifier
 from src.jobs.runner import _calculate_backoff_delay, _handle_job_error, run_job_async
-from src.llm.litellm_client import LLMGenerationError
 from src.storage import ContentStore
 
 
 class TransientNetworkError(Exception):
     """Simulates a transient network error."""
+
     pass
 
 
 class PermanentValidationError(Exception):
     """Simulates a permanent validation error."""
+
     pass
 
 
@@ -120,7 +121,7 @@ class TestJobRetryMechanism:
 
         # Simulate a transient error
         error = TimeoutError("Connection timeout")
-        
+
         _handle_job_error(job_id, error, current_attempt=1, max_retries=5, store=store)
 
         # Verify job state
@@ -128,7 +129,7 @@ class TestJobRetryMechanism:
         assert updated_job["status"] == "failed"
         assert updated_job["error_type"] == "transient"
         assert updated_job["next_retry_at"] is not None
-        
+
         # Verify next_retry_at is approximately 30 seconds from now
         next_retry = datetime.fromisoformat(updated_job["next_retry_at"])
         expected_time = datetime.now() + timedelta(seconds=30)
@@ -149,7 +150,7 @@ class TestJobRetryMechanism:
 
         # Simulate a permanent error
         error = ValueError("Invalid input format")
-        
+
         _handle_job_error(job_id, error, current_attempt=1, max_retries=5, store=store)
 
         # Verify job state
@@ -173,7 +174,7 @@ class TestJobRetryMechanism:
 
         # Simulate a transient error at max retries
         error = TimeoutError("Connection timeout")
-        
+
         _handle_job_error(job_id, error, current_attempt=5, max_retries=5, store=store)
 
         # Verify job state
@@ -190,26 +191,26 @@ class TestJobRetryMechanism:
 
         for attempt, expected_delay in expected_delays:
             job = store.create_job(
-            job_id=str(uuid.uuid4()),
-            job_type="content_generate",
+                job_id=str(uuid.uuid4()),
+                job_type="content_generate",
                 payload={"topic": "test", "content_type": "blog"},
                 provider="openai",
                 model="gpt-4",
             )
             job_id = job["id"]
-            
+
             error = TimeoutError("Connection timeout")
             _handle_job_error(job_id, error, current_attempt=attempt, max_retries=5, store=store)
-            
+
             updated_job = store.get_job(job_id)
             next_retry = updated_job["next_retry_at"]
             if isinstance(next_retry, str):
                 next_retry = datetime.fromisoformat(next_retry)
             expected_time = datetime.now() + timedelta(seconds=expected_delay)
-            
+
             # Verify correct delay (within 5 seconds tolerance)
             assert abs((next_retry - expected_time).total_seconds()) < 5
-        
+
         # Test that attempt 5 (at max) does NOT schedule retry
         job = store.create_job(
             job_id=str(uuid.uuid4()),
@@ -221,7 +222,7 @@ class TestJobRetryMechanism:
         job_id = job["id"]
         error = TimeoutError("Connection timeout")
         _handle_job_error(job_id, error, current_attempt=5, max_retries=5, store=store)
-        
+
         updated_job = store.get_job(job_id)
         assert updated_job["status"] == "failed"
         assert updated_job["next_retry_at"] is None
@@ -238,7 +239,7 @@ class TestJobRetryMechanism:
             model="gpt-4",
         )
         job_id = job["id"]
-        
+
         # Set next_retry_at to 1 hour in the future
         future_time = datetime.now() + timedelta(hours=1)
         store.update_job(
@@ -252,7 +253,7 @@ class TestJobRetryMechanism:
         job_before = store.get_job(job_id)
         await run_job_async(job_id, store)
         job_after = store.get_job(job_id)
-        
+
         # Job should remain in failed state with same next_retry_at
         assert job_after["status"] == "failed"
         assert job_after["next_retry_at"] == job_before["next_retry_at"]
@@ -269,7 +270,7 @@ class TestJobRetryMechanism:
             model="gpt-4",
         )
         job_id = job["id"]
-        
+
         # Set next_retry_at to 1 hour in the past
         past_time = datetime.now() - timedelta(hours=1)
         store.update_job(
@@ -283,9 +284,9 @@ class TestJobRetryMechanism:
         # Mock the execution to succeed
         with patch("src.jobs.runner._execute_job", new_callable=AsyncMock) as mock_execute:
             mock_execute.return_value = {"content": "Generated content"}
-            
+
             await run_job_async(job_id, store)
-            
+
             # Job should have been executed
             mock_execute.assert_called_once()
 
@@ -307,10 +308,10 @@ class TestJobRetryMechanism:
 
         # Simulate multiple retries
         error = TimeoutError("Connection timeout")
-        
+
         for attempt in range(1, 4):
             _handle_job_error(job_id, error, current_attempt=attempt, max_retries=5, store=store)
-            
+
             # Verify next_retry_at is set
             current_job = store.get_job(job_id)
             assert current_job["next_retry_at"] is not None
@@ -328,12 +329,12 @@ class TestJobRetryMechanism:
             model="gpt-4",
         )
         job_id = job["id"]
-        
+
         # Manually set max_retries to 3
         store.update_job(job_id, max_retries=3)
 
         error = TimeoutError("Connection timeout")
-        
+
         # Attempt 3 should NOT retry (at max)
         _handle_job_error(job_id, error, current_attempt=3, max_retries=3, store=store)
 
@@ -369,10 +370,10 @@ class TestRetryIntegration:
 
         with patch("src.jobs.runner._execute_job", new_callable=AsyncMock) as mock_execute:
             mock_execute.side_effect = mock_execute_with_retry
-            
+
             # First attempt - should fail and schedule retry
             await run_job_async(job_id, store)
-            
+
             job_after_first = store.get_job(job_id)
             assert job_after_first["status"] == "failed"
             assert job_after_first["error_type"] == "transient"
@@ -381,9 +382,9 @@ class TestRetryIntegration:
             # Second attempt - should succeed
             # Simulate time passing by clearing next_retry_at
             store.update_job(job_id, next_retry_at=datetime.now() - timedelta(seconds=1))
-            
+
             await run_job_async(job_id, store)
-            
+
             job_after_second = store.get_job(job_id)
             assert job_after_second["status"] == "completed"
             assert job_after_second["attempts"] == 2
@@ -405,16 +406,16 @@ class TestRetryIntegration:
         with patch("src.jobs.runner._execute_job", new_callable=AsyncMock) as mock_execute:
             mock_execute.side_effect = TimeoutError("Transient failure")
             await run_job_async(job_id, store)
-            
+
             job_after_first = store.get_job(job_id)
             assert job_after_first["error_type"] == "transient"
 
             # Second attempt: permanent error
             mock_execute.side_effect = ValueError("Invalid input")
             store.update_job(job_id, next_retry_at=datetime.now() - timedelta(seconds=1))
-            
+
             await run_job_async(job_id, store)
-            
+
             job_after_second = store.get_job(job_id)
             assert job_after_second["error_type"] == "permanent"
             assert job_after_second["next_retry_at"] is None

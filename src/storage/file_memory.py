@@ -13,13 +13,13 @@ Within a file, entries are separated by a line containing just `§`. The
 delimiter lets a single entry span multiple lines while still allowing
 substring-based `replace`/`remove` operations.
 """
+
 from __future__ import annotations
 
 import re
 import threading
 from pathlib import Path
 from typing import Any
-
 
 AGENT = "agent"
 USER = "user"
@@ -68,9 +68,7 @@ class FileMemory:
     def save(self, target: str, content: str) -> None:
         limit = self.limit_for(target)
         if len(content) > limit:
-            raise MemoryLimitExceeded(
-                f"{target} memory has {len(content)} chars, limit is {limit}"
-            )
+            raise MemoryLimitExceeded(f"{target} memory has {len(content)} chars, limit is {limit}")
         path = self._path_for(target)
         with self._lock:
             path.write_text(content, encoding="utf-8")
@@ -93,8 +91,7 @@ class FileMemory:
             raise MemoryNotFound(f"old_text not found in {target} memory")
         if occurrences > 1:
             raise MemoryAmbiguous(
-                f"old_text matches {occurrences} locations in {target} memory; "
-                "make it more specific so it is unique"
+                f"old_text matches {occurrences} locations in {target} memory; make it more specific so it is unique"
             )
         self.save(target, current.replace(old_text, new_text))
 
@@ -105,8 +102,7 @@ class FileMemory:
             raise MemoryNotFound(f"old_text not found in {target} memory")
         if occurrences > 1:
             raise MemoryAmbiguous(
-                f"old_text matches {occurrences} locations in {target} memory; "
-                "make it more specific so it is unique"
+                f"old_text matches {occurrences} locations in {target} memory; make it more specific so it is unique"
             )
         new = current.replace(old_text, "")
         # Collapse leftover delimiter pairs / extra blank lines after removal.
@@ -144,6 +140,4 @@ class FileMemory:
     @staticmethod
     def _validate_target(target: str) -> None:
         if target not in _VALID_TARGETS:
-            raise ValueError(
-                f"Unknown memory target: {target!r}. Must be one of {sorted(_VALID_TARGETS)}"
-            )
+            raise ValueError(f"Unknown memory target: {target!r}. Must be one of {sorted(_VALID_TARGETS)}")

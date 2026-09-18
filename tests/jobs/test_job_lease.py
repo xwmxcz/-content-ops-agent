@@ -1,4 +1,5 @@
 """Tests for P1-04: lease-based job deduplication, recovery, and checkpoints."""
+
 from __future__ import annotations
 
 import asyncio
@@ -476,9 +477,7 @@ class TestRunnerLeaseIntegration:
         assert job["result"] == {"content": "recovered"}
 
     @pytest.mark.asyncio
-    async def test_lost_lease_aborts_without_writing_job_state(
-        self, store: ContentStore, monkeypatch
-    ):
+    async def test_lost_lease_aborts_without_writing_job_state(self, store: ContentStore, monkeypatch):
         """Another worker owns the job now; writing a result here would clobber it."""
         monkeypatch.setattr(config, "JOB_HEARTBEAT_INTERVAL_SECONDS", 1)
         job_id = _make_job(store)
@@ -499,9 +498,7 @@ class TestRunnerLeaseIntegration:
         assert job["worker_id"] == "worker-other"
 
     @pytest.mark.asyncio
-    async def test_cancellation_stops_execution_and_keeps_cancelled_state(
-        self, store: ContentStore, monkeypatch
-    ):
+    async def test_cancellation_stops_execution_and_keeps_cancelled_state(self, store: ContentStore, monkeypatch):
         monkeypatch.setattr(config, "JOB_HEARTBEAT_INTERVAL_SECONDS", 1)
         job_id = _make_job(store)
 
@@ -519,9 +516,7 @@ class TestRunnerLeaseIntegration:
         assert job["result"] is None
 
     @pytest.mark.asyncio
-    async def test_heartbeat_extends_lease_during_long_run(
-        self, store: ContentStore, monkeypatch
-    ):
+    async def test_heartbeat_extends_lease_during_long_run(self, store: ContentStore, monkeypatch):
         monkeypatch.setattr(config, "JOB_HEARTBEAT_INTERVAL_SECONDS", 1)
         monkeypatch.setattr(config, "JOB_LEASE_DURATION_SECONDS", 60)
         job_id = _make_job(store)

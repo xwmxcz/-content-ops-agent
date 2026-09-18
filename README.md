@@ -172,6 +172,7 @@ Copy one env template to `.env`, then fill in the keys you need.
 | Stable web research | Set one of `SERPER_API_KEY`, `TAVILY_API_KEY`, or `BRAVE_SEARCH_API_KEY`. Without a key, the app falls back to keyless HTML search that may be blocked. |
 | All environments | Set a non-empty `AUTH_SECRET_KEY`; register individual accounts on the login page. |
 | Production security | Strong independent signing/PostgreSQL/Redis secrets; `SCHEMA_MANAGEMENT=validate`; exact HTTPS `CORS_ORIGINS`. Unsafe defaults fail startup. |
+| Cost control | Set `LLM_RATE_LIMIT_PER_MINUTE` (0 disables it). It caps per-user calls to the endpoints that spend provider credit — chat, Studio runs, generate, refine, titles, SEO. Leave it at 0 locally. |
 | Xiaohongshu publishing demo | Keep or adjust `XHS_MCP_URL` to point at your local MCP server. |
 
 Docker reads `.env` automatically. For host-based development, copy
@@ -314,15 +315,56 @@ budgets, and can refresh frozen snapshots.
 
 ## Verification
 
-Backend (the test fixture drops/recreates tables, so use a disposable PostgreSQL database only):
+Everything CI enforces is available through the `Makefile`, so a green
+`make check` locally means a green pipeline. CI (`.github/workflows/ci.yml`)
+runs lint, the full backend suite against a PostgreSQL service container,
+the frontend typecheck/tests/build, a Docker image build, and a dependency
+audit.
+
+```bash
+make check          # ruff + mypy + backend tests + frontend typecheck/tests
+```
+
+GNU Make ships with macOS and Linux, but **not with Git for Windows** and it is
+not always on PATH on Windows. If `make` is unavailable, use the equivalent
+Python runner — it invokes the same commands, so the two cannot drift:
+
+```bash
+python scripts/dev.py check     # same targets, no make required
+python scripts/dev.py           # list every target
+```
+
+On Windows, `mingw32-make` also works if you have it installed.
+
+Individually:
+
+```bash
+make lint           # ruff check + ruff format --check
+make typecheck      # mypy
+make db-up          # throwaway PostgreSQL on port 55432, for the targets below
+make test-db        # full pytest; REQUIRE_TEST_DATABASE=1 forbids silent skips
+make test           # fast unit tests only; database-backed tests skip
+make test-frontend  # vue-tsc + vitest
+make audit          # pip-audit + npm audit
+```
+
+Substitute `python scripts/dev.py <target>` for any of these when `make` is not
+available. Running a database target before starting the database now exits
+immediately with `TEST_DATABASE_URL is not reachable` rather than hanging.
+
+The backend suite needs a disposable PostgreSQL database and drops/recreates
+tables around every test, so never point `TEST_DATABASE_URL` at real data:
 
 ```bash
 export TEST_DATABASE_URL='postgresql+psycopg://user:password@localhost:5432/content_ops_test'
 python -m pytest tests -q
-python -m compileall src tests migrations examples
 ```
 
-Frontend:
+Without `TEST_DATABASE_URL` roughly half the suite skips. `make test-db` sets
+`REQUIRE_TEST_DATABASE=1`, which turns that skip into a failure on purpose — a
+half-skipped suite should not be able to report success.
+
+Frontend, without the Makefile:
 
 ```bash
 cd frontend
@@ -338,6 +380,7 @@ Migrations and Docker production validation:
 
 ```bash
 alembic upgrade head
+alembic check        # fails if ORM metadata has drifted from the migrations
 alembic current
 docker compose up -d --build
 docker compose ps

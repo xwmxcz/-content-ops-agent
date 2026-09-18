@@ -15,11 +15,11 @@ therefore comes from request identity:
 ``consume_proposed_action``: the same key arriving with different arguments is a
 client error and fails closed rather than returning the first result.
 """
+
 from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-
 
 # Scope namespaces the key so one key value reused across resource families does
 # not cross-deduplicate. This is what satisfies "不同资源范围不误去重".

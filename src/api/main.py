@@ -1,17 +1,18 @@
 """FastAPI app for the modern Content Ops Agent backend."""
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src.api.request_context import RequestContextMiddleware
 from src.api.middleware.metrics_middleware import MetricsMiddleware
+from src.api.request_context import RequestContextMiddleware
 from src.api.routes import agent, auth, calendar, content, health, jobs, media, memory, metrics, models, publish, stats
 from src.api.security import AuthMiddleware, HttpsEnforcementMiddleware
+from src.storage.tenancy import TenantAccessError
 from src.utils import config
 from src.utils.structured_logging import configure_logging
-from src.storage.tenancy import TenantAccessError
 
 
 @asynccontextmanager
@@ -19,7 +20,7 @@ async def lifespan(app: FastAPI):
     # Configure logging at startup, not import time, to avoid interfering with
     # pytest's caplog fixture.
     configure_logging(config.LOG_LEVEL)
-    
+
     # Production startup is fail-closed and validation-only: migrations are a
     # separate deployment step. Explicit development/test profiles may retain
     # create_all for a fresh local database.
@@ -41,6 +42,7 @@ app = FastAPI(
 @app.exception_handler(TenantAccessError)
 async def workspace_access_error(request, exc):
     return JSONResponse(status_code=404, content={"detail": "Resource not found"})
+
 
 app.add_middleware(AuthMiddleware)
 app.add_middleware(RequestContextMiddleware)

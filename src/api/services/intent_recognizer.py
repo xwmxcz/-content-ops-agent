@@ -1,19 +1,20 @@
 """Intent recognition for the Chat Agent surface."""
+
 from __future__ import annotations
 
 import json
 import logging
 import re
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from src.api.schemas.agent import ChatIntent, ChatIntentName
 from src.api.services.tool_policy import SIDE_EFFECT_TOOLS
 from src.utils import config
 from src.utils.canonical import args_hash
 from src.utils.structured_logging import log_event
-
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +171,10 @@ class IntentRecognizer:
         thread_id: str | None = None,
     ) -> ChatIntent:
         chat_model = self.model_factory(provider, model, INTENT_TEMPERATURE, INTENT_MAX_TOKENS)
-        messages = [SystemMessage(content=INTENT_SYSTEM_PROMPT)]
+        # Typed as BaseMessage: the list mixes a SystemMessage with the
+        # HumanMessage appended below, so inferring from the first element would
+        # pin it to list[SystemMessage].
+        messages: list[BaseMessage] = [SystemMessage(content=INTENT_SYSTEM_PROMPT)]
         last_messages = history[-6:]
         if last_messages:
             transcript = []
@@ -183,18 +187,21 @@ class IntentRecognizer:
             ai_message = await chat_model.ainvoke(messages)
             raw = self._message_content_to_text(ai_message.content).strip()
             payload = json.loads(self._strip_fence(raw))
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 -- LLM/JSON boundary; degrade to a clarification
+            logger.warning("intent LLM call failed, asking to clarify: %s", exc.__class__.__name__)
             return self._clarify_intent(message)
 
         if not isinstance(payload, dict):
             return self._clarify_intent(message)
 
-        name = str(payload.get("name") or "unknown").strip()
+        raw_name = str(payload.get("name") or "unknown").strip()
         confidence = self._safe_confidence(payload.get("confidence"))
-        slots = payload.get("slots") if isinstance(payload.get("slots"), dict) else {}
+        raw_slots = payload.get("slots")
+        slots: dict[str, Any] = raw_slots if isinstance(raw_slots, dict) else {}
         clarification = payload.get("clarification")
-        if name not in INTENT_ALLOWED_TOOLS:
-            name = "unknown"
+        # The model supplies free text, so narrow it to a known intent before it
+        # is used as a dict key or an authorization input.
+        name: ChatIntentName = raw_name if raw_name in INTENT_ALLOWED_TOOLS else "unknown"
         # The classifier is model-controlled routing advice. Confirmation names
         # are exclusively produced by _match_rule() after the server validates
         # the raw current message and persisted preceding proposal.
@@ -241,29 +248,71 @@ class IntentRecognizer:
         if _AMBIGUOUS_RE.search(text):
             return self._clarify_intent(message)
         if _SMALLTALK_RE.search(text) or lowered in {"hi", "hello", "hey", "next"}:
-            return self._finalize_intent(ChatIntent(name="smalltalk", confidence=0.9), message=message, history=history, thread_id=thread_id)
+            return self._finalize_intent(
+                ChatIntent(name="smalltalk", confidence=0.9), message=message, history=history, thread_id=thread_id
+            )
         if _MEMORY_RE.search(text):
-            return self._finalize_intent(ChatIntent(name="memory_update", confidence=0.96), message=message, history=history, thread_id=thread_id)
+            return self._finalize_intent(
+                ChatIntent(name="memory_update", confidence=0.96), message=message, history=history, thread_id=thread_id
+            )
         if _SEO_RE.search(text):
-            return self._finalize_intent(ChatIntent(name="seo_optimize", confidence=0.96), message=message, history=history, thread_id=thread_id)
+            return self._finalize_intent(
+                ChatIntent(name="seo_optimize", confidence=0.96), message=message, history=history, thread_id=thread_id
+            )
         if _TITLE_RE.search(text) and re.search(r"(生成|给|想|title|标题)", text, re.IGNORECASE):
-            return self._finalize_intent(ChatIntent(name="title_generate", confidence=0.95), message=message, history=history, thread_id=thread_id)
+            return self._finalize_intent(
+                ChatIntent(name="title_generate", confidence=0.95),
+                message=message,
+                history=history,
+                thread_id=thread_id,
+            )
         if _PERFORMANCE_RE.search(text):
-            return self._finalize_intent(ChatIntent(name="performance_review", confidence=0.95), message=message, history=history, thread_id=thread_id)
+            return self._finalize_intent(
+                ChatIntent(name="performance_review", confidence=0.95),
+                message=message,
+                history=history,
+                thread_id=thread_id,
+            )
         if _CALENDAR_VIEW_RE.search(text) and not _SCHEDULE_PROPOSE_RE.search(text):
-            return self._finalize_intent(ChatIntent(name="calendar_view", confidence=0.94), message=message, history=history, thread_id=thread_id)
+            return self._finalize_intent(
+                ChatIntent(name="calendar_view", confidence=0.94), message=message, history=history, thread_id=thread_id
+            )
         if _SCHEDULE_PROPOSE_RE.search(text):
-            return self._finalize_intent(ChatIntent(name="schedule_propose", confidence=0.94), message=message, history=history, thread_id=thread_id)
+            return self._finalize_intent(
+                ChatIntent(name="schedule_propose", confidence=0.94),
+                message=message,
+                history=history,
+                thread_id=thread_id,
+            )
         if _TOPIC_RE.search(text):
-            return self._finalize_intent(ChatIntent(name="topic_strategy", confidence=0.92), message=message, history=history, thread_id=thread_id)
+            return self._finalize_intent(
+                ChatIntent(name="topic_strategy", confidence=0.92),
+                message=message,
+                history=history,
+                thread_id=thread_id,
+            )
         if _CONTENT_REFINE_RE.search(text):
-            return self._finalize_intent(ChatIntent(name="content_refine", confidence=0.93), message=message, history=history, thread_id=thread_id)
+            return self._finalize_intent(
+                ChatIntent(name="content_refine", confidence=0.93),
+                message=message,
+                history=history,
+                thread_id=thread_id,
+            )
         if _CONTENT_SEARCH_RE.search(text) or re.search(r"\bcontent\s+\d+\b", text, re.IGNORECASE):
-            return self._finalize_intent(ChatIntent(name="content_search", confidence=0.9), message=message, history=history, thread_id=thread_id)
+            return self._finalize_intent(
+                ChatIntent(name="content_search", confidence=0.9), message=message, history=history, thread_id=thread_id
+            )
         if _CREATE_RE.search(text):
-            return self._finalize_intent(ChatIntent(name="content_create", confidence=0.92), message=message, history=history, thread_id=thread_id)
+            return self._finalize_intent(
+                ChatIntent(name="content_create", confidence=0.92),
+                message=message,
+                history=history,
+                thread_id=thread_id,
+            )
         if len(text) <= 20 or len(text.split()) <= 4:
-            return self._finalize_intent(ChatIntent(name="unknown", confidence=0.62), message=message, history=history, thread_id=thread_id)
+            return self._finalize_intent(
+                ChatIntent(name="unknown", confidence=0.62), message=message, history=history, thread_id=thread_id
+            )
         return None
 
     def _finalize_intent(
@@ -382,9 +431,7 @@ class IntentRecognizer:
             if not candidate or candidate.get("thread_id") != thread_id:
                 candidate = None
         if candidate is None:
-            candidate = self.store.latest_pending_proposed_action(
-                thread_id, tool_name=tool_name
-            )
+            candidate = self.store.latest_pending_proposed_action(thread_id, tool_name=tool_name)
         if not candidate:
             return None
         if candidate.get("tool_name") != tool_name or candidate.get("args_hash") != expected_hash:
@@ -418,9 +465,7 @@ class IntentRecognizer:
         """
         if self.store is None or not thread_id:
             return None
-        existing = self.store.latest_pending_proposed_action(
-            thread_id, tool_name="commit_publishing_schedule"
-        )
+        existing = self.store.latest_pending_proposed_action(thread_id, tool_name="commit_publishing_schedule")
         expected_hash = args_hash(args)
         if existing and existing.get("args_hash") == expected_hash:
             action_id = existing["id"]
@@ -430,8 +475,7 @@ class IntentRecognizer:
                 tool_name="commit_publishing_schedule",
                 args=args,
                 impact_summary=(
-                    f"Commit {len(args.get('plan') or [])} calendar entries from the "
-                    "proposed publishing schedule"
+                    f"Commit {len(args.get('plan') or [])} calendar entries from the proposed publishing schedule"
                 ),
                 ttl_seconds=config.ACTION_CAPABILITY_TTL_SECONDS,
             )
@@ -497,7 +541,8 @@ class IntentRecognizer:
             return None
         try:
             return self.store.latest_pending_proposed_action(thread_id)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 -- fail closed on any storage error
+            logger.warning("durable proposal lookup failed: %s", exc.__class__.__name__)
             # A capability lookup failure must never widen authorization; falling
             # through leaves the confirmation without an action id.
             return None
@@ -527,7 +572,7 @@ class IntentRecognizer:
             output = event.get("output") or ""
             try:
                 payload = json.loads(output)
-            except Exception:
+            except (TypeError, ValueError):
                 continue
             if isinstance(payload, dict) and isinstance(payload.get("plan"), list):
                 return {"proposal_plan": payload["plan"]}

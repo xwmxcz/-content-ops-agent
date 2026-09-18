@@ -1,4 +1,5 @@
 """Background/RQ runners restore the persisted owner's scope before executing work."""
+
 from __future__ import annotations
 
 import asyncio
@@ -17,11 +18,10 @@ from src.api.services.agent_pipeline import PipelineExecutionError, run_agent_pi
 from src.api.services.publish_service import PublicationValidationError, create_publish_service
 from src.integrations.mcp_client import McpClientError
 from src.jobs.error_classifier import ErrorClassifier
-from src.llm.litellm_client import LLMConfigurationError, LLMGenerationError, LiteLLMClient
+from src.llm.litellm_client import LiteLLMClient, LLMConfigurationError, LLMGenerationError
 from src.storage import ContentStore
 from src.utils import config, metrics
 from src.utils.structured_logging import log_event, log_job_event
-
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,7 @@ async def _run_pipeline_job_async(run_id: str, request_data: dict[str, Any], sto
         request = PipelineRunRequest(**request_data)
         pipeline = DynamicPipeline(store=store, llm=create_litellm_client())
         await pipeline.run(request, run_id=run_id)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 -- job boundary: every failure must become a terminal run event
         # The run row was pre-created by the API before enqueue. Any failure here
         # — bad payload, LLM/config error, unexpected crash — must land as a terminal
         # run_failed event, otherwise SSE consumers hang until the stream deadline.
@@ -99,7 +99,7 @@ async def run_job_async(job_id: str, store: ContentStore) -> None:
     job = store.get_job(job_id)
     if not job:
         return
-    
+
     # Only scheduled failures are retryable; duplicate deliveries must not
     # revive permanent failures or jobs that exhausted their retry budget.
     if job["status"] == "failed":
@@ -109,7 +109,7 @@ async def run_job_async(job_id: str, store: ContentStore) -> None:
         if datetime.now() < next_retry_at:
             # Too early to retry, skip this execution
             return
-    
+
     if job["status"] not in {"queued", "failed"}:
         return
 
@@ -152,9 +152,7 @@ async def run_job_async(job_id: str, store: ContentStore) -> None:
     # poll interval serves both and long-running work does not need to cooperate.
     monitor_state: dict[str, str | None] = {"reason": None}
     exec_task = asyncio.ensure_future(_execute_job(job, llm, store))
-    monitor_task = asyncio.ensure_future(
-        _monitor_job_lease(job_id, job_type, store, exec_task, monitor_state)
-    )
+    monitor_task = asyncio.ensure_future(_monitor_job_lease(job_id, job_type, store, exec_task, monitor_state))
 
     try:
         try:
@@ -198,7 +196,7 @@ async def run_job_async(job_id: str, store: ContentStore) -> None:
             if _is_cancelled(job_id, store):
                 return
             _handle_job_error(job_id, exc, attempts, max_retries, store, job["job_type"])
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 -- job boundary: classified into retry/fail by _handle_job_error
             if _is_cancelled(job_id, store):
                 return
             _handle_job_error(job_id, exc, attempts, max_retries, store, job["job_type"])
@@ -221,7 +219,7 @@ async def _monitor_job_lease(
     job_id: str,
     job_type: str,
     store: ContentStore,
-    exec_task: "asyncio.Future[Any]",
+    exec_task: asyncio.Future[Any],
     state: dict[str, str | None],
 ) -> None:
     """Heartbeat the lease and propagate cancellation into the running job.
@@ -261,12 +259,12 @@ def _is_cancelled(job_id: str, store: ContentStore) -> bool:
 
 def _calculate_backoff_delay(attempt: int) -> int:
     """Calculate exponential backoff delay in seconds.
-    
+
     Delays: 30s, 60s, 120s, 240s, 480s (capped at max)
     """
     base_delay = config.JOB_RETRY_INITIAL_DELAY_SECONDS
     max_delay = config.JOB_RETRY_MAX_DELAY_SECONDS
-    
+
     # Exponential: 30 * 2^(attempt-1)
     delay = base_delay * (2 ** (attempt - 1))
     return min(delay, max_delay)
@@ -283,14 +281,14 @@ def _handle_job_error(
     """Handle job errors with smart retry logic based on error classification."""
     error_message = str(exc).strip() or "Job failed unexpectedly"
     error_type = ErrorClassifier.classify(exc)
-    
+
     should_retry = ErrorClassifier.should_retry(exc, current_attempt, max_retries)
-    
+
     if should_retry:
         # Calculate backoff and schedule retry
         delay_seconds = _calculate_backoff_delay(current_attempt)
         next_retry_at = datetime.now() + timedelta(seconds=delay_seconds)
-        
+
         store.update_job(
             job_id,
             status="failed",  # Keep as failed but with next_retry_at set
@@ -299,14 +297,19 @@ def _handle_job_error(
             error_type=error_type,
             next_retry_at=next_retry_at,
         )
-        
+
         # P2-01: Metrics and logging
         metrics.job_retry_attempts_total.labels(error_type=error_type, job_type=job_type).inc()
         log_job_event(
-            logger, "retry_scheduled", job_id, job_type,
-            error_type=error_type, retry_count=current_attempt, next_retry_at=next_retry_at.isoformat()
+            logger,
+            "retry_scheduled",
+            job_id,
+            job_type,
+            error_type=error_type,
+            retry_count=current_attempt,
+            next_retry_at=next_retry_at.isoformat(),
         )
-        
+
         log_event(
             logger,
             "job_retry_scheduled",
@@ -318,12 +321,13 @@ def _handle_job_error(
             max_retries=max_retries,
             next_retry_in_seconds=delay_seconds,
         )
-        
+
         # Requeue the job for delayed execution
         from src.jobs.queue import requeue_job_with_delay
+
         try:
             requeue_job_with_delay(job_id, delay_seconds, store.database_url)
-        except Exception as requeue_error:
+        except Exception as requeue_error:  # noqa: BLE001 -- queue boundary; logged and job marked failed
             log_event(
                 logger,
                 "job_requeue_failed",
@@ -341,16 +345,21 @@ def _handle_job_error(
             error_type=error_type,
             next_retry_at=None,  # Clear any scheduled retry
         )
-        
+
         # P2-01: Metrics and logging
         if current_attempt >= max_retries:
             metrics.job_retry_exhausted_total.labels(job_type=job_type).inc()
         metrics.job_failures_total.labels(error_type=error_type, job_type=job_type).inc()
         log_job_event(
-            logger, "failed_permanently", job_id, job_type,
-            error_type=error_type, retry_count=current_attempt, max_retries=max_retries
+            logger,
+            "failed_permanently",
+            job_id,
+            job_type,
+            error_type=error_type,
+            retry_count=current_attempt,
+            max_retries=max_retries,
         )
-        
+
         log_event(
             logger,
             "job_failed",
@@ -369,15 +378,17 @@ async def _execute_job(job: dict[str, Any], llm: LiteLLMClient, store: ContentSt
     job_id = job["id"]
 
     if job_type == "content_generation":
-        request = GenerateRequest(**payload)
-        content_id, generated, provider, model = await content_service.generate_content(request, llm, store)
+        generate_request = GenerateRequest(**payload)
+        content_id, generated, provider, model = await content_service.generate_content(generate_request, llm, store)
         return {
             "content": {
                 "id": content_id,
                 "title": generated.title,
                 "content": generated.content,
-                "content_type": generated.content_type.value if generated.content_type else request.content_type.value,
-                "style": request.style.value,
+                "content_type": generated.content_type.value
+                if generated.content_type
+                else generate_request.content_type.value,
+                "style": generate_request.style.value,
                 "tags": generated.tags or [],
                 "status": "draft",
                 "created_at": generated.created_at.isoformat() if generated.created_at else None,
@@ -388,22 +399,27 @@ async def _execute_job(job: dict[str, Any], llm: LiteLLMClient, store: ContentSt
         }
 
     if job_type == "agent_run":
-        request = AgentRunRequest(**payload)
+        agent_request = AgentRunRequest(**payload)
         store.update_job(job_id, progress=20)
-        result = await run_agent_pipeline(request, llm, store)
+        result = await run_agent_pipeline(agent_request, llm, store)
         return {"agent_run": result.model_dump()}
 
     if job_type == "refine":
-        request = RefineRequest(**payload)
-        content_id, refined, provider, model = await content_service.refine_content(request, llm, store)
+        refine_request = RefineRequest(**payload)
+        content_id, refined, provider, model = await content_service.refine_content(refine_request, llm, store)
         stored = store.get_content(content_id) or {}
         return {
             "content": {
                 "id": content_id,
                 "title": refined.title,
                 "content": refined.content,
-                "content_type": refined.content_type.value if refined.content_type else stored.get("content_type", "unknown"),
-                "style": stored.get("style", request.new_style.value if request.new_style else "casual"),
+                "content_type": refined.content_type.value
+                if refined.content_type
+                else stored.get("content_type", "unknown"),
+                "style": stored.get(
+                    "style",
+                    refine_request.new_style.value if refine_request.new_style else "casual",
+                ),
                 "tags": refined.tags or [],
                 "status": stored.get("status", "refined"),
                 "created_at": stored.get("created_at"),
@@ -414,12 +430,12 @@ async def _execute_job(job: dict[str, Any], llm: LiteLLMClient, store: ContentSt
         }
 
     if job_type == "titles":
-        request = TitleRequest(**payload)
-        return {"text": await content_service.generate_titles(request, llm, store)}
+        title_request = TitleRequest(**payload)
+        return {"text": await content_service.generate_titles(title_request, llm, store)}
 
     if job_type == "seo":
-        request = SeoRequest(**payload)
-        return {"text": await content_service.analyze_seo(request, llm, store)}
+        seo_request = SeoRequest(**payload)
+        return {"text": await content_service.analyze_seo(seo_request, llm, store)}
 
     if job_type == "publish_xiaohongshu":
         publication_id = int(payload["publication_id"])

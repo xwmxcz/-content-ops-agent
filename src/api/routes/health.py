@@ -5,7 +5,6 @@ from sqlalchemy import text
 from src.api.dependencies import get_system_store
 from src.utils import config
 
-
 router = APIRouter()
 
 

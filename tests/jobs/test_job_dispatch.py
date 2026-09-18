@@ -1,4 +1,5 @@
 """Exercise runner dispatch decisions without a database or a live queue."""
+
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -28,9 +29,7 @@ def dispatch_store():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("error_type,attempts", [("permanent", 1), ("transient", 3)])
 async def test_terminal_failure_is_not_reexecuted(dispatch_store, error_type, attempts):
-    dispatch_store.get_job.return_value.update(
-        status="failed", error_type=error_type, attempts=attempts
-    )
+    dispatch_store.get_job.return_value.update(status="failed", error_type=error_type, attempts=attempts)
 
     with patch("src.jobs.runner._execute_job", new_callable=AsyncMock) as execute:
         await run_job_async("job_dispatch", dispatch_store)
@@ -62,8 +61,7 @@ async def test_queued_job_and_due_retry_execute(dispatch_store, status, attempts
     dispatch_store.get_job.return_value.update(
         status=status,
         attempts=attempts,
-        next_retry_at=(datetime.now() - timedelta(seconds=1)).isoformat()
-        if status == "failed" else None,
+        next_retry_at=(datetime.now() - timedelta(seconds=1)).isoformat() if status == "failed" else None,
     )
 
     with patch("src.jobs.runner._execute_job", new_callable=AsyncMock) as execute:
@@ -71,9 +69,7 @@ async def test_queued_job_and_due_retry_execute(dispatch_store, status, attempts
         await run_job_async("job_dispatch", dispatch_store)
 
     execute.assert_awaited_once()
-    dispatch_store.start_job.assert_called_once_with(
-        "job_dispatch", attempts=attempts + 1, progress=5
-    )
+    dispatch_store.start_job.assert_called_once_with("job_dispatch", attempts=attempts + 1, progress=5)
     dispatch_store.update_job.assert_called_once_with(
         "job_dispatch", status="completed", progress=100, result={"content": "ok"}, error=None
     )

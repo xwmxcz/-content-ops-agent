@@ -4,6 +4,7 @@ Uses a FakeLLMClient that drives the planner + sub-agents deterministically.
 Real streaming is mocked at the SubAgentRunner.run() level by injecting a
 FakeRunner — keeps the test suite fast and avoids depending on litellm.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -13,13 +14,11 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from src.api.dependencies import get_store
 from src.api.main import app
 from src.api.schemas.agent import PipelineRunRequest, SubAgentId
 from src.api.services.dynamic_pipeline import DynamicPipeline
 from src.api.services.sub_agents import SubAgentSpec
-from src.models import ContentType, ContentStyle
-
+from src.models import ContentStyle, ContentType
 
 # ---------- fakes -------------------------------------------------------------
 
@@ -48,9 +47,11 @@ class FakePlannerLLM:
     async def generate_stream(self, **kwargs):
         # Not used in tests — FakeRunner.run is what gets invoked.
         text = await self.generate_from_prompts(**kwargs)
+
         async def _gen():
             yield type("C", (), {"delta": text, "usage": (10, 5)})()
             yield type("C", (), {"delta": "", "usage": (10, 5)})()
+
         async for c in _gen():
             yield c
 
@@ -65,14 +66,23 @@ class FakeRunner:
         self.calls: list[tuple[str, str, tuple[str, ...] | None]] = []  # (agent_id, prompt, allowed_tools)
         self.token_emissions: list[tuple[int, str]] = []  # (step_index?, delta) — index unknown here, but sink knows it
 
-    async def run(self, spec: SubAgentSpec, user_prompt: str, provider: str, model: str,
-                  max_tokens: int = 2048, token_sink=None, tool_sink=None, allowed_tools: tuple[str, ...] | None = None):
+    async def run(
+        self,
+        spec: SubAgentSpec,
+        user_prompt: str,
+        provider: str,
+        model: str,
+        max_tokens: int = 2048,
+        token_sink=None,
+        tool_sink=None,
+        allowed_tools: tuple[str, ...] | None = None,
+    ):
         self.calls.append((spec.id, user_prompt, allowed_tools))
         text = self.scripted.get(spec.id, f"[{spec.id} default output]")
         if token_sink is not None:
             # Emit two tokens so the test for `step_token` event presence passes.
             await token_sink(text[: max(1, len(text) // 2)])
-            await token_sink(text[max(1, len(text) // 2):])
+            await token_sink(text[max(1, len(text) // 2) :])
         return text, 10, 5, 12, 0.0001
 
 
@@ -107,15 +117,18 @@ def _request(topic="周末徒步路线推荐", **overrides: Any):
 
 @pytest.mark.asyncio
 async def test_planner_produces_3_step_plan(store, planner_llm):
-    plan_json = json.dumps([
-        {"index": 1, "agent_id": "strategy", "description": "Plan", "instruction": "go", "inputs_from": []},
-        {"index": 2, "agent_id": "writer", "description": "Draft", "instruction": "go", "inputs_from": [1]},
-        {"index": 3, "agent_id": "editor", "description": "Polish", "instruction": "go", "inputs_from": [2]},
-    ])
-    planner_llm.queue(plan_json, "null")  # planner call + one possible revision call (won't trigger because no reviewer)
+    plan_json = json.dumps(
+        [
+            {"index": 1, "agent_id": "strategy", "description": "Plan", "instruction": "go", "inputs_from": []},
+            {"index": 2, "agent_id": "writer", "description": "Draft", "instruction": "go", "inputs_from": [1]},
+            {"index": 3, "agent_id": "editor", "description": "Polish", "instruction": "go", "inputs_from": [2]},
+        ]
+    )
+    planner_llm.queue(
+        plan_json, "null"
+    )  # planner call + one possible revision call (won't trigger because no reviewer)
 
-    pipeline, runner = _make_pipeline(store, planner_llm,
-                                      scripted={"strategy": "S", "writer": "W", "editor": "E"})
+    pipeline, runner = _make_pipeline(store, planner_llm, scripted={"strategy": "S", "writer": "W", "editor": "E"})
 
     response = await pipeline.run(_request())
 
@@ -130,16 +143,22 @@ async def test_planner_produces_3_step_plan(store, planner_llm):
 async def test_planner_fallback_on_invalid_json(store, planner_llm):
     planner_llm.queue("I'll just wing it", "null")
 
-    pipeline, runner = _make_pipeline(store, planner_llm,
-                                      scripted={"researcher": "R", "strategy": "S", "writer": "W",
-                                                "fact_checker": "F", "editor": "E"})
+    pipeline, runner = _make_pipeline(
+        store,
+        planner_llm,
+        scripted={"researcher": "R", "strategy": "S", "writer": "W", "fact_checker": "F", "editor": "E"},
+    )
 
     response = await pipeline.run(_request())
 
     # Dynamic is the research-oriented track; the fallback default plan now leads
     # with researcher and inserts fact_checker before the editor.
     assert [s.agent_id for s in response.plan] == [
-        "researcher", "strategy", "writer", "fact_checker", "editor",
+        "researcher",
+        "strategy",
+        "writer",
+        "fact_checker",
+        "editor",
     ]
     assert all(s.status == "completed" for s in response.plan)
 
@@ -170,22 +189,32 @@ async def test_pipeline_hard_limits_research_sources_in_prompts_and_runner(store
     await pipeline.run(_request(use_web_search=False, use_history_search=True))
 
     planner_prompt = planner_llm.calls[0]["user_prompt"]
-    assert "Available tools to researcher/fact_checker: search_history, view_content, list_recent_contents" in planner_prompt
-    assert "Available tools to researcher/fact_checker: search_history, view_content, list_recent_contents, web_search" not in planner_prompt
+    assert (
+        "Available tools to researcher/fact_checker: search_history, view_content, list_recent_contents"
+        in planner_prompt
+    )
+    assert (
+        "Available tools to researcher/fact_checker: search_history, view_content, list_recent_contents, web_search"
+        not in planner_prompt
+    )
 
     research_calls = [call for call in runner.calls if call[0] in {"researcher", "fact_checker"}]
     assert research_calls
     assert all(call[2] == ("search_history", "view_content", "list_recent_contents") for call in research_calls)
-    assert any("Do not call web_search in this run; public web search is disabled." in call[1] for call in research_calls)
+    assert any(
+        "Do not call web_search in this run; public web search is disabled." in call[1] for call in research_calls
+    )
 
 
 def test_plan_coercion_remaps_inputs_after_dropping_steps():
-    plan = DynamicPipeline._coerce_plan([
-        {"index": 1, "agent_id": "strategy", "description": "Plan", "inputs_from": []},
-        {"index": 2, "agent_id": "not_real", "description": "Drop me", "inputs_from": [1]},
-        {"index": 3, "agent_id": "writer", "description": "Draft", "inputs_from": [1, 2]},
-        {"index": 5, "agent_id": "editor", "description": "Polish", "inputs_from": [3, 99]},
-    ])
+    plan = DynamicPipeline._coerce_plan(
+        [
+            {"index": 1, "agent_id": "strategy", "description": "Plan", "inputs_from": []},
+            {"index": 2, "agent_id": "not_real", "description": "Drop me", "inputs_from": [1]},
+            {"index": 3, "agent_id": "writer", "description": "Draft", "inputs_from": [1, 2]},
+            {"index": 5, "agent_id": "editor", "description": "Polish", "inputs_from": [3, 99]},
+        ]
+    )
 
     assert [step.index for step in plan] == [1, 2, 3]
     assert [step.agent_id for step in plan] == ["strategy", "writer", "editor"]
@@ -194,14 +223,15 @@ def test_plan_coercion_remaps_inputs_after_dropping_steps():
 
 @pytest.mark.asyncio
 async def test_pipeline_emits_events_in_order(store, planner_llm):
-    plan_json = json.dumps([
-        {"index": 1, "agent_id": "strategy", "description": "Plan", "instruction": "go", "inputs_from": []},
-        {"index": 2, "agent_id": "writer", "description": "Draft", "instruction": "go", "inputs_from": [1]},
-    ])
+    plan_json = json.dumps(
+        [
+            {"index": 1, "agent_id": "strategy", "description": "Plan", "instruction": "go", "inputs_from": []},
+            {"index": 2, "agent_id": "writer", "description": "Draft", "instruction": "go", "inputs_from": [1]},
+        ]
+    )
     planner_llm.queue(plan_json, "null")
 
-    pipeline, _ = _make_pipeline(store, planner_llm,
-                                 scripted={"strategy": "S", "writer": "W"})
+    pipeline, _ = _make_pipeline(store, planner_llm, scripted={"strategy": "S", "writer": "W"})
     response = await pipeline.run(_request())
 
     events = store.list_run_events(response.run_id)
@@ -218,23 +248,28 @@ async def test_pipeline_emits_events_in_order(store, planner_llm):
 @pytest.mark.asyncio
 async def test_pipeline_revises_after_low_review_score(store, planner_llm):
     # Initial plan has a reviewer at the end so revision is triggered.
-    initial_plan = json.dumps([
-        {"index": 1, "agent_id": "strategy", "description": "Plan", "instruction": "go", "inputs_from": []},
-        {"index": 2, "agent_id": "writer", "description": "Draft", "instruction": "go", "inputs_from": [1]},
-        {"index": 3, "agent_id": "reviewer", "description": "Score", "instruction": "go", "inputs_from": [2]},
-    ])
-    revised_plan = json.dumps([
-        {"index": 1, "agent_id": "strategy", "description": "Plan", "instruction": "go", "inputs_from": []},
-        {"index": 2, "agent_id": "writer", "description": "Draft", "instruction": "go", "inputs_from": [1]},
-        {"index": 3, "agent_id": "reviewer", "description": "Score", "instruction": "go", "inputs_from": [2]},
-        {"index": 4, "agent_id": "editor", "description": "Fix", "instruction": "improve", "inputs_from": [2, 3]},
-    ])
+    initial_plan = json.dumps(
+        [
+            {"index": 1, "agent_id": "strategy", "description": "Plan", "instruction": "go", "inputs_from": []},
+            {"index": 2, "agent_id": "writer", "description": "Draft", "instruction": "go", "inputs_from": [1]},
+            {"index": 3, "agent_id": "reviewer", "description": "Score", "instruction": "go", "inputs_from": [2]},
+        ]
+    )
+    revised_plan = json.dumps(
+        [
+            {"index": 1, "agent_id": "strategy", "description": "Plan", "instruction": "go", "inputs_from": []},
+            {"index": 2, "agent_id": "writer", "description": "Draft", "instruction": "go", "inputs_from": [1]},
+            {"index": 3, "agent_id": "reviewer", "description": "Score", "instruction": "go", "inputs_from": [2]},
+            {"index": 4, "agent_id": "editor", "description": "Fix", "instruction": "improve", "inputs_from": [2, 3]},
+        ]
+    )
     planner_llm.queue(initial_plan, revised_plan, "null")
 
-    pipeline, runner = _make_pipeline(store, planner_llm,
-                                      scripted={"strategy": "S", "writer": "W",
-                                                "reviewer": "Score: 60\nNeeds polish",
-                                                "editor": "Polished"})
+    pipeline, runner = _make_pipeline(
+        store,
+        planner_llm,
+        scripted={"strategy": "S", "writer": "W", "reviewer": "Score: 60\nNeeds polish", "editor": "Polished"},
+    )
     response = await pipeline.run(_request())
 
     assert response.revision_count == 1
@@ -250,10 +285,12 @@ async def test_pipeline_revises_after_low_review_score(store, planner_llm):
 
 @pytest.mark.asyncio
 async def test_pipeline_persists_tokens_and_cost(store, planner_llm):
-    plan_json = json.dumps([
-        {"index": 1, "agent_id": "strategy", "description": "Plan", "instruction": "go", "inputs_from": []},
-        {"index": 2, "agent_id": "writer", "description": "Draft", "instruction": "go", "inputs_from": [1]},
-    ])
+    plan_json = json.dumps(
+        [
+            {"index": 1, "agent_id": "strategy", "description": "Plan", "instruction": "go", "inputs_from": []},
+            {"index": 2, "agent_id": "writer", "description": "Draft", "instruction": "go", "inputs_from": [1]},
+        ]
+    )
     planner_llm.queue(plan_json, "null")
     pipeline, _ = _make_pipeline(store, planner_llm, scripted={"strategy": "S", "writer": "W"})
 
@@ -280,9 +317,11 @@ async def test_pipeline_persists_tokens_and_cost(store, planner_llm):
 
 @pytest.mark.asyncio
 async def test_sse_stream_replays_persisted_events(store, planner_llm):
-    plan_json = json.dumps([
-        {"index": 1, "agent_id": "writer", "description": "Draft", "instruction": "go", "inputs_from": []},
-    ])
+    plan_json = json.dumps(
+        [
+            {"index": 1, "agent_id": "writer", "description": "Draft", "instruction": "go", "inputs_from": []},
+        ]
+    )
     planner_llm.queue(plan_json, "null")
     pipeline, _ = _make_pipeline(store, planner_llm, scripted={"writer": "W"})
     response = await pipeline.run(_request())
@@ -300,9 +339,11 @@ async def test_sse_stream_replays_persisted_events(store, planner_llm):
 
 
 def test_sse_stream_resumes_from_last_event_id(store, planner_llm):
-    plan_json = json.dumps([
-        {"index": 1, "agent_id": "writer", "description": "Draft", "instruction": "go", "inputs_from": []},
-    ])
+    plan_json = json.dumps(
+        [
+            {"index": 1, "agent_id": "writer", "description": "Draft", "instruction": "go", "inputs_from": []},
+        ]
+    )
     planner_llm.queue(plan_json, "null")
     pipeline, _ = _make_pipeline(store, planner_llm, scripted={"writer": "W"})
     response = asyncio.run(pipeline.run(_request()))
@@ -332,9 +373,11 @@ async def test_pipeline_reports_failed_when_failure_wins_final_save_race(
     planner_llm,
     monkeypatch,
 ):
-    plan_json = json.dumps([
-        {"index": 1, "agent_id": "writer", "description": "Draft", "instruction": "go", "inputs_from": []},
-    ])
+    plan_json = json.dumps(
+        [
+            {"index": 1, "agent_id": "writer", "description": "Draft", "instruction": "go", "inputs_from": []},
+        ]
+    )
     planner_llm.queue(plan_json, "null")
     pipeline, _ = _make_pipeline(store, planner_llm, scripted={"writer": "final text"})
 
@@ -365,14 +408,17 @@ async def test_pipeline_observes_cancellation_at_step_boundary(store, planner_ll
     """DELETE /api/agent/runs/{id} flips status to 'cancelled'; the running
     pipeline must notice that at the next step boundary and stop scheduling
     further steps. Already-completed steps are kept."""
-    plan_json = json.dumps([
-        {"index": 1, "agent_id": "strategy", "description": "Plan", "instruction": "go", "inputs_from": []},
-        {"index": 2, "agent_id": "writer", "description": "Draft", "instruction": "go", "inputs_from": [1]},
-        {"index": 3, "agent_id": "editor", "description": "Polish", "instruction": "go", "inputs_from": [2]},
-    ])
+    plan_json = json.dumps(
+        [
+            {"index": 1, "agent_id": "strategy", "description": "Plan", "instruction": "go", "inputs_from": []},
+            {"index": 2, "agent_id": "writer", "description": "Draft", "instruction": "go", "inputs_from": [1]},
+            {"index": 3, "agent_id": "editor", "description": "Polish", "instruction": "go", "inputs_from": [2]},
+        ]
+    )
     planner_llm.queue(plan_json, "null")
 
     import uuid
+
     run_id = f"run_{uuid.uuid4().hex[:12]}"
 
     runner = FakeRunner(store=store, scripted={"strategy": "S", "writer": "W", "editor": "E"})

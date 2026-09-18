@@ -1,13 +1,13 @@
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
+from src.llm.litellm_client import _format_provider_error
 from src.utils import config
 from src.utils.config import Config
-from src.llm.litellm_client import _format_provider_error
 
 
 @pytest.fixture(autouse=True)
@@ -48,8 +48,11 @@ def test_resource_ticket_seconds_uses_canonical_setting():
     env = dict(os.environ, PYTHON_DOTENV_DISABLED="1", AUTH_RESOURCE_TICKET_SECONDS="73")
     result = subprocess.run(
         [sys.executable, "-c", "from src.utils import config; print(config.AUTH_RESOURCE_TICKET_SECONDS)"],
-        cwd=Path(__file__).resolve().parents[1], env=env,
-        capture_output=True, text=True, check=True,
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
     )
     assert result.stdout.strip() == "73"
 
@@ -64,9 +67,15 @@ def test_env_templates_require_signing_key_without_environment_accounts(filename
 def test_unset_runtime_profile_defaults_to_fail_closed_production():
     env = dict(os.environ)
     for name in (
-        "APP_ENV", "SCHEMA_MANAGEMENT", "AUTH_ENABLED", "AUTH_USERNAME", "AUTH_PASSWORD",
+        "APP_ENV",
+        "SCHEMA_MANAGEMENT",
+        "AUTH_ENABLED",
+        "AUTH_USERNAME",
+        "AUTH_PASSWORD",
         "AUTH_STREAM_TICKET_SECONDS",
-        "AUTH_SECRET_KEY", "DATABASE_URL", "CORS_ORIGINS",
+        "AUTH_SECRET_KEY",
+        "DATABASE_URL",
+        "CORS_ORIGINS",
     ):
         env.pop(name, None)
     env["PYTHON_DOTENV_DISABLED"] = "1"
@@ -156,16 +165,14 @@ def test_compose_default_path_validates_production_before_migrating_or_serving()
     assert not any(name in compose for name in ("AUTH_ENABLED", "AUTH_USERNAME", "AUTH_PASSWORD"))
     assert "ENFORCE_HTTPS: ${ENFORCE_HTTPS:-true}" in compose
     assert "config.validate_runtime()' && alembic upgrade head" in compose
-    assert '127.0.0.1:${FRONTEND_PORT:-8088}:80' in compose
+    assert "127.0.0.1:${FRONTEND_PORT:-8088}:80" in compose
     dockerfile = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text(encoding="utf-8")
     assert "APP_ENV=production" in dockerfile
     assert "SCHEMA_MANAGEMENT=validate" in dockerfile
 
 
 def test_litellm_model_names_are_provider_prefixed_when_required():
-    assert config.get_litellm_model("siliconflow", "Qwen/Qwen2.5-7B-Instruct") == (
-        "openai/Qwen/Qwen2.5-7B-Instruct"
-    )
+    assert config.get_litellm_model("siliconflow", "Qwen/Qwen2.5-7B-Instruct") == ("openai/Qwen/Qwen2.5-7B-Instruct")
     assert config.get_litellm_model("deepseek", "deepseek-chat") == "deepseek/deepseek-chat"
     assert config.get_litellm_model("moonshot", "moonshot-v1-8k") == "moonshot/moonshot-v1-8k"
     assert config.get_litellm_model("newapi", "Kimi-K2.6") == "openai/Kimi-K2.6"

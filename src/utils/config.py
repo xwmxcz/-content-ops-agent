@@ -67,9 +67,7 @@ class Config:
     # Ask the provider for JSON directly where it is supported. Kept switchable
     # because a gateway can advertise JSON mode and still reject the parameter,
     # which would otherwise fail every planner call behind that gateway.
-    PLANNER_STRUCTURED_OUTPUT_ENABLED = (
-        os.getenv("PLANNER_STRUCTURED_OUTPUT_ENABLED", "true").lower() == "true"
-    )
+    PLANNER_STRUCTURED_OUTPUT_ENABLED = os.getenv("PLANNER_STRUCTURED_OUTPUT_ENABLED", "true").lower() == "true"
 
     # PostgreSQL accounts own credentials; this key signs every user session.
     AUTH_SECRET_KEY = os.getenv("AUTH_SECRET_KEY", "")
@@ -85,6 +83,12 @@ class Config:
     DB_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "10"))
     DB_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "20"))
     DB_POOL_TIMEOUT_SECONDS = int(os.getenv("DB_POOL_TIMEOUT_SECONDS", "30"))
+    # Driver-level TCP connect timeout. pool_timeout only bounds waiting for a
+    # pooled connection; it does not bound the initial handshake, so an
+    # unreachable host (wrong port, container not started) lets the kernel
+    # retry SYN indefinitely and the process hangs with no output instead of
+    # reporting the misconfiguration.
+    DB_CONNECT_TIMEOUT_SECONDS = int(os.getenv("DB_CONNECT_TIMEOUT_SECONDS", "10"))
 
     # Background job settings
     JOB_QUEUE_MODE = os.getenv("JOB_QUEUE_MODE", "background").lower()  # background or rq
@@ -92,7 +96,7 @@ class Config:
     JOB_TIMEOUT_SECONDS = int(os.getenv("JOB_TIMEOUT_SECONDS", "300"))
     REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     MAX_PROVIDER_INFLIGHT_JOBS = int(os.getenv("MAX_PROVIDER_INFLIGHT_JOBS", "8"))
-    
+
     # Job retry settings
     JOB_MAX_RETRIES = int(os.getenv("JOB_MAX_RETRIES", "5"))
     JOB_RETRY_INITIAL_DELAY_SECONDS = int(os.getenv("JOB_RETRY_INITIAL_DELAY_SECONDS", "30"))
@@ -106,6 +110,13 @@ class Config:
     JOB_HEARTBEAT_INTERVAL_SECONDS = int(os.getenv("JOB_HEARTBEAT_INTERVAL_SECONDS", "30"))
     JOB_REAPER_INTERVAL_SECONDS = int(os.getenv("JOB_REAPER_INTERVAL_SECONDS", "60"))
     JOB_REAPER_BATCH_SIZE = int(os.getenv("JOB_REAPER_BATCH_SIZE", "50"))
+
+    # Per-user throttle on the endpoints that spend an operator's LLM budget.
+    # Auth endpoints were already rate-limited, but nothing bounded an
+    # *authenticated* user looping /api/agent/chat, which is the path that can
+    # drain a provider account. 0 disables the check, which is the local and
+    # test default so the suite never depends on wall-clock windows.
+    LLM_RATE_LIMIT_PER_MINUTE = int(os.getenv("LLM_RATE_LIMIT_PER_MINUTE", "0"))
 
     # SSE run streaming (P1-06). Clients treat silence as a stale connection, so
     # the server must emit a browser-visible ping inside the client's staleness
@@ -154,30 +165,19 @@ class Config:
     API_HOST = os.getenv("API_HOST", "0.0.0.0")
     API_PORT = int(os.getenv("API_PORT", "8000"))
     API_RELOAD = os.getenv("API_RELOAD", "False").lower() == "true"
-    ENFORCE_HTTPS = os.getenv(
-        "ENFORCE_HTTPS", "true" if APP_ENV == "production" else "false"
-    ).lower() == "true"
+    ENFORCE_HTTPS = os.getenv("ENFORCE_HTTPS", "true" if APP_ENV == "production" else "false").lower() == "true"
     CORS_ORIGINS = [
-        origin.strip()
-        for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
-        if origin.strip()
+        origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",") if origin.strip()
     ]
     # X-Forwarded-Proto is accepted only from these explicitly configured
     # proxy source networks. Empty by default: direct entrypoints cannot trust a
     # client-supplied forwarding header. Compose sets its private bridge range.
-    TRUSTED_PROXY_CIDRS = [
-        value.strip()
-        for value in os.getenv("TRUSTED_PROXY_CIDRS", "").split(",")
-        if value.strip()
-    ]
+    TRUSTED_PROXY_CIDRS = [value.strip() for value in os.getenv("TRUSTED_PROXY_CIDRS", "").split(",") if value.strip()]
 
     @classmethod
     def validate_runtime(cls) -> bool:
         """Validate process-wide deployment settings before serving work."""
-        removed = [
-            name for name in ("AUTH_ENABLED", "AUTH_USERNAME", "AUTH_PASSWORD")
-            if name in os.environ
-        ]
+        removed = [name for name in ("AUTH_ENABLED", "AUTH_USERNAME", "AUTH_PASSWORD") if name in os.environ]
         if removed:
             raise ValueError(
                 "Authentication configuration migration required: remove "
@@ -229,9 +229,7 @@ class Config:
         redis_password = _url_password(cls.REDIS_URL) if cls.JOB_QUEUE_MODE == "rq" else None
         if _url_uses_weak_secret(cls.DATABASE_URL, {"content_ops", "postgres", "password"}):
             errors.append("production DATABASE_URL must include a high-entropy password of at least 16 characters")
-        if cls.JOB_QUEUE_MODE == "rq" and _url_uses_weak_secret(
-            cls.REDIS_URL, {"content_ops", "redis", "password"}
-        ):
+        if cls.JOB_QUEUE_MODE == "rq" and _url_uses_weak_secret(cls.REDIS_URL, {"content_ops", "redis", "password"}):
             errors.append("production REDIS_URL must include a high-entropy password of at least 16 characters")
         secrets = [cls.AUTH_SECRET_KEY, database_password, redis_password]
         normalized = [secret for secret in secrets if secret]
@@ -267,21 +265,27 @@ class Config:
 
     @classmethod
     def get_api_key(cls, provider: str | None = None) -> str:
-        """获取指定提供商的 API Key"""
+        """Return the configured API key for ``provider`` (defaults to LLM_PROVIDER).
+
+        Every provider env var is optional at import time, so a missing key is
+        reported here as an explicit configuration error rather than being
+        returned as None and failing later inside the HTTP client.
+        """
         provider = (provider or cls.LLM_PROVIDER).lower()
 
-        if provider == "claude":
-            return cls.ANTHROPIC_API_KEY
-        elif provider == "siliconflow":
-            return cls.SILICONFLOW_API_KEY
-        elif provider == "deepseek":
-            return cls.DEEPSEEK_API_KEY
-        elif provider == "moonshot":
-            return cls.MOONSHOT_API_KEY
-        elif provider == "newapi":
-            return cls.NEWAPI_API_KEY
-        else:
+        keys = {
+            "claude": cls.ANTHROPIC_API_KEY,
+            "siliconflow": cls.SILICONFLOW_API_KEY,
+            "deepseek": cls.DEEPSEEK_API_KEY,
+            "moonshot": cls.MOONSHOT_API_KEY,
+            "newapi": cls.NEWAPI_API_KEY,
+        }
+        if provider not in keys:
             raise ValueError(f"Unknown provider: {provider}")
+        key = keys[provider]
+        if not key:
+            raise ValueError(f"{provider.upper()}_API_KEY is required for the {provider} provider")
+        return key
 
     @classmethod
     def get_model(cls, provider: str | None = None) -> str:
@@ -423,9 +427,7 @@ def _url_password(value: str) -> str | None:
 
 def _url_uses_weak_secret(value: str, examples: set[str]) -> bool:
     password = _url_password(value)
-    return _is_unsafe_secret(password, minimum=16, minimum_unique=10) or bool(
-        password and password.lower() in examples
-    )
+    return _is_unsafe_secret(password, minimum=16, minimum_unique=10) or bool(password and password.lower() in examples)
 
 
 config = Config()

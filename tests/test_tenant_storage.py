@@ -1,4 +1,5 @@
 """Regression checks for the shared ORM workspace boundary and linked writes."""
+
 from datetime import date, datetime, timedelta
 
 import pytest
@@ -7,9 +8,21 @@ from sqlalchemy.orm import aliased
 
 from src.models import ContentType, GeneratedContent
 from src.storage.content_store import (
-    AgentMessage, AgentRun, AgentRunEvent, AgentThread, CalendarEvent, Content,
-    ContentMetrics, ContentStore, IdempotencyRecord, Job, MediaAsset,
-    PlatformPublication, ProposedAction, RunStep, User,
+    AgentMessage,
+    AgentRun,
+    AgentRunEvent,
+    AgentThread,
+    CalendarEvent,
+    Content,
+    ContentMetrics,
+    ContentStore,
+    IdempotencyRecord,
+    Job,
+    MediaAsset,
+    PlatformPublication,
+    ProposedAction,
+    RunStep,
+    User,
 )
 from src.storage.tenancy import TenantAccessError
 
@@ -18,10 +31,12 @@ from src.storage.tenancy import TenantAccessError
 def workspaces(store):
     system = ContentStore(database_url=store.database_url, initialize_schema=False)
     with system._get_session() as session:
-        session.add_all([
-            User(id="a" * 32, username="storage_owner_a", password_hash="!"),
-            User(id="b" * 32, username="storage_owner_b", password_hash="!"),
-        ])
+        session.add_all(
+            [
+                User(id="a" * 32, username="storage_owner_a", password_hash="!"),
+                User(id="b" * 32, username="storage_owner_b", password_hash="!"),
+            ]
+        )
         session.commit()
     try:
         yield system, system.for_user("a" * 32), system.for_user("b" * 32)
@@ -30,9 +45,13 @@ def workspaces(store):
 
 
 def _content(store, title="Private content"):
-    return store.save_content(GeneratedContent(
-        title=title, content="private body", content_type=ContentType.BLOG,
-    ))
+    return store.save_content(
+        GeneratedContent(
+            title=title,
+            content="private body",
+            content_type=ContentType.BLOG,
+        )
+    )
 
 
 def test_client_named_thread_can_only_be_created_or_updated_by_its_owner(workspaces):
@@ -56,15 +75,29 @@ def _seed_workspace(store, suffix):
     store.create_job(f"job_{suffix}", "content_generation", {"private": suffix})
     store.claim_idempotency_key(scope="create", key="same-key", args={"private": suffix})
     with store._get_session() as session:
-        session.add_all([
-            ContentMetrics(content_id=content_id, views=100),
-            MediaAsset(content_id=content_id, media_type="image", source_type="upload",
-                       file_name="private.png", file_path=f"private/{suffix}.png"),
-            PlatformPublication(content_id=content_id, platform="blog", publish_type="draft", body="private"),
-            ProposedAction(id=f"action_{suffix}", thread_id=f"thread_{suffix}",
-                           proposing_message_id=message_id, tool_name="create_content", args_json="{}",
-                           args_hash="f" * 64, impact_summary="private", expires_at=datetime.now() + timedelta(minutes=1)),
-        ])
+        session.add_all(
+            [
+                ContentMetrics(content_id=content_id, views=100),
+                MediaAsset(
+                    content_id=content_id,
+                    media_type="image",
+                    source_type="upload",
+                    file_name="private.png",
+                    file_path=f"private/{suffix}.png",
+                ),
+                PlatformPublication(content_id=content_id, platform="blog", publish_type="draft", body="private"),
+                ProposedAction(
+                    id=f"action_{suffix}",
+                    thread_id=f"thread_{suffix}",
+                    proposing_message_id=message_id,
+                    tool_name="create_content",
+                    args_json="{}",
+                    args_hash="f" * 64,
+                    impact_summary="private",
+                    expires_at=datetime.now() + timedelta(minutes=1),
+                ),
+            ]
+        )
         session.commit()
     return content_id, message_id
 
@@ -73,9 +106,21 @@ def test_all_business_tables_and_scalar_aggregates_are_scoped(workspaces):
     system, first, second = workspaces
     first_id, _ = _seed_workspace(first, "first")
     second_id, _ = _seed_workspace(second, "second")
-    models = (Content, CalendarEvent, ContentMetrics, MediaAsset, PlatformPublication,
-              AgentThread, AgentMessage, Job, RunStep, AgentRun, AgentRunEvent,
-              ProposedAction, IdempotencyRecord)
+    models = (
+        Content,
+        CalendarEvent,
+        ContentMetrics,
+        MediaAsset,
+        PlatformPublication,
+        AgentThread,
+        AgentMessage,
+        Job,
+        RunStep,
+        AgentRun,
+        AgentRunEvent,
+        ProposedAction,
+        IdempotencyRecord,
+    )
     with first._get_session() as session, system._get_session() as maintenance:
         for model in models:
             assert session.query(model).count() == 1
@@ -130,21 +175,35 @@ def test_bulk_updates_deletes_and_lease_claims_cannot_cross_users(workspaces):
     assert second.get_content(second_id) is not None
 
 
-@pytest.mark.parametrize("factory", [
-    lambda cid, mid: Content(content="x", content_type="blog", style="casual", parent_id=cid),
-    lambda cid, mid: CalendarEvent(content_id=cid, platform="blog", scheduled_date=date.today()),
-    lambda cid, mid: ContentMetrics(content_id=cid),
-    lambda cid, mid: MediaAsset(content_id=cid, media_type="image", source_type="upload", file_name="x", file_path="x"),
-    lambda cid, mid: PlatformPublication(content_id=cid, platform="blog", publish_type="draft", body="x"),
-    lambda cid, mid: AgentMessage(thread_id="thread_second", role="user", content="x"),
-    lambda cid, mid: AgentRun(id="new_run", topic="x", content_type="blog", style="casual", saved_content_id=cid),
-    lambda cid, mid: AgentRun(id="new_run", topic="x", content_type="blog", style="casual", thread_id="thread_second"),
-    lambda cid, mid: RunStep(run_id="run_second", step_index=2, step_name="writer"),
-    lambda cid, mid: AgentRunEvent(run_id="run_second", seq=2, event_type="progress", payload="{}"),
-    lambda cid, mid: ProposedAction(id="new_action", thread_id="thread_first", proposing_message_id=mid,
-                                   tool_name="create_content", args_json="{}", args_hash="f" * 64,
-                                   impact_summary="x", expires_at=datetime.now()),
-])
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda cid, mid: Content(content="x", content_type="blog", style="casual", parent_id=cid),
+        lambda cid, mid: CalendarEvent(content_id=cid, platform="blog", scheduled_date=date.today()),
+        lambda cid, mid: ContentMetrics(content_id=cid),
+        lambda cid, mid: MediaAsset(
+            content_id=cid, media_type="image", source_type="upload", file_name="x", file_path="x"
+        ),
+        lambda cid, mid: PlatformPublication(content_id=cid, platform="blog", publish_type="draft", body="x"),
+        lambda cid, mid: AgentMessage(thread_id="thread_second", role="user", content="x"),
+        lambda cid, mid: AgentRun(id="new_run", topic="x", content_type="blog", style="casual", saved_content_id=cid),
+        lambda cid, mid: AgentRun(
+            id="new_run", topic="x", content_type="blog", style="casual", thread_id="thread_second"
+        ),
+        lambda cid, mid: RunStep(run_id="run_second", step_index=2, step_name="writer"),
+        lambda cid, mid: AgentRunEvent(run_id="run_second", seq=2, event_type="progress", payload="{}"),
+        lambda cid, mid: ProposedAction(
+            id="new_action",
+            thread_id="thread_first",
+            proposing_message_id=mid,
+            tool_name="create_content",
+            args_json="{}",
+            args_hash="f" * 64,
+            impact_summary="x",
+            expires_at=datetime.now(),
+        ),
+    ],
+)
 def test_cross_user_foreign_and_logical_references_are_rejected(workspaces, factory):
     _, first, second = workspaces
     first.upsert_agent_thread("thread_first")
@@ -230,6 +289,7 @@ def test_idempotency_and_background_discovery_carry_the_real_owner(workspaces):
 
 def test_workspace_migration_preserves_legacy_data_without_public_claim(pg_engine):
     from alembic import command
+
     from src.storage.content_store import Base
     from src.storage.schema import alembic_config, assert_schema_current
     from src.storage.tenancy import LEGACY_USER_ID
@@ -241,10 +301,12 @@ def test_workspace_migration_preserves_legacy_data_without_public_claim(pg_engin
     try:
         command.upgrade(cfg, "0008_job_lease_and_checkpoints")
         with pg_engine.begin() as connection:
-            legacy_id = connection.execute(text(
-                "INSERT INTO contents (title, content, content_type, style) "
-                "VALUES ('legacy', 'private legacy data', 'blog', 'casual') RETURNING id"
-            )).scalar_one()
+            legacy_id = connection.execute(
+                text(
+                    "INSERT INTO contents (title, content, content_type, style) "
+                    "VALUES ('legacy', 'private legacy data', 'blog', 'casual') RETURNING id"
+                )
+            ).scalar_one()
         command.upgrade(cfg, "head")
         assert_schema_current(pg_engine)
         command.check(cfg)

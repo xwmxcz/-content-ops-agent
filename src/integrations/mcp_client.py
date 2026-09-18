@@ -184,9 +184,7 @@ class XiaohongshuMcpClient:
                 else:
                     response = await client.post(endpoint, json=payload)
         except httpx.TimeoutException as exc:
-            raise McpClientError(
-                f"Xiaohongshu HTTP API timed out after {int(self.timeout_seconds)}s"
-            ) from exc
+            raise McpClientError(f"Xiaohongshu HTTP API timed out after {int(self.timeout_seconds)}s") from exc
         except httpx.HTTPError as exc:
             raise McpClientError(f"Xiaohongshu HTTP API request failed: {exc}") from exc
 

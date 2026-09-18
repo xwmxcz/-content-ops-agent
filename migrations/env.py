@@ -8,7 +8,6 @@ from sqlalchemy import engine_from_config, pool
 from src.storage.content_store import Base
 from src.utils import config as app_config
 
-
 config = context.config
 if config.config_file_name is not None:
     # disable_existing_loggers defaults to True, which would set `disabled = True`

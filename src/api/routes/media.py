@@ -5,7 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Path as ApiPath, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import Path as ApiPath
 from fastapi.responses import FileResponse
 
 from src.api.dependencies import get_publish_service, get_store
@@ -13,7 +14,6 @@ from src.api.schemas.media import MediaAssetResponse, MediaUploadResponse
 from src.api.services.publish_service import PublicationValidationError, PublishService
 from src.storage import ContentStore
 from src.utils import config
-
 
 router = APIRouter()
 

@@ -4,7 +4,12 @@ import time
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
-from src.api.dependencies import get_chat_agent_service, get_litellm_client, get_store
+from src.api.dependencies import (
+    enforce_llm_budget,
+    get_chat_agent_service,
+    get_litellm_client,
+    get_store,
+)
 from src.api.schemas.agent import (
     AgentMessageResponse,
     AgentRunRequest,
@@ -19,8 +24,8 @@ from src.api.schemas.agent import (
     ProposedActionCreate,
     ProposedActionResponse,
 )
-from src.api.services.chat_agent import ChatAgentExecutionError, ChatAgentService
 from src.api.services.agent_pipeline import PipelineExecutionError, run_agent_pipeline
+from src.api.services.chat_agent import ChatAgentExecutionError, ChatAgentService
 from src.api.services.dynamic_pipeline import DynamicPipeline
 from src.api.services.tool_policy import SIDE_EFFECT_TOOLS
 from src.jobs.queue import JobQueueError, enqueue_pipeline_run
@@ -28,7 +33,6 @@ from src.llm.litellm_client import LiteLLMClient
 from src.storage import ContentStore
 from src.storage.tenancy import TenantAccessError
 from src.utils import config
-
 
 router = APIRouter()
 
@@ -38,6 +42,7 @@ async def run(
     request: AgentRunRequest,
     llm: LiteLLMClient = Depends(get_litellm_client),
     store: ContentStore = Depends(get_store),
+    _budget: None = Depends(enforce_llm_budget),
 ) -> AgentRunResponse:
     try:
         return await run_agent_pipeline(request, llm, store)
@@ -59,6 +64,7 @@ async def create_pipeline_run(
     background_tasks: BackgroundTasks,
     llm: LiteLLMClient = Depends(get_litellm_client),
     store: ContentStore = Depends(get_store),
+    _budget: None = Depends(enforce_llm_budget),
 ) -> PipelineRunHandle:
     """Kick off a dynamic pipeline run; client subscribes to /runs/{id}/stream for events.
 
@@ -79,6 +85,7 @@ async def create_pipeline_run(
     model = request.model or config.get_model(provider)
 
     import uuid
+
     run_id = f"run_{uuid.uuid4().hex[:12]}"
     thread_id = request.thread_id or run_id
 
@@ -219,6 +226,7 @@ def cancel_pipeline_run(run_id: str, store: ContentStore = Depends(get_store)) -
 async def chat(
     request: ChatRequest,
     agent_service: ChatAgentService = Depends(get_chat_agent_service),
+    _budget: None = Depends(enforce_llm_budget),
 ) -> ChatResponse:
     try:
         return await agent_service.chat(request)
@@ -259,8 +267,7 @@ def propose_action(
         thread_id=request.thread_id,
         tool_name=request.tool_name,
         args=request.args,
-        impact_summary=request.impact_summary
-        or f"Execute write tool {request.tool_name}",
+        impact_summary=request.impact_summary or f"Execute write tool {request.tool_name}",
         ttl_seconds=config.ACTION_CAPABILITY_TTL_SECONDS,
         requester=store.user_id,
     )

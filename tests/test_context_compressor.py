@@ -1,4 +1,5 @@
 """Tests for the in-session ContextCompressor (Hermes layer 4)."""
+
 from __future__ import annotations
 
 import pytest
@@ -6,9 +7,9 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 
 from src.agent.context_compressor import (
     CHECKPOINT_MARKER,
-    ContextCompressor,
     SUMMARY_ITERATIVE_SYSTEM_PROMPT,
     SUMMARY_SYSTEM_PROMPT,
+    ContextCompressor,
 )
 
 
@@ -80,6 +81,7 @@ class TestContextCompressor:
         class BoomLLM:
             async def generate_from_prompts(self, **kw):
                 raise RuntimeError("nope")
+
         c = ContextCompressor(BoomLLM(), trigger_messages=4, keep_head=2, keep_tail=2)
         msgs = _build_chat(5)
         r = await c.maybe_compress(msgs, provider="claude", model="m")

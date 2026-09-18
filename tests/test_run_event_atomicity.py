@@ -1,5 +1,5 @@
-from concurrent.futures import ThreadPoolExecutor
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from sqlalchemy import inspect
 
@@ -27,10 +27,12 @@ def test_concurrent_run_events_receive_unique_contiguous_sequences(store):
     _create_run(store, run_id)
 
     with ThreadPoolExecutor(max_workers=12) as pool:
-        sequences = list(pool.map(
-            lambda index: store.append_run_event(run_id, "token", {"index": index}),
-            range(120),
-        ))
+        sequences = list(
+            pool.map(
+                lambda index: store.append_run_event(run_id, "token", {"index": index}),
+                range(120),
+            )
+        )
 
     assert sorted(sequences) == list(range(1, 121))
     persisted = store.list_run_events(run_id, limit=200)

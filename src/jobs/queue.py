@@ -1,4 +1,5 @@
 """Queue adapter for background and RQ execution modes."""
+
 from __future__ import annotations
 
 import uuid
@@ -128,7 +129,7 @@ def enqueue_pipeline_run(
 
 def requeue_job_with_delay(job_id: str, delay_seconds: int, database_url: str) -> None:
     """Requeue a failed job for retry after the specified delay.
-    
+
     In background mode, this schedules a delayed task. In RQ mode, it uses RQ's
     native delayed execution support.
     """
@@ -141,6 +142,7 @@ def requeue_job_with_delay(job_id: str, delay_seconds: int, database_url: str) -
     if config.JOB_QUEUE_MODE == "rq":
         try:
             from datetime import timedelta
+
             from redis import Redis
             from rq import Queue
         except ImportError as exc:

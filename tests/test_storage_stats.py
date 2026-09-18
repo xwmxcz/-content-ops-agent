@@ -33,23 +33,38 @@ def test_aggregate_performance_returns_grouped_stats(store):
     # 3 xhs (2 with metrics, one a clear winner) + 1 blog (with metrics)
     ids = []
     for title in ("xhs A", "xhs B", "xhs C"):
-        ids.append(store.save_content(GeneratedContent(
-            title=title, content="body", content_type=ContentType.XIAOHONGSHU,
-        ), style="professional"))
-    ids.append(store.save_content(GeneratedContent(
-        title="blog A", content="body", content_type=ContentType.BLOG,
-    ), style="storytelling"))
+        ids.append(
+            store.save_content(
+                GeneratedContent(
+                    title=title,
+                    content="body",
+                    content_type=ContentType.XIAOHONGSHU,
+                ),
+                style="professional",
+            )
+        )
+    ids.append(
+        store.save_content(
+            GeneratedContent(
+                title="blog A",
+                content="body",
+                content_type=ContentType.BLOG,
+            ),
+            style="storytelling",
+        )
+    )
 
     session = store._get_session()
     try:
-        session.add_all([
-            ContentMetrics(content_id=ids[0], platform="xiaohongshu",
-                           views=1000, likes=100, comments=10, shares=5),
-            ContentMetrics(content_id=ids[1], platform="xiaohongshu",
-                           views=20000, likes=2000, comments=200, shares=200),  # winner
-            ContentMetrics(content_id=ids[3], platform="blog",
-                           views=5000, likes=300, comments=30, shares=15),
-        ])
+        session.add_all(
+            [
+                ContentMetrics(content_id=ids[0], platform="xiaohongshu", views=1000, likes=100, comments=10, shares=5),
+                ContentMetrics(
+                    content_id=ids[1], platform="xiaohongshu", views=20000, likes=2000, comments=200, shares=200
+                ),  # winner
+                ContentMetrics(content_id=ids[3], platform="blog", views=5000, likes=300, comments=30, shares=15),
+            ]
+        )
         session.commit()
     finally:
         session.close()
@@ -72,15 +87,23 @@ def test_aggregate_performance_returns_grouped_stats(store):
 def test_aggregate_performance_handles_empty_window(store):
     perf = store.aggregate_performance(days=7)
     assert perf == {
-        "window_days": 7, "total_contents": 0, "total_with_metrics": 0,
-        "by_type": [], "by_style": [], "top_performers": [],
+        "window_days": 7,
+        "total_contents": 0,
+        "total_with_metrics": 0,
+        "by_type": [],
+        "by_style": [],
+        "top_performers": [],
     }
 
 
 def test_get_calendar_conflicts_returns_overlapping_events(store):
-    cid = store.save_content(GeneratedContent(
-        title="A", content="b", content_type=ContentType.XIAOHONGSHU,
-    ))
+    cid = store.save_content(
+        GeneratedContent(
+            title="A",
+            content="b",
+            content_type=ContentType.XIAOHONGSHU,
+        )
+    )
     d1 = date.today()
     d2 = d1 + timedelta(days=2)
     d3 = d1 + timedelta(days=10)
@@ -96,20 +119,30 @@ def test_get_calendar_conflicts_returns_overlapping_events(store):
 
 
 def test_list_optimization_candidates_underperforming(store):
-    winner_id = store.save_content(GeneratedContent(
-        title="winner", content="b", content_type=ContentType.XIAOHONGSHU,
-    ))
-    weak_id = store.save_content(GeneratedContent(
-        title="weak", content="b", content_type=ContentType.XIAOHONGSHU,
-    ))
+    winner_id = store.save_content(
+        GeneratedContent(
+            title="winner",
+            content="b",
+            content_type=ContentType.XIAOHONGSHU,
+        )
+    )
+    weak_id = store.save_content(
+        GeneratedContent(
+            title="weak",
+            content="b",
+            content_type=ContentType.XIAOHONGSHU,
+        )
+    )
     session = store._get_session()
     try:
-        session.add_all([
-            ContentMetrics(content_id=winner_id, platform="xiaohongshu",
-                           views=10000, likes=1500, comments=200, shares=200),
-            ContentMetrics(content_id=weak_id, platform="xiaohongshu",
-                           views=10000, likes=50, comments=5, shares=2),
-        ])
+        session.add_all(
+            [
+                ContentMetrics(
+                    content_id=winner_id, platform="xiaohongshu", views=10000, likes=1500, comments=200, shares=200
+                ),
+                ContentMetrics(content_id=weak_id, platform="xiaohongshu", views=10000, likes=50, comments=5, shares=2),
+            ]
+        )
         session.commit()
     finally:
         session.close()
@@ -121,22 +154,31 @@ def test_list_optimization_candidates_underperforming(store):
 
 
 def test_list_optimization_candidates_old_drafts(store):
-    old_id = store.save_content(GeneratedContent(
-        title="old draft", content="b", content_type=ContentType.XIAOHONGSHU,
-    ))
+    old_id = store.save_content(
+        GeneratedContent(
+            title="old draft",
+            content="b",
+            content_type=ContentType.XIAOHONGSHU,
+        )
+    )
     # Backdate via direct ORM update.
     session = store._get_session()
     try:
         from src.storage.content_store import Content as ContentModel
+
         row = session.query(ContentModel).filter(ContentModel.id == old_id).first()
         row.created_at = datetime.now() - timedelta(days=20)
         session.commit()
     finally:
         session.close()
     # Fresh draft should NOT show up under old_drafts.
-    store.save_content(GeneratedContent(
-        title="fresh draft", content="b", content_type=ContentType.XIAOHONGSHU,
-    ))
+    store.save_content(
+        GeneratedContent(
+            title="fresh draft",
+            content="b",
+            content_type=ContentType.XIAOHONGSHU,
+        )
+    )
 
     candidates = store.list_optimization_candidates("old_drafts", limit=5)
     ids = [c["id"] for c in candidates]

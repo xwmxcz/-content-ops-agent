@@ -1,5 +1,6 @@
 """工具函数"""
-from .config import config, Config
+
 from . import metrics
+from .config import Config, config
 
 __all__ = ["config", "Config", "metrics"]

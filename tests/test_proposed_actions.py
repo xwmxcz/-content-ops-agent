@@ -3,9 +3,10 @@
 Every test asserts the real database side-effect count, not only the returned
 status: a denial that still writes a row is the failure these guard against.
 """
+
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
-import threading
 
 import pytest
 from sqlalchemy import inspect, text
@@ -13,7 +14,6 @@ from sqlalchemy import inspect, text
 from src.api.schemas.agent import ChatIntent
 from src.api.services.tool_policy import ToolPolicyDenied, authorize_tool_call
 from src.utils.canonical import args_hash
-
 
 MEMORY_ARGS = {"target": "user", "text": "durable capability"}
 
@@ -54,8 +54,7 @@ def _count_actions(store, status):
 
 def test_proposed_action_schema_has_capability_indexes(store):
     indexes = {
-        tuple(index.get("column_names") or [])
-        for index in inspect(store.engine).get_indexes("proposed_actions")
+        tuple(index.get("column_names") or []) for index in inspect(store.engine).get_indexes("proposed_actions")
     }
     assert {("thread_id", "created_at"), ("status", "expires_at")} <= indexes
 
@@ -157,9 +156,7 @@ def test_rescoped_tool_cannot_consume_another_tools_capability(store):
     action = _propose(store, thread_id)
     store.confirm_proposed_action(action["id"])
 
-    assert store.consume_proposed_action(
-        action["id"], tool_name="memory_remove", args=MEMORY_ARGS
-    ) is None
+    assert store.consume_proposed_action(action["id"], tool_name="memory_remove", args=MEMORY_ARGS) is None
     assert store.get_proposed_action(action["id"])["status"] == "confirmed"
     assert _count_actions(store, "consumed") == 0
 
@@ -215,9 +212,7 @@ def test_concurrent_double_consume_yields_exactly_one_side_effect(store):
 
     def consume():
         barrier.wait()
-        return store.consume_proposed_action(
-            action["id"], tool_name="memory_add", args=MEMORY_ARGS
-        )
+        return store.consume_proposed_action(action["id"], tool_name="memory_add", args=MEMORY_ARGS)
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         outcomes = [item.result() for item in [pool.submit(consume) for _ in range(4)]]
@@ -244,7 +239,7 @@ def test_policy_gate_denies_replay_against_the_real_store(store):
 
 def test_legacy_proposal_without_durable_row_cannot_write(store):
     """Pre-existing threads have no capability, so they must fail closed."""
-    thread_id = _thread(store, "thread_legacy")
+    _thread(store, "thread_legacy")
     intent = ChatIntent(
         name="action_confirm",
         confidence=0.99,
@@ -302,9 +297,7 @@ def test_thread_delete_clears_capabilities_in_every_state(store, status):
     if status in {"confirmed", "consumed"}:
         store.confirm_proposed_action(action["id"])
     if status == "consumed":
-        store.consume_proposed_action(
-            action["id"], tool_name="memory_add", args=MEMORY_ARGS
-        )
+        store.consume_proposed_action(action["id"], tool_name="memory_add", args=MEMORY_ARGS)
     assert store.get_proposed_action(action["id"])["status"] == status
 
     assert store.delete_agent_thread(thread_id) is True

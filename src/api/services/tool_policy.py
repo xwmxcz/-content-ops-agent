@@ -5,14 +5,15 @@ calls this module immediately before every tool invocation and refuses all
 side-effecting tools unless the server-recognized intent authorizes that exact
 operation.
 """
+
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 from src.api.schemas.agent import ChatIntent
 from src.utils.canonical import canonical_json
-
 
 ToolEffect = Literal["read_only", "side_effect"]
 ToolRisk = Literal["low", "medium", "high"]
@@ -51,9 +52,8 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
     "session_search": ToolPolicy("read_only", "low", "memory"),
 }
 
-SIDE_EFFECT_TOOLS = frozenset(
-    name for name, policy in TOOL_POLICIES.items() if policy.effect == "side_effect"
-)
+SIDE_EFFECT_TOOLS = frozenset(name for name, policy in TOOL_POLICIES.items() if policy.effect == "side_effect")
+
 
 class ToolPolicyDenied(PermissionError):
     """Raised when a model requests a tool call without server authorization."""
@@ -102,10 +102,7 @@ def authorize_tool_call(
         raise ToolPolicyDenied(f"Write tool `{name}` is outside the recognized intent")
 
     if name == "commit_publishing_schedule":
-        if (
-            intent._server_approved_tool_name != name
-            or not isinstance(intent._server_approved_args, dict)
-        ):
+        if intent._server_approved_tool_name != name or not isinstance(intent._server_approved_args, dict):
             raise ToolPolicyDenied("Schedule commit requires a persisted prior proposal")
         if not intent._server_confirmation_validated:
             raise ToolPolicyDenied("Schedule commit lacks server-validated confirmation")
@@ -118,10 +115,7 @@ def authorize_tool_call(
         raise ToolApprovalRequired(name, args)
     if not intent._server_confirmation_validated:
         raise ToolPolicyDenied(f"Write tool `{name}` lacks server-validated confirmation")
-    if (
-        intent._server_approved_tool_name != name
-        or not isinstance(intent._server_approved_args, dict)
-    ):
+    if intent._server_approved_tool_name != name or not isinstance(intent._server_approved_args, dict):
         raise ToolPolicyDenied(f"Write tool `{name}` lacks an exact persisted proposal")
     if _canonical(args) != _canonical(intent._server_approved_args):
         raise ToolPolicyDenied(f"Write tool `{name}` arguments differ from the confirmed proposal")
@@ -142,19 +136,14 @@ def _consume_or_deny(
     at most once. A caller that supplies no consumer gets no write.
     """
     if consume_capability is None:
-        raise ToolPolicyDenied(
-            f"Write tool `{name}` cannot execute without a capability consumer"
-        )
+        raise ToolPolicyDenied(f"Write tool `{name}` cannot execute without a capability consumer")
     action_id = intent._server_approved_action_id
     if not action_id:
         raise ToolPolicyDenied(
-            f"Write tool `{name}` has no durable confirmed capability; "
-            "the action must be proposed and confirmed again"
+            f"Write tool `{name}` has no durable confirmed capability; the action must be proposed and confirmed again"
         )
     if consume_capability(action_id, name, args) is None:
-        raise ToolPolicyDenied(
-            f"Write tool `{name}` capability was already used, expired, or cancelled"
-        )
+        raise ToolPolicyDenied(f"Write tool `{name}` capability was already used, expired, or cancelled")
 
 
 def validate_tool_policy_registry(tool_names: list[str]) -> None:

@@ -9,17 +9,18 @@ Tool-call pairs are protected: if a slice boundary would land between an AI
 message carrying `tool_calls` and its trailing `ToolMessage`(s), the boundary
 is pushed outward until the pair is intact.
 """
+
 from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
 from src.agent.context_engine import CompressionResult, ContextEngine
 from src.llm.litellm_client import LiteLLMClient
-
 
 logger = logging.getLogger(__name__)
 
@@ -117,10 +118,7 @@ CHECKPOINT_MARKER = "[Conversation checkpoint"
 
 def _has_prior_checkpoint(messages: list[BaseMessage]) -> bool:
     return any(
-        isinstance(m, AIMessage)
-        and isinstance(m.content, str)
-        and CHECKPOINT_MARKER in m.content
-        for m in messages
+        isinstance(m, AIMessage) and isinstance(m.content, str) and CHECKPOINT_MARKER in m.content for m in messages
     )
 
 
@@ -172,7 +170,7 @@ class ContextCompressor(ContextEngine):
                 temperature=0.2,
                 max_tokens=1500,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 -- aux LLM boundary; compression is optional
             logger.warning("Context compression skipped: aux LLM call failed (%s)", exc)
             return CompressionResult(messages=messages, compressed=False)
 
@@ -240,7 +238,9 @@ class ContextCompressor(ContextEngine):
                 if content:
                     lines.append(f"ASSISTANT: {content}")
                 for call in getattr(m, "tool_calls", None) or []:
-                    lines.append(f"ASSISTANT_TOOL_CALL: {call.get('name')} {json.dumps(call.get('args') or {}, ensure_ascii=False)}")
+                    lines.append(
+                        f"ASSISTANT_TOOL_CALL: {call.get('name')} {json.dumps(call.get('args') or {}, ensure_ascii=False)}"
+                    )
             elif isinstance(m, ToolMessage):
                 lines.append(f"TOOL_RESULT: {content}")
             else:

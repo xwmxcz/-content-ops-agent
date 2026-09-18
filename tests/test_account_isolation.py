@@ -1,4 +1,5 @@
 """Real-session HTTP and worker regression tests for independent workspaces."""
+
 from datetime import date
 
 import pytest
@@ -6,8 +7,12 @@ from fastapi import Depends
 from fastapi.testclient import TestClient
 
 from src.api.dependencies import (
-    _file_memory_for, get_chat_agent_service, get_file_memory, get_litellm_client,
-    get_store, get_system_store,
+    _file_memory_for,
+    get_chat_agent_service,
+    get_file_memory,
+    get_litellm_client,
+    get_store,
+    get_system_store,
 )
 from src.api.main import app
 from src.api.schemas.agent import ChatIntent
@@ -15,7 +20,6 @@ from src.api.services.chat_agent import ChatAgentService
 from src.llm.litellm_client import LiteLLMClient
 from src.models import ContentType, GeneratedContent
 from src.utils import config
-
 
 pytestmark = pytest.mark.real_auth
 
@@ -38,11 +42,11 @@ def accounts(store, tmp_path, monkeypatch):
 
     async def forbid_provider(*args, **kwargs):
         raise AssertionError("This test must not contact an LLM provider")
+
     monkeypatch.setattr(LiteLLMClient, "generate", forbid_provider)
 
     def chat_service(owned=Depends(get_store), memory=Depends(get_file_memory)):
-        return ChatAgentService(store=owned, llm=FakeLLM(), file_memory=memory,
-                                intent_recognizer=ClarificationOnly())
+        return ChatAgentService(store=owned, llm=FakeLLM(), file_memory=memory, intent_recognizer=ClarificationOnly())
 
     previous = dict(app.dependency_overrides)
     app.dependency_overrides[get_litellm_client] = FakeLLM
@@ -51,14 +55,20 @@ def accounts(store, tmp_path, monkeypatch):
     try:
         with TestClient(app) as first, TestClient(app) as second:
             for client, username in ((first, "owner_first"), (second, "owner_second")):
-                response = client.post("/api/auth/register", json={"username": username, "password": "Local-test-password-28!"})
+                response = client.post(
+                    "/api/auth/register", json={"username": username, "password": "Local-test-password-28!"}
+                )
                 assert response.status_code == 201, response.text
                 session = response.json()
                 client.headers["Authorization"] = f"Bearer {session['access_token']}"
                 sessions.append(session)
             system = get_system_store()
-            yield (first, second, system.for_user(sessions[0]["user"]["id"]),
-                   system.for_user(sessions[1]["user"]["id"]))
+            yield (
+                first,
+                second,
+                system.for_user(sessions[0]["user"]["id"]),
+                system.for_user(sessions[1]["user"]["id"]),
+            )
     finally:
         for session in sessions:
             ChatAgentService.invalidate_frozen(user_id=session["user"]["id"])
@@ -67,8 +77,11 @@ def accounts(store, tmp_path, monkeypatch):
 
 
 def create_content(client):
-    response = client.post("/api/content/generate", json={"topic": "Private topic", "content_type": "blog"},
-                           headers={"Idempotency-Key": "same-key-for-both-users"})
+    response = client.post(
+        "/api/content/generate",
+        json={"topic": "Private topic", "content_type": "blog"},
+        headers={"Idempotency-Key": "same-key-for-both-users"},
+    )
     assert response.status_code == 201, response.text
     return response.json()["id"]
 
@@ -86,7 +99,10 @@ def test_content_crud_calendar_stats_and_idempotency_are_private(accounts):
     assert second.get(f"/api/content/{first_id}").status_code == 404
     assert second.post(f"/api/content/{first_id}/archive").status_code == 404
     assert second.delete(f"/api/content/{first_id}").status_code == 404
-    assert second.post("/api/content/refine", json={"content_id": first_id, "instruction": "cross-user"}).status_code == 404
+    assert (
+        second.post("/api/content/refine", json={"content_id": first_id, "instruction": "cross-user"}).status_code
+        == 404
+    )
     event = {"content_id": first_id, "platform": "blog", "scheduled_date": date.today().isoformat()}
     assert first.post("/api/calendar/events", json=event).status_code == 201
     assert second.post("/api/calendar/events", json=event).status_code == 404
@@ -118,8 +134,13 @@ def test_jobs_runs_sse_and_resource_ticket_issuance_are_private(accounts):
     first, second, owned, _ = accounts
     owned.create_job("job_private", "content_generation", {"private": True})
     owned.create_run("run_private", "private", "blog", "casual")
-    owned.transition_run_and_append_event("run_private", expected_statuses={"running"},
-                                         new_status="completed", event_type="run_complete", payload={"private": "marker"})
+    owned.transition_run_and_append_event(
+        "run_private",
+        expected_statuses={"running"},
+        new_status="completed",
+        event_type="run_complete",
+        payload={"private": "marker"},
+    )
     assert first.get("/api/jobs/job_private").status_code == 200
     assert second.get("/api/jobs/job_private").status_code == 404
     assert second.delete("/api/jobs/job_private").status_code == 404
@@ -137,16 +158,25 @@ def test_media_upload_listing_file_cookie_and_deletion_are_private(accounts):
     first, second, _, _ = accounts
     content_id = create_content(first)
     payload = b"\x89PNG\r\n\x1a\nprivate-media"
-    response = first.post("/api/media/upload", data={"content_id": content_id, "media_type": "image"},
-                          files={"file": ("private.png", payload, "image/png")})
+    response = first.post(
+        "/api/media/upload",
+        data={"content_id": content_id, "media_type": "image"},
+        files={"file": ("private.png", payload, "image/png")},
+    )
     assert response.status_code == 201, response.text
     media = response.json()
     assert len(first.get(f"/api/content/{content_id}/media").json()) == 1
     assert second.get(f"/api/content/{content_id}/media").status_code == 404
     assert second.get(media["file_url"], headers={"Authorization": ""}).status_code == 404
     assert first.get(media["file_url"], headers={"Authorization": ""}).content == payload
-    assert second.post("/api/media/upload", data={"content_id": content_id, "media_type": "image"},
-                       files={"file": ("foreign.png", payload, "image/png")}).status_code == 404
+    assert (
+        second.post(
+            "/api/media/upload",
+            data={"content_id": content_id, "media_type": "image"},
+            files={"file": ("foreign.png", payload, "image/png")},
+        ).status_code
+        == 404
+    )
     assert second.delete(f"/api/media/{media['id']}").status_code == 404
     assert first.get(media["file_url"]).status_code == 200
     assert first.delete(f"/api/media/{media['id']}").status_code == 200
@@ -187,7 +217,9 @@ def test_background_worker_uses_persisted_owner_not_forged_payload(accounts, mon
 
     async def execute(job, llm, scoped):
         observed.append(scoped.user_id)
-        content_id = scoped.save_content(GeneratedContent(content="worker private result", content_type=ContentType.BLOG))
+        content_id = scoped.save_content(
+            GeneratedContent(content="worker private result", content_type=ContentType.BLOG)
+        )
         return {"content_id": content_id}
 
     monkeypatch.setattr(runner, "_execute_job", execute)

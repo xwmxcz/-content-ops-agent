@@ -11,6 +11,7 @@ through the P1-02 idempotency ledger, because a crash between a step's own commi
 and its checkpoint write leaves the step completed but uncheckpointed, and the
 retry will run it again.
 """
+
 from __future__ import annotations
 
 import logging
@@ -60,9 +61,7 @@ def load_checkpoint(store: ContentStore, run_id: str) -> list[dict[str, Any]]:
 def load_completed_steps(store: ContentStore, run_id: str) -> dict[int, dict[str, Any]]:
     """Completed steps keyed by index, for looking up an earlier step's result."""
     return {
-        step["step_index"]: step
-        for step in store.load_run_step_checkpoints(run_id)
-        if step["status"] == "completed"
+        step["step_index"]: step for step in store.load_run_step_checkpoints(run_id) if step["status"] == "completed"
     }
 
 

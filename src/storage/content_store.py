@@ -4,75 +4,119 @@ TenantSession owns workspace filtering and write validation. Stores returned by
 for_user share the engine, not mutable request identity; existing databases are
 upgraded only by Alembic.
 """
+
 import json
+import logging
 import re
-from datetime import datetime, date, timedelta, timezone
-from typing import Optional, List, Dict, Any
+from datetime import date, datetime, timedelta, timezone
+from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, create_engine, func, inspect, or_, text
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    create_engine,
+    func,
+    inspect,
+    or_,
+    text,
+)
 from sqlalchemy.engine import make_url
-from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
-
-import logging
-
-from src.utils import metrics
-from src.utils.structured_logging import log_idempotency_event, log_capability_event
 from src.storage.tenancy import OwnedMixin, TenantSession
+from src.utils import metrics
+from src.utils.structured_logging import log_capability_event, log_idempotency_event
 
 logger = logging.getLogger(__name__)
 
-Base = declarative_base()
+
+class Base(DeclarativeBase):
+    """Declarative base for every ORM model.
+
+    The class form (SQLAlchemy 2.0 style) rather than ``declarative_base()``:
+    the mypy plugin only injects attribute types for ``Mapped[]`` annotations
+    when the base subclasses ``DeclarativeBase``. With the legacy factory,
+    ``Mapped[int]`` is silently ignored and every model attribute keeps the
+    ``Column`` type, which is what produced the type errors this migration
+    removes.
+    """
+
+
+def _assigned_pk(instance: object, field: str) -> int:
+    """Return an integer primary key that the database has already assigned.
+
+    SQLAlchemy types a primary key as Optional because it is unset before the
+    flush. Every caller here reads it immediately after `commit()`, so a None
+    would mean the flush silently did nothing -- a real bug worth failing loudly
+    on rather than a case to paper over.
+    """
+    value = getattr(instance, field)
+    if value is None:
+        raise RuntimeError(f"{type(instance).__name__}.{field} is unset after flush")
+    return int(value)
 
 
 class User(Base):
     __tablename__ = "users"
 
-    id = Column(String(32), primary_key=True, default=lambda: uuid4().hex)
-    username = Column(String(32), nullable=False, unique=True)
-    password_hash = Column(Text, nullable=False)
-    is_active = Column(Boolean, nullable=False, default=True)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=lambda: uuid4().hex)
+    username: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
 
 
 class AuthSession(Base):
     __tablename__ = "auth_sessions"
 
-    id = Column(String(32), primary_key=True, default=lambda: uuid4().hex)
-    user_id = Column(String(32), ForeignKey("users.id"), nullable=False, index=True)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
-    expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=lambda: uuid4().hex)
+    user_id: Mapped[str] = mapped_column(String(32), ForeignKey("users.id"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
 
 class AuthRateLimit(Base):
     __tablename__ = "auth_rate_limits"
 
-    key = Column(String(64), primary_key=True)
-    window_started_at = Column(DateTime(timezone=True), nullable=False)
-    attempts = Column(Integer, nullable=False, default=0)
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    window_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 class Content(OwnedMixin, Base):
     """内容记录表"""
+
     __tablename__ = "contents"
 
-    id = Column(Integer, primary_key=True)
-    title = Column(Text, nullable=True)
-    content = Column(Text, nullable=False)
-    content_type = Column(String(50), nullable=False)
-    style = Column(String(50), nullable=False)
-    keywords = Column(Text, nullable=True)
-    tags = Column(Text, nullable=True)
-    status = Column(String(20), default="draft")
-    version = Column(Integer, default=1)
-    parent_id = Column(Integer, nullable=True)
-    llm_provider = Column(String(50), nullable=True)
-    model_name = Column(String(100), nullable=True)
-    token_usage = Column(Integer, nullable=True)
-    cost_estimate = Column(Float, nullable=True)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    style: Mapped[str] = mapped_column(String(50), nullable=False)
+    keywords: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tags: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str | None] = mapped_column(String(20), default="draft")
+    version: Mapped[int | None] = mapped_column(Integer, default=1)
+    parent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    llm_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    model_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    token_usage: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cost_estimate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
 Index("ix_contents_created_at", Content.created_at)
@@ -82,15 +126,16 @@ Index("ix_contents_content_type", Content.content_type)
 
 class CalendarEvent(OwnedMixin, Base):
     """内容日历表"""
+
     __tablename__ = "calendar_events"
 
-    id = Column(Integer, primary_key=True)
-    content_id = Column(Integer, ForeignKey("contents.id"), nullable=False)
-    platform = Column(String(50), nullable=False)
-    scheduled_date = Column(Date, nullable=False)
-    status = Column(String(20), default="planned")
-    published_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.now)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    content_id: Mapped[int] = mapped_column(Integer, ForeignKey("contents.id"), nullable=False)
+    platform: Mapped[str] = mapped_column(String(50), nullable=False)
+    scheduled_date: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[str | None] = mapped_column(String(20), default="planned")
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now)
 
 
 Index("ix_calendar_events_scheduled_date", CalendarEvent.scheduled_date)
@@ -98,16 +143,17 @@ Index("ix_calendar_events_scheduled_date", CalendarEvent.scheduled_date)
 
 class ContentMetrics(OwnedMixin, Base):
     """内容效果表"""
+
     __tablename__ = "content_metrics"
 
-    id = Column(Integer, primary_key=True)
-    content_id = Column(Integer, ForeignKey("contents.id"), nullable=False)
-    platform = Column(String(50), nullable=True)
-    views = Column(Integer, default=0)
-    likes = Column(Integer, default=0)
-    comments = Column(Integer, default=0)
-    shares = Column(Integer, default=0)
-    recorded_at = Column(DateTime, default=datetime.now)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    content_id: Mapped[int] = mapped_column(Integer, ForeignKey("contents.id"), nullable=False)
+    platform: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    views: Mapped[int | None] = mapped_column(Integer, default=0)
+    likes: Mapped[int | None] = mapped_column(Integer, default=0)
+    comments: Mapped[int | None] = mapped_column(Integer, default=0)
+    shares: Mapped[int | None] = mapped_column(Integer, default=0)
+    recorded_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now)
 
 
 class MediaAsset(OwnedMixin, Base):
@@ -115,17 +161,17 @@ class MediaAsset(OwnedMixin, Base):
 
     __tablename__ = "media_assets"
 
-    id = Column(Integer, primary_key=True)
-    content_id = Column(Integer, ForeignKey("contents.id"), nullable=False)
-    media_type = Column(String(20), nullable=False)
-    source_type = Column(String(20), nullable=False, default="upload")
-    file_name = Column(Text, nullable=False)
-    file_path = Column(Text, nullable=False)
-    mime_type = Column(String(120), nullable=True)
-    sort_order = Column(Integer, default=0)
-    provider = Column(String(80), nullable=True)
-    generation_params = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.now)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    content_id: Mapped[int] = mapped_column(Integer, ForeignKey("contents.id"), nullable=False)
+    media_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(20), nullable=False, default="upload")
+    file_name: Mapped[str] = mapped_column(Text, nullable=False)
+    file_path: Mapped[str] = mapped_column(Text, nullable=False)
+    mime_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    sort_order: Mapped[int | None] = mapped_column(Integer, default=0)
+    provider: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    generation_params: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now)
 
 
 Index("ix_media_assets_content_created", MediaAsset.content_id, MediaAsset.created_at)
@@ -136,21 +182,21 @@ class PlatformPublication(OwnedMixin, Base):
 
     __tablename__ = "platform_publications"
 
-    id = Column(Integer, primary_key=True)
-    content_id = Column(Integer, ForeignKey("contents.id"), nullable=False)
-    platform = Column(String(50), nullable=False)
-    publish_type = Column(String(30), nullable=False)
-    status = Column(String(20), nullable=False, default="draft")
-    title = Column(Text, nullable=True)
-    body = Column(Text, nullable=False)
-    scheduled_at = Column(DateTime, nullable=True)
-    published_at = Column(DateTime, nullable=True)
-    external_post_id = Column(String(120), nullable=True)
-    request_payload = Column(Text, nullable=True)
-    response_payload = Column(Text, nullable=True)
-    error_message = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    content_id: Mapped[int] = mapped_column(Integer, ForeignKey("contents.id"), nullable=False)
+    platform: Mapped[str] = mapped_column(String(50), nullable=False)
+    publish_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    external_post_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    request_payload: Mapped[str | None] = mapped_column(Text, nullable=True)
+    response_payload: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
 Index("ix_platform_publications_content_status", PlatformPublication.content_id, PlatformPublication.status)
@@ -162,15 +208,15 @@ class AgentThread(OwnedMixin, Base):
 
     __tablename__ = "agent_threads"
 
-    id = Column(String(80), primary_key=True)
-    title = Column(Text, nullable=True)
-    last_provider = Column(String(50), nullable=True)
-    last_model = Column(String(200), nullable=True)
-    pinned = Column(Boolean, default=False, nullable=False)
-    archived = Column(Boolean, default=False, nullable=False)
-    title_pinned = Column(Boolean, default=False, nullable=False)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    last_model: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    title_pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
 Index("ix_agent_threads_updated_at", AgentThread.updated_at)
@@ -183,17 +229,17 @@ class AgentMessage(OwnedMixin, Base):
 
     __tablename__ = "agent_messages"
 
-    id = Column(Integer, primary_key=True)
-    thread_id = Column(String(80), ForeignKey("agent_threads.id"), nullable=False)
-    role = Column(String(20), nullable=False)
-    content = Column(Text, nullable=False)
-    provider = Column(String(50), nullable=True)
-    model = Column(String(200), nullable=True)
-    intent = Column(Text, nullable=True)
-    tool_events = Column(Text, nullable=True)
-    plan = Column(Text, nullable=True)
-    status = Column(String(20), default="completed")
-    created_at = Column(DateTime, default=datetime.now)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    thread_id: Mapped[str] = mapped_column(String(80), ForeignKey("agent_threads.id"), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    intent: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tool_events: Mapped[str | None] = mapped_column(Text, nullable=True)
+    plan: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str | None] = mapped_column(String(20), default="completed")
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now)
 
 
 Index("ix_agent_messages_thread_created", AgentMessage.thread_id, AgentMessage.created_at)
@@ -204,32 +250,32 @@ class Job(OwnedMixin, Base):
 
     __tablename__ = "jobs"
 
-    id = Column(String(80), primary_key=True)
-    job_type = Column(String(80), nullable=False)
-    status = Column(String(20), nullable=False, default="queued")
-    payload = Column(Text, nullable=False)
-    result = Column(Text, nullable=True)
-    error = Column(Text, nullable=True)
-    provider = Column(String(50), nullable=True)
-    model = Column(String(200), nullable=True)
-    progress = Column(Integer, default=0)
-    attempts = Column(Integer, default=0)
-    max_retries = Column(Integer, default=5, nullable=False)
-    next_retry_at = Column(DateTime, nullable=True)
-    error_type = Column(String(20), nullable=True)
-    archived_at = Column(DateTime, nullable=True, index=True)
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    job_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    progress: Mapped[int | None] = mapped_column(Integer, default=0)
+    attempts: Mapped[int | None] = mapped_column(Integer, default=0)
+    max_retries: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     # P1-04 lease: exactly one worker owns a running job. A SIGKILLed worker
     # never releases its lease, so recovery keys off an expired lease_expires_at
     # rather than any explicit signal from the dead process.
-    worker_id = Column(String(255), nullable=True)
-    lease_expires_at = Column(DateTime, nullable=True)
-    heartbeat_at = Column(DateTime, nullable=True)
-    token_usage = Column(Integer, default=0)
-    cost_estimate = Column(Float, default=0.0)
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
-    started_at = Column(DateTime, nullable=True)
-    completed_at = Column(DateTime, nullable=True)
+    worker_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    token_usage: Mapped[int | None] = mapped_column(Integer, default=0)
+    cost_estimate: Mapped[float | None] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 Index("ix_jobs_status_created", Job.status, Job.created_at)
@@ -248,18 +294,16 @@ class RunStep(OwnedMixin, Base):
     """
 
     __tablename__ = "run_steps"
-    __table_args__ = (
-        UniqueConstraint("run_id", "step_index", name="uq_run_steps_run_index"),
-    )
+    __table_args__ = (UniqueConstraint("run_id", "step_index", name="uq_run_steps_run_index"),)
 
-    id = Column(Integer, primary_key=True)
-    run_id = Column(String(80), nullable=False)
-    step_index = Column(Integer, nullable=False)
-    step_name = Column(String(255), nullable=False)
-    status = Column(String(20), nullable=False, default="pending")
-    result_data = Column(Text, nullable=True)
-    started_at = Column(DateTime, nullable=True)
-    completed_at = Column(DateTime, nullable=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    step_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    step_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    result_data: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 Index("ix_run_steps_run_status", RunStep.run_id, RunStep.status)
@@ -270,24 +314,24 @@ class AgentRun(OwnedMixin, Base):
 
     __tablename__ = "agent_runs"
 
-    id = Column(String(80), primary_key=True)
-    thread_id = Column(String(80), nullable=True)
-    topic = Column(Text, nullable=False)
-    content_type = Column(String(50), nullable=False)
-    style = Column(String(50), nullable=False)
-    provider = Column(String(50), nullable=True)
-    model = Column(String(200), nullable=True)
-    plan_json = Column(Text, nullable=True)
-    revision_count = Column(Integer, default=0)
-    total_prompt_tokens = Column(Integer, default=0)
-    total_completion_tokens = Column(Integer, default=0)
-    total_cost = Column(Float, default=0.0)
-    saved_content_id = Column(Integer, nullable=True)
-    status = Column(String(20), default="running")
-    error = Column(Text, nullable=True)
-    next_event_seq = Column(Integer, nullable=False, default=1, server_default=text("1"))
-    created_at = Column(DateTime, default=datetime.now)
-    completed_at = Column(DateTime, nullable=True)
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    thread_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    topic: Mapped[str] = mapped_column(Text, nullable=False)
+    content_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    style: Mapped[str] = mapped_column(String(50), nullable=False)
+    provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    plan_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    revision_count: Mapped[int | None] = mapped_column(Integer, default=0)
+    total_prompt_tokens: Mapped[int | None] = mapped_column(Integer, default=0)
+    total_completion_tokens: Mapped[int | None] = mapped_column(Integer, default=0)
+    total_cost: Mapped[float | None] = mapped_column(Float, default=0.0)
+    saved_content_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str | None] = mapped_column(String(20), default="running")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    next_event_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 Index("ix_agent_runs_thread_created", AgentRun.thread_id, AgentRun.created_at)
@@ -297,16 +341,14 @@ class AgentRunEvent(OwnedMixin, Base):
     """Append-only event log for a pipeline run; SSE bridge reads this table."""
 
     __tablename__ = "agent_run_events"
-    __table_args__ = (
-        UniqueConstraint("run_id", "seq", name="uq_agent_run_events_run_seq"),
-    )
+    __table_args__ = (UniqueConstraint("run_id", "seq", name="uq_agent_run_events_run_seq"),)
 
-    id = Column(Integer, primary_key=True)
-    run_id = Column(String(80), ForeignKey("agent_runs.id"), nullable=False)
-    seq = Column(Integer, nullable=False)
-    event_type = Column(String(40), nullable=False)
-    payload = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=datetime.now)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(80), ForeignKey("agent_runs.id"), nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now)
 
 
 Index("ix_agent_run_events_run_seq", AgentRunEvent.run_id, AgentRunEvent.seq)
@@ -324,21 +366,21 @@ class ProposedAction(OwnedMixin, Base):
 
     __tablename__ = "proposed_actions"
 
-    id = Column(String(80), primary_key=True)
-    thread_id = Column(String(80), ForeignKey("agent_threads.id"), nullable=False)
-    requester = Column(String(120), nullable=True)
-    tool_name = Column(String(80), nullable=False)
-    args_json = Column(Text, nullable=False)
-    args_hash = Column(String(64), nullable=False)
-    impact_summary = Column(Text, nullable=False)
-    status = Column(String(20), nullable=False, default="proposed")
-    proposing_message_id = Column(Integer, nullable=True)
-    consuming_message_id = Column(Integer, nullable=True)
-    created_at = Column(DateTime, default=datetime.now, nullable=False)
-    expires_at = Column(DateTime, nullable=False)
-    confirmed_at = Column(DateTime, nullable=True)
-    consumed_at = Column(DateTime, nullable=True)
-    cancelled_at = Column(DateTime, nullable=True)
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    thread_id: Mapped[str] = mapped_column(String(80), ForeignKey("agent_threads.id"), nullable=False)
+    requester: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    tool_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    args_json: Mapped[str] = mapped_column(Text, nullable=False)
+    args_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    impact_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="proposed")
+    proposing_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    consuming_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 Index("ix_proposed_actions_thread_created", ProposedAction.thread_id, ProposedAction.created_at)
@@ -368,15 +410,15 @@ class IdempotencyRecord(OwnedMixin, Base):
         UniqueConstraint("user_id", "scope", "idempotency_key", name="uq_idempotency_records_user_scope_key"),
     )
 
-    id = Column(Integer, primary_key=True)
-    scope = Column(String(60), nullable=False)
-    idempotency_key = Column(String(160), nullable=False)
-    args_hash = Column(String(64), nullable=False)
-    status = Column(String(20), nullable=False, default="in_progress")
-    result_json = Column(Text, nullable=True)
-    external_request_id = Column(String(120), nullable=True)
-    created_at = Column(DateTime, default=datetime.now, nullable=False)
-    completed_at = Column(DateTime, nullable=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scope: Mapped[str] = mapped_column(String(60), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    args_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="in_progress")
+    result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    external_request_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 Index("ix_idempotency_records_scope_created", IdempotencyRecord.scope, IdempotencyRecord.created_at)
@@ -387,6 +429,12 @@ IDEMPOTENCY_RECORD_STATUSES = ("in_progress", "completed", "failed")
 
 class ContentStore:
     """内容存储管理类"""
+
+    # Set to the owning user id by for_user(); None on the unscoped system store
+    # used for auth, migrations, and worker discovery. Declared here because
+    # __init__ assigns None, which would otherwise pin the inferred type to None
+    # and reject the later str assignment in for_user().
+    _user_id: str | None
 
     def __init__(
         self,
@@ -416,6 +464,10 @@ class ContentStore:
             max_overflow=config.DB_MAX_OVERFLOW,
             pool_timeout=config.DB_POOL_TIMEOUT_SECONDS,
             pool_pre_ping=True,
+            # Bounds the TCP handshake. Without it an unreachable host hangs the
+            # process indefinitely instead of failing fast: pool_timeout applies
+            # to pool checkout, not to establishing the socket.
+            connect_args={"connect_timeout": config.DB_CONNECT_TIMEOUT_SECONDS},
         )
         if initialize_schema:
             inspector = inspect(self.engine)
@@ -438,7 +490,9 @@ class ContentStore:
         scoped.database_url = self.database_url
         scoped.engine = self.engine
         scoped.SessionLocal = sessionmaker(
-            bind=self.engine, class_=TenantSession, info={"user_id": user_id},
+            bind=self.engine,
+            class_=TenantSession,
+            info={"user_id": user_id},
         )
         scoped._user_id = user_id
         return scoped
@@ -477,14 +531,14 @@ class ContentStore:
             )
             session.add(content)
             session.commit()
-            return content.id
+            return _assigned_pk(content, "id")
         except Exception:
             session.rollback()
             raise
         finally:
             session.close()
 
-    def get_content(self, content_id: int) -> Optional[Dict[str, Any]]:
+    def get_content(self, content_id: int) -> dict[str, Any] | None:
         session = self._get_session()
         try:
             content = session.query(Content).filter(Content.id == content_id).first()
@@ -512,7 +566,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def list_contents(self, status=None, content_type=None, limit=50, offset=0) -> List[Dict[str, Any]]:
+    def list_contents(self, status=None, content_type=None, limit=50, offset=0) -> list[dict[str, Any]]:
         session = self._get_session()
         try:
             query = session.query(Content)
@@ -537,7 +591,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def search_contents(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+    def search_contents(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
         if not query or not query.strip():
             return []
         pattern = f"%{query.strip()}%"
@@ -564,26 +618,21 @@ class ContentStore:
         session = self._get_session()
         try:
             event = CalendarEvent(
-                content_id=content_id,
-                platform=platform,
-                scheduled_date=scheduled_date,
-                status="planned"
+                content_id=content_id, platform=platform, scheduled_date=scheduled_date, status="planned"
             )
             session.add(event)
             session.commit()
-            return event.id
+            return _assigned_pk(event, "id")
         except Exception:
             session.rollback()
             raise
         finally:
             session.close()
 
-    def get_calendar_events(self, start_date=None, end_date=None) -> List[Dict[str, Any]]:
+    def get_calendar_events(self, start_date=None, end_date=None) -> list[dict[str, Any]]:
         session = self._get_session()
         try:
-            query = session.query(CalendarEvent, Content).join(
-                Content, CalendarEvent.content_id == Content.id
-            )
+            query = session.query(CalendarEvent, Content).join(Content, CalendarEvent.content_id == Content.id)
             if start_date:
                 query = query.filter(CalendarEvent.scheduled_date >= start_date)
             if end_date:
@@ -605,25 +654,21 @@ class ContentStore:
         finally:
             session.close()
 
-    def get_content_stats(self) -> Dict[str, Any]:
+    def get_content_stats(self) -> dict[str, Any]:
         session = self._get_session()
         try:
             total = session.query(Content).count()
             by_type = {
                 content_type: count
                 for content_type, count in (
-                    session.query(Content.content_type, func.count(Content.id))
-                    .group_by(Content.content_type)
-                    .all()
+                    session.query(Content.content_type, func.count(Content.id)).group_by(Content.content_type).all()
                 )
                 if content_type
             }
             by_status = {
                 status: count
                 for status, count in (
-                    session.query(Content.status, func.count(Content.id))
-                    .group_by(Content.status)
-                    .all()
+                    session.query(Content.status, func.count(Content.id)).group_by(Content.status).all()
                 )
                 if status
             }
@@ -631,7 +676,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def aggregate_performance(self, days: int = 30) -> Dict[str, Any]:
+    def aggregate_performance(self, days: int = 30) -> dict[str, Any]:
         """Group contents from the last `days` days by content_type + style and aggregate
         engagement metrics. Used by the chat Agent's analyze_content_performance tool.
 
@@ -655,15 +700,15 @@ class ContentStore:
             contents = session.query(Content).filter(Content.created_at >= cutoff).all()
             if not contents:
                 return {
-                    "window_days": days, "total_contents": 0, "total_with_metrics": 0,
-                    "by_type": [], "by_style": [], "top_performers": [],
+                    "window_days": days,
+                    "total_contents": 0,
+                    "total_with_metrics": 0,
+                    "by_type": [],
+                    "by_style": [],
+                    "top_performers": [],
                 }
             content_ids = [c.id for c in contents]
-            metrics_rows = (
-                session.query(ContentMetrics)
-                .filter(ContentMetrics.content_id.in_(content_ids))
-                .all()
-            )
+            metrics_rows = session.query(ContentMetrics).filter(ContentMetrics.content_id.in_(content_ids)).all()
             metrics_by_content: dict[int, ContentMetrics] = {}
             for m in metrics_rows:
                 # If multiple metric rows exist per content, keep the one with highest views.
@@ -679,50 +724,60 @@ class ContentStore:
             type_buckets: dict[str, dict[str, Any]] = {}
             style_buckets: dict[str, dict[str, Any]] = {}
             for content in contents:
-                m = metrics_by_content.get(content.id)
+                content_metrics = metrics_by_content.get(content.id)
                 for bucket_key, store_dict in (
                     (content.content_type or "unknown", type_buckets),
                     (content.style or "unknown", style_buckets),
                 ):
                     bucket = store_dict.setdefault(
                         bucket_key,
-                        {"count": 0, "with_metrics": 0, "views": 0, "likes": 0,
-                         "comments": 0, "shares": 0, "engagement_rates": []},
+                        {
+                            "count": 0,
+                            "with_metrics": 0,
+                            "views": 0,
+                            "likes": 0,
+                            "comments": 0,
+                            "shares": 0,
+                            "engagement_rates": [],
+                        },
                     )
                     bucket["count"] += 1
-                    if m is not None:
+                    if content_metrics is not None:
                         bucket["with_metrics"] += 1
-                        bucket["views"] += m.views or 0
-                        bucket["likes"] += m.likes or 0
-                        bucket["comments"] += m.comments or 0
-                        bucket["shares"] += m.shares or 0
-                        bucket["engagement_rates"].append(_engagement_rate(m))
+                        bucket["views"] += content_metrics.views or 0
+                        bucket["likes"] += content_metrics.likes or 0
+                        bucket["comments"] += content_metrics.comments or 0
+                        bucket["shares"] += content_metrics.shares or 0
+                        bucket["engagement_rates"].append(_engagement_rate(content_metrics))
 
             def _summarize(buckets: dict[str, dict[str, Any]], key_name: str) -> list[dict[str, Any]]:
                 out = []
                 for k, b in buckets.items():
                     n = max(1, b["with_metrics"])
-                    out.append({
-                        key_name: k,
-                        "count": b["count"],
-                        "with_metrics": b["with_metrics"],
-                        "avg_views": round(b["views"] / n) if b["with_metrics"] else 0,
-                        "avg_likes": round(b["likes"] / n) if b["with_metrics"] else 0,
-                        "avg_comments": round(b["comments"] / n) if b["with_metrics"] else 0,
-                        "avg_engagement_rate": (
-                            round(sum(b["engagement_rates"]) / len(b["engagement_rates"]), 4)
-                            if b["engagement_rates"] else 0.0
-                        ),
-                    })
+                    out.append(
+                        {
+                            key_name: k,
+                            "count": b["count"],
+                            "with_metrics": b["with_metrics"],
+                            "avg_views": round(b["views"] / n) if b["with_metrics"] else 0,
+                            "avg_likes": round(b["likes"] / n) if b["with_metrics"] else 0,
+                            "avg_comments": round(b["comments"] / n) if b["with_metrics"] else 0,
+                            "avg_engagement_rate": (
+                                round(sum(b["engagement_rates"]) / len(b["engagement_rates"]), 4)
+                                if b["engagement_rates"]
+                                else 0.0
+                            ),
+                        }
+                    )
                 out.sort(key=lambda r: (r["with_metrics"] > 0, r["avg_engagement_rate"]), reverse=True)
                 return out
 
             scored: list[tuple[float, Content, ContentMetrics]] = []
             for c in contents:
-                m = metrics_by_content.get(c.id)
-                if m is None:
+                metrics_row = metrics_by_content.get(c.id)
+                if metrics_row is None:
                     continue
-                scored.append((_engagement_rate(m), c, m))
+                scored.append((_engagement_rate(metrics_row), c, metrics_row))
             scored.sort(key=lambda x: (x[0], x[2].views or 0), reverse=True)
             top_performers = [
                 {
@@ -749,7 +804,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def get_calendar_conflicts(self, start_date: date, end_date: date) -> List[Dict[str, Any]]:
+    def get_calendar_conflicts(self, start_date: date, end_date: date) -> list[dict[str, Any]]:
         """Return calendar events between [start_date, end_date], minimal shape used
         by the schedule planner to avoid double-booking a date+platform pair."""
         session = self._get_session()
@@ -774,7 +829,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def list_optimization_candidates(self, criteria: str = "underperforming", limit: int = 5) -> List[Dict[str, Any]]:
+    def list_optimization_candidates(self, criteria: str = "underperforming", limit: int = 5) -> list[dict[str, Any]]:
         """Find contents that may benefit from refinement. Used by the chat Agent's
         find_optimization_candidates tool.
 
@@ -787,7 +842,7 @@ class ContentStore:
         try:
             criteria = (criteria or "underperforming").lower()
             now = datetime.now()
-            results: List[Dict[str, Any]] = []
+            results: list[dict[str, Any]] = []
 
             if criteria == "underperforming":
                 contents = session.query(Content).all()
@@ -801,28 +856,32 @@ class ContentStore:
                     return []
                 rates: list[tuple[Content, ContentMetrics, float]] = []
                 for c in contents:
-                    m = metrics_by_content.get(c.id)
-                    if m is None or not m.views:
+                    metrics_row = metrics_by_content.get(c.id)
+                    if metrics_row is None or not metrics_row.views:
                         continue
-                    rate = ((m.likes or 0) + (m.comments or 0) + (m.shares or 0)) / m.views
-                    rates.append((c, m, rate))
+                    rate = (
+                        (metrics_row.likes or 0) + (metrics_row.comments or 0) + (metrics_row.shares or 0)
+                    ) / metrics_row.views
+                    rates.append((c, metrics_row, rate))
                 if not rates:
                     return []
                 avg_rate = sum(r for _, _, r in rates) / len(rates)
                 weak = [(c, m, r) for c, m, r in rates if r < avg_rate]
                 weak.sort(key=lambda x: x[2])
                 for c, m, r in weak[:limit]:
-                    results.append({
-                        "id": c.id,
-                        "title": c.title,
-                        "content_type": c.content_type,
-                        "style": c.style,
-                        "status": c.status,
-                        "views": m.views or 0,
-                        "engagement_rate": round(r, 4),
-                        "global_avg_rate": round(avg_rate, 4),
-                        "reason": f"engagement {round(r,4)} < cohort avg {round(avg_rate,4)}",
-                    })
+                    results.append(
+                        {
+                            "id": c.id,
+                            "title": c.title,
+                            "content_type": c.content_type,
+                            "style": c.style,
+                            "status": c.status,
+                            "views": m.views or 0,
+                            "engagement_rate": round(r, 4),
+                            "global_avg_rate": round(avg_rate, 4),
+                            "reason": f"engagement {round(r, 4)} < cohort avg {round(avg_rate, 4)}",
+                        }
+                    )
             elif criteria == "recent_drafts":
                 cutoff = now - timedelta(days=7)
                 rows = (
@@ -837,15 +896,17 @@ class ContentStore:
                 )
                 for c in rows:
                     age_days = max(0, (now - c.created_at).days) if c.created_at else 0
-                    results.append({
-                        "id": c.id,
-                        "title": c.title,
-                        "content_type": c.content_type,
-                        "style": c.style,
-                        "status": c.status,
-                        "age_days": age_days,
-                        "reason": f"recent {c.status}, {age_days}d old, not yet finalized",
-                    })
+                    results.append(
+                        {
+                            "id": c.id,
+                            "title": c.title,
+                            "content_type": c.content_type,
+                            "style": c.style,
+                            "status": c.status,
+                            "age_days": age_days,
+                            "reason": f"recent {c.status}, {age_days}d old, not yet finalized",
+                        }
+                    )
             elif criteria == "old_drafts":
                 cutoff = now - timedelta(days=14)
                 rows = (
@@ -857,15 +918,17 @@ class ContentStore:
                 )
                 for c in rows:
                     age_days = max(0, (now - c.created_at).days) if c.created_at else 0
-                    results.append({
-                        "id": c.id,
-                        "title": c.title,
-                        "content_type": c.content_type,
-                        "style": c.style,
-                        "status": c.status,
-                        "age_days": age_days,
-                        "reason": f"draft sitting {age_days}d, may need a decision",
-                    })
+                    results.append(
+                        {
+                            "id": c.id,
+                            "title": c.title,
+                            "content_type": c.content_type,
+                            "style": c.style,
+                            "status": c.status,
+                            "age_days": age_days,
+                            "reason": f"draft sitting {age_days}d, may need a decision",
+                        }
+                    )
             return results
         finally:
             session.close()
@@ -886,7 +949,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def delete_content(self, content_id: int) -> Optional[Dict[str, Any]]:
+    def delete_content(self, content_id: int) -> dict[str, Any] | None:
         session = self._get_session()
         try:
             content = session.query(Content).filter(Content.id == content_id).first()
@@ -908,12 +971,16 @@ class ContentStore:
                 {Content.parent_id: None},
                 synchronize_session=False,
             )
-            session.query(CalendarEvent).filter(CalendarEvent.content_id == content_id).delete(synchronize_session=False)
-            session.query(ContentMetrics).filter(ContentMetrics.content_id == content_id).delete(synchronize_session=False)
+            session.query(CalendarEvent).filter(CalendarEvent.content_id == content_id).delete(
+                synchronize_session=False
+            )
+            session.query(ContentMetrics).filter(ContentMetrics.content_id == content_id).delete(
+                synchronize_session=False
+            )
             session.query(MediaAsset).filter(MediaAsset.content_id == content_id).delete(synchronize_session=False)
-            session.query(PlatformPublication).filter(
-                PlatformPublication.content_id == content_id
-            ).delete(synchronize_session=False)
+            session.query(PlatformPublication).filter(PlatformPublication.content_id == content_id).delete(
+                synchronize_session=False
+            )
             session.delete(content)
             session.commit()
             return deleted
@@ -933,7 +1000,7 @@ class ContentStore:
         mime_type: str | None = None,
         provider: str | None = None,
         generation_params: dict[str, Any] | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         session = self._get_session()
         try:
             current_order = (
@@ -966,7 +1033,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def get_media_asset(self, media_id: int) -> Optional[Dict[str, Any]]:
+    def get_media_asset(self, media_id: int) -> dict[str, Any] | None:
         session = self._get_session()
         try:
             asset = session.query(MediaAsset).filter(MediaAsset.id == media_id).first()
@@ -976,7 +1043,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def list_media_assets(self, content_id: int, media_type: str | None = None) -> List[Dict[str, Any]]:
+    def list_media_assets(self, content_id: int, media_type: str | None = None) -> list[dict[str, Any]]:
         session = self._get_session()
         try:
             query = session.query(MediaAsset).filter(MediaAsset.content_id == content_id)
@@ -987,7 +1054,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def delete_media_asset(self, media_id: int) -> Optional[Dict[str, Any]]:
+    def delete_media_asset(self, media_id: int) -> dict[str, Any] | None:
         session = self._get_session()
         try:
             asset = session.query(MediaAsset).filter(MediaAsset.id == media_id).first()
@@ -1013,7 +1080,7 @@ class ContentStore:
         body: str,
         scheduled_at: datetime | None = None,
         request_payload: dict[str, Any] | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         session = self._get_session()
         try:
             publication = PlatformPublication(
@@ -1036,7 +1103,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def get_publication(self, publication_id: int) -> Optional[Dict[str, Any]]:
+    def get_publication(self, publication_id: int) -> dict[str, Any] | None:
         session = self._get_session()
         try:
             publication = session.query(PlatformPublication).filter(PlatformPublication.id == publication_id).first()
@@ -1046,7 +1113,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def list_publications(self, content_id: int) -> List[Dict[str, Any]]:
+    def list_publications(self, content_id: int) -> list[dict[str, Any]]:
         session = self._get_session()
         try:
             publications = (
@@ -1059,7 +1126,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def update_publication(self, publication_id: int, **fields) -> Optional[Dict[str, Any]]:
+    def update_publication(self, publication_id: int, **fields) -> dict[str, Any] | None:
         session = self._get_session()
         try:
             publication = session.query(PlatformPublication).filter(PlatformPublication.id == publication_id).first()
@@ -1090,7 +1157,7 @@ class ContentStore:
         payload: dict,
         provider: str | None = None,
         model: str | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         session = self._get_session()
         try:
             now = datetime.now()
@@ -1115,7 +1182,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
+    def get_job(self, job_id: str) -> dict[str, Any] | None:
         session = self._get_session()
         try:
             job = session.query(Job).filter(Job.id == job_id).first()
@@ -1125,7 +1192,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def update_job(self, job_id: str, **fields) -> Optional[Dict[str, Any]]:
+    def update_job(self, job_id: str, **fields) -> dict[str, Any] | None:
         session = self._get_session()
         try:
             job = session.query(Job).filter(Job.id == job_id).first()
@@ -1161,15 +1228,11 @@ class ContentStore:
         finally:
             session.close()
 
-    def start_job(self, job_id: str, attempts: int, progress: int = 5) -> Optional[Dict[str, Any]]:
+    def start_job(self, job_id: str, attempts: int, progress: int = 5) -> dict[str, Any] | None:
         """Mark a queued/failed job as running without reviving a cancelled job."""
         session = self._get_session()
         try:
-            job = (
-                session.query(Job)
-                .filter(Job.id == job_id, Job.status.in_(["queued", "failed"]))
-                .first()
-            )
+            job = session.query(Job).filter(Job.id == job_id, Job.status.in_(["queued", "failed"])).first()
             if not job:
                 return None
             now = datetime.now()
@@ -1308,7 +1371,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def find_expired_lease_jobs(self, limit: int = 50) -> List[Dict[str, Any]]:
+    def find_expired_lease_jobs(self, limit: int = 50) -> list[dict[str, Any]]:
         """Running jobs whose lease lapsed, i.e. the owning worker stopped heartbeating."""
         session = self._get_session()
         try:
@@ -1328,7 +1391,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def reclaim_job_lease(self, job_id: str, worker_id: str) -> Optional[Dict[str, Any]]:
+    def reclaim_job_lease(self, job_id: str, worker_id: str) -> dict[str, Any] | None:
         """Move an expired-lease job back to ``queued`` so it can be retried.
 
         The ``lease_expires_at < now`` predicate stays in the WHERE clause: between
@@ -1381,8 +1444,8 @@ class ContentStore:
         step_index: int,
         step_name: str,
         status: str = "completed",
-        result_data: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        result_data: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Upsert one step's checkpoint.
 
         Upsert rather than insert because a step may be checkpointed twice: once
@@ -1392,11 +1455,7 @@ class ContentStore:
         session = self._get_session()
         try:
             now = datetime.now()
-            step = (
-                session.query(RunStep)
-                .filter(RunStep.run_id == run_id, RunStep.step_index == step_index)
-                .first()
-            )
+            step = session.query(RunStep).filter(RunStep.run_id == run_id, RunStep.step_index == step_index).first()
             if step is None:
                 step = RunStep(
                     run_id=run_id,
@@ -1421,28 +1480,19 @@ class ContentStore:
         finally:
             session.close()
 
-    def load_run_step_checkpoints(self, run_id: str) -> List[Dict[str, Any]]:
+    def load_run_step_checkpoints(self, run_id: str) -> list[dict[str, Any]]:
         """All persisted steps for a run, ordered by step index."""
         session = self._get_session()
         try:
-            steps = (
-                session.query(RunStep)
-                .filter(RunStep.run_id == run_id)
-                .order_by(RunStep.step_index)
-                .all()
-            )
+            steps = session.query(RunStep).filter(RunStep.run_id == run_id).order_by(RunStep.step_index).all()
             return [self._run_step_to_dict(step) for step in steps]
         finally:
             session.close()
 
-    def get_run_step_checkpoint(self, run_id: str, step_index: int) -> Optional[Dict[str, Any]]:
+    def get_run_step_checkpoint(self, run_id: str, step_index: int) -> dict[str, Any] | None:
         session = self._get_session()
         try:
-            step = (
-                session.query(RunStep)
-                .filter(RunStep.run_id == run_id, RunStep.step_index == step_index)
-                .first()
-            )
+            step = session.query(RunStep).filter(RunStep.run_id == run_id, RunStep.step_index == step_index).first()
             return self._run_step_to_dict(step) if step else None
         finally:
             session.close()
@@ -1476,11 +1526,7 @@ class ContentStore:
         """Drop a run's checkpoints once its result is durable."""
         session = self._get_session()
         try:
-            deleted = (
-                session.query(RunStep)
-                .filter(RunStep.run_id == run_id)
-                .delete(synchronize_session=False)
-            )
+            deleted = session.query(RunStep).filter(RunStep.run_id == run_id).delete(synchronize_session=False)
             session.commit()
             return int(deleted)
         except Exception:
@@ -1490,7 +1536,7 @@ class ContentStore:
             session.close()
 
     @staticmethod
-    def _run_step_to_dict(step: RunStep) -> Dict[str, Any]:
+    def _run_step_to_dict(step: RunStep) -> dict[str, Any]:
         return {
             "id": step.id,
             "run_id": step.run_id,
@@ -1518,7 +1564,7 @@ class ContentStore:
         title: str | None = None,
         provider: str | None = None,
         model: str | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Create or touch a thread row.
 
         Auto-title path: `title` is only written when the thread is brand-new
@@ -1561,7 +1607,7 @@ class ContentStore:
         offset: int = 0,
         include_archived: bool = False,
         q: str | None = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """List threads with pin-first ordering, optional archived filter, optional title/id search.
 
         Uses a single LEFT JOIN + GROUP BY to fetch message_count, replacing the
@@ -1578,9 +1624,7 @@ class ContentStore:
                 query = query.filter(AgentThread.archived.is_(False))
             if q and q.strip():
                 pattern = f"%{q.strip()}%"
-                query = query.filter(
-                    or_(AgentThread.title.ilike(pattern), AgentThread.id.ilike(pattern))
-                )
+                query = query.filter(or_(AgentThread.title.ilike(pattern), AgentThread.id.ilike(pattern)))
 
             query = (
                 query.group_by(AgentThread.id)
@@ -1596,7 +1640,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def get_agent_thread(self, thread_id: str) -> Optional[Dict[str, Any]]:
+    def get_agent_thread(self, thread_id: str) -> dict[str, Any] | None:
         session = self._get_session()
         try:
             thread = session.query(AgentThread).filter(AgentThread.id == thread_id).first()
@@ -1613,7 +1657,7 @@ class ContentStore:
         title: str | None = None,
         pinned: bool | None = None,
         archived: bool | None = None,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Manual edits to a thread row.
 
         - Passing `title` writes it and sets `title_pinned=True`, which locks
@@ -1688,7 +1732,7 @@ class ContentStore:
             )
             session.add(message)
             session.commit()
-            return message.id
+            return _assigned_pk(message, "id")
         except Exception:
             session.rollback()
             raise
@@ -1700,7 +1744,7 @@ class ContentStore:
         thread_id: str,
         limit: int = 50,
         before_id: int | None = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """List messages oldest-first.
 
         Without `before_id`, returns the most recent `limit` messages.
@@ -1722,7 +1766,7 @@ class ContentStore:
         query: str,
         limit: int = 10,
         thread_id: str | None = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Substring search over agent_messages content using ILIKE."""
         query = (query or "").strip()
         if not query:
@@ -1769,7 +1813,7 @@ class ContentStore:
         requester: str | None = None,
         proposing_message_id: int | None = None,
         action_id: str | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Persist an unconfirmed proposal and return its durable action id."""
         from src.utils.canonical import args_hash, canonical_json
 
@@ -1793,10 +1837,7 @@ class ContentStore:
             session.commit()
             # P2-01: Track proposed capabilities
             metrics.capability_proposals_total.labels(tool=tool_name).inc()
-            log_capability_event(
-                logger, "proposed", action.id, tool_name,
-                thread_id=thread_id
-            )
+            log_capability_event(logger, "proposed", action.id, tool_name, thread_id=thread_id)
             return self._proposed_action_to_dict(action)
         except Exception:
             session.rollback()
@@ -1804,14 +1845,10 @@ class ContentStore:
         finally:
             session.close()
 
-    def get_proposed_action(self, action_id: str) -> Optional[Dict[str, Any]]:
+    def get_proposed_action(self, action_id: str) -> dict[str, Any] | None:
         session = self._get_session()
         try:
-            action = (
-                session.query(ProposedAction)
-                .filter(ProposedAction.id == action_id)
-                .first()
-            )
+            action = session.query(ProposedAction).filter(ProposedAction.id == action_id).first()
             return self._proposed_action_to_dict(action) if action else None
         finally:
             session.close()
@@ -1822,17 +1859,13 @@ class ContentStore:
         *,
         statuses: tuple[str, ...] | set[str] | None = None,
         limit: int = 20,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         session = self._get_session()
         try:
             query = session.query(ProposedAction).filter(ProposedAction.thread_id == thread_id)
             if statuses:
                 query = query.filter(ProposedAction.status.in_(tuple(statuses)))
-            rows = (
-                query.order_by(ProposedAction.created_at.desc(), ProposedAction.id.desc())
-                .limit(limit)
-                .all()
-            )
+            rows = query.order_by(ProposedAction.created_at.desc(), ProposedAction.id.desc()).limit(limit).all()
             return [self._proposed_action_to_dict(row) for row in rows]
         finally:
             session.close()
@@ -1842,7 +1875,7 @@ class ContentStore:
         thread_id: str,
         *,
         tool_name: str | None = None,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Most recent unexpired ``proposed`` row for a thread.
 
         Expiry is evaluated against the stored ``expires_at`` using the same
@@ -1852,24 +1885,19 @@ class ContentStore:
         """
         session = self._get_session()
         try:
-            query = (
-                session.query(ProposedAction)
-                .filter(
-                    ProposedAction.thread_id == thread_id,
-                    ProposedAction.status == "proposed",
-                    ProposedAction.expires_at > datetime.now(),
-                )
+            query = session.query(ProposedAction).filter(
+                ProposedAction.thread_id == thread_id,
+                ProposedAction.status == "proposed",
+                ProposedAction.expires_at > datetime.now(),
             )
             if tool_name:
                 query = query.filter(ProposedAction.tool_name == tool_name)
-            action = query.order_by(
-                ProposedAction.created_at.desc(), ProposedAction.id.desc()
-            ).first()
+            action = query.order_by(ProposedAction.created_at.desc(), ProposedAction.id.desc()).first()
             return self._proposed_action_to_dict(action) if action else None
         finally:
             session.close()
 
-    def confirm_proposed_action(self, action_id: str) -> Optional[Dict[str, Any]]:
+    def confirm_proposed_action(self, action_id: str) -> dict[str, Any] | None:
         """Move exactly one ``proposed`` row to ``confirmed``.
 
         Two concurrent confirmations of the same proposal serialize on the row
@@ -1908,7 +1936,7 @@ class ContentStore:
         tool_name: str,
         args: dict[str, Any],
         consuming_message_id: int | None = None,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Atomically claim a confirmed capability for one tool invocation.
 
         The row lock plus the ``status == 'confirmed'`` predicate make this the
@@ -1935,10 +1963,7 @@ class ContentStore:
                 session.commit()
                 # P2-01: Track expired capabilities
                 metrics.capability_expired_total.labels(tool=action.tool_name).inc()
-                log_capability_event(
-                    logger, "expired", action_id, tool_name,
-                    expired=True
-                )
+                log_capability_event(logger, "expired", action_id, tool_name, expired=True)
                 return None
             if action.tool_name != tool_name or action.args_hash != args_hash(args):
                 # Leave the capability unconsumed: the mismatch is the model
@@ -1951,10 +1976,7 @@ class ContentStore:
             session.commit()
             # P2-01: Track consumed capabilities
             metrics.capability_consumed_total.labels(tool=tool_name).inc()
-            log_capability_event(
-                logger, "consumed", action_id, tool_name,
-                consumed=True
-            )
+            log_capability_event(logger, "consumed", action_id, tool_name, consumed=True)
             return self._proposed_action_to_dict(action)
         except Exception:
             session.rollback()
@@ -1962,7 +1984,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def cancel_proposed_action(self, action_id: str) -> Optional[Dict[str, Any]]:
+    def cancel_proposed_action(self, action_id: str) -> dict[str, Any] | None:
         """Cancel a proposal or an unused confirmation; consumed rows are final."""
         session = self._get_session()
         try:
@@ -1997,9 +2019,7 @@ class ContentStore:
             )
             if thread_id:
                 query = query.filter(ProposedAction.thread_id == thread_id)
-            updated = query.update(
-                {ProposedAction.status: "expired"}, synchronize_session=False
-            )
+            updated = query.update({ProposedAction.status: "expired"}, synchronize_session=False)
             session.commit()
             return int(updated or 0)
         except Exception:
@@ -2009,7 +2029,7 @@ class ContentStore:
             session.close()
 
     @staticmethod
-    def _proposed_action_to_dict(action: ProposedAction) -> Dict[str, Any]:
+    def _proposed_action_to_dict(action: ProposedAction) -> dict[str, Any]:
         try:
             args = json.loads(action.args_json)
         except (TypeError, ValueError):
@@ -2039,9 +2059,9 @@ class ContentStore:
         *,
         scope: str,
         key: str,
-        args: Dict[str, Any],
+        args: dict[str, Any],
         external_request_id: str | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Claim ``(user_id, scope, key)`` or report this user's prior outcome.
 
         The claim is an INSERT guarded by the unique constraint, so two racing
@@ -2085,10 +2105,7 @@ class ContentStore:
             else:
                 # P2-01: Metrics and logging
                 metrics.idempotency_requests_total.labels(scope=scope, outcome="claimed").inc()
-                log_idempotency_event(
-                    logger, "claimed", scope, key,
-                    record_id=record.id, args_hash=digest
-                )
+                log_idempotency_event(logger, "claimed", scope, key, record_id=record.id, args_hash=digest)
                 return {
                     "outcome": "claimed",
                     "record_id": record.id,
@@ -2110,9 +2127,7 @@ class ContentStore:
             )
             if existing is None:
                 # The row was deleted between the failed insert and this read.
-                raise DuplicateRequestInFlight(
-                    f"Idempotency key for {scope} could not be claimed; retry the request"
-                )
+                raise DuplicateRequestInFlight(f"Idempotency key for {scope} could not be claimed; retry the request")
             # Check args compatibility based on current status:
             # - failed: retryable with any args (previous attempt didn't succeed)
             # - completed/in_progress: args must match (can't change a success or in-flight request)
@@ -2121,20 +2136,14 @@ class ContentStore:
                 metrics.idempotency_conflicts_total.labels(scope=scope).inc()
                 metrics.idempotency_requests_total.labels(scope=scope, outcome="conflict").inc()
                 log_idempotency_event(
-                    logger, "conflict", scope, key,
-                    record_id=existing.id, args_hash=digest, conflict=True
+                    logger, "conflict", scope, key, record_id=existing.id, args_hash=digest, conflict=True
                 )
-                raise IdempotencyKeyConflict(
-                    f"Idempotency key was already used for {scope} with different arguments"
-                )
+                raise IdempotencyKeyConflict(f"Idempotency key was already used for {scope} with different arguments")
             if existing.status == "completed":
                 # P2-01: Metrics and logging
                 metrics.idempotency_requests_total.labels(scope=scope, outcome="replay").inc()
                 metrics.idempotency_replay_rate.labels(scope=scope).inc()
-                log_idempotency_event(
-                    logger, "replay", scope, key,
-                    record_id=existing.id, args_hash=existing.args_hash
-                )
+                log_idempotency_event(logger, "replay", scope, key, record_id=existing.id, args_hash=existing.args_hash)
                 return {
                     "outcome": "replay",
                     "record_id": existing.id,
@@ -2161,9 +2170,7 @@ class ContentStore:
                     "key": key,
                     "external_request_id": existing.external_request_id,
                 }
-            raise DuplicateRequestInFlight(
-                f"Another request is already processing this {scope} key"
-            )
+            raise DuplicateRequestInFlight(f"Another request is already processing this {scope} key")
         except Exception:
             session.rollback()
             raise
@@ -2195,10 +2202,7 @@ class ContentStore:
             record.completed_at = datetime.now()
             session.commit()
             # P2-01: Log completion
-            log_idempotency_event(
-                logger, "completed", record.scope, record.idempotency_key,
-                record_id=record.id
-            )
+            log_idempotency_event(logger, "completed", record.scope, record.idempotency_key, record_id=record.id)
             return True
         except Exception:
             session.rollback()
@@ -2229,10 +2233,7 @@ class ContentStore:
             record.completed_at = datetime.now()
             session.commit()
             # P2-01: Log failure
-            log_idempotency_event(
-                logger, "failed", record.scope, record.idempotency_key,
-                record_id=record.id
-            )
+            log_idempotency_event(logger, "failed", record.scope, record.idempotency_key, record_id=record.id)
             return True
         except Exception:
             session.rollback()
@@ -2240,7 +2241,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def get_idempotency_record(self, *, scope: str, key: str) -> Optional[Dict[str, Any]]:
+    def get_idempotency_record(self, *, scope: str, key: str) -> dict[str, Any] | None:
         session = self._get_session()
         try:
             record = (
@@ -2287,7 +2288,7 @@ class ContentStore:
         provider: str | None = None,
         model: str | None = None,
         thread_id: str | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         session = self._get_session()
         try:
             run = AgentRun(
@@ -2309,11 +2310,9 @@ class ContentStore:
         finally:
             session.close()
 
-    def update_run(self, run_id: str, **fields) -> Optional[Dict[str, Any]]:
+    def update_run(self, run_id: str, **fields) -> dict[str, Any] | None:
         if fields.get("status") in {"completed", "failed", "cancelled"}:
-            raise ValueError(
-                "Terminal run states must use transition_run_and_append_event()"
-            )
+            raise ValueError("Terminal run states must use transition_run_and_append_event()")
         session = self._get_session()
         try:
             run = session.query(AgentRun).filter(AgentRun.id == run_id).first()
@@ -2324,7 +2323,11 @@ class ContentStore:
             for key, value in fields.items():
                 if hasattr(run, key):
                     setattr(run, key, value)
-            if fields.get("status") in {"completed", "failed", "cancelled"} or run.status in {"completed", "failed", "cancelled"}:
+            if fields.get("status") in {"completed", "failed", "cancelled"} or run.status in {
+                "completed",
+                "failed",
+                "cancelled",
+            }:
                 run.completed_at = run.completed_at or datetime.now()
             session.commit()
             return self._agent_run_to_dict(run)
@@ -2334,7 +2337,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def get_run(self, run_id: str) -> Optional[Dict[str, Any]]:
+    def get_run(self, run_id: str) -> dict[str, Any] | None:
         session = self._get_session()
         try:
             run = session.query(AgentRun).filter(AgentRun.id == run_id).first()
@@ -2342,7 +2345,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def list_runs(self, thread_id: str | None = None, limit: int = 30) -> List[Dict[str, Any]]:
+    def list_runs(self, thread_id: str | None = None, limit: int = 30) -> list[dict[str, Any]]:
         session = self._get_session()
         try:
             query = session.query(AgentRun)
@@ -2353,7 +2356,7 @@ class ContentStore:
         finally:
             session.close()
 
-    def append_run_event(self, run_id: str, event_type: str, payload: dict[str, Any]) -> Optional[int]:
+    def append_run_event(self, run_id: str, event_type: str, payload: dict[str, Any]) -> int | None:
         """Append a non-terminal event while the run is still active.
 
         The run-row lock serializes this check with terminal CAS transitions. If
@@ -2362,12 +2365,7 @@ class ContentStore:
         """
         session = self._get_session()
         try:
-            run = (
-                session.query(AgentRun)
-                .filter(AgentRun.id == run_id)
-                .with_for_update()
-                .first()
-            )
+            run = session.query(AgentRun).filter(AgentRun.id == run_id).with_for_update().first()
             if not run:
                 raise LookupError(f"Run {run_id} was not found")
             if run.status != "running":
@@ -2375,12 +2373,14 @@ class ContentStore:
                 return None
             seq = int(run.next_event_seq or 1)
             run.next_event_seq = seq + 1
-            session.add(AgentRunEvent(
-                run_id=run_id,
-                seq=seq,
-                event_type=event_type,
-                payload=json.dumps(payload, ensure_ascii=False),
-            ))
+            session.add(
+                AgentRunEvent(
+                    run_id=run_id,
+                    seq=seq,
+                    event_type=event_type,
+                    payload=json.dumps(payload, ensure_ascii=False),
+                )
+            )
             session.commit()
             return seq
         except Exception:
@@ -2400,7 +2400,7 @@ class ContentStore:
         total_prompt_tokens: int,
         total_completion_tokens: int,
         total_cost: float,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Atomically persist final content, complete the run, and append its event.
 
         Cancellation and completion serialize on the run row. If cancellation
@@ -2436,12 +2436,14 @@ class ContentStore:
             run.completed_at = run.completed_at or datetime.now()
             seq = int(run.next_event_seq or 1)
             run.next_event_seq = seq + 1
-            session.add(AgentRunEvent(
-                run_id=run_id,
-                seq=seq,
-                event_type="run_complete",
-                payload=json.dumps(event_payload, ensure_ascii=False),
-            ))
+            session.add(
+                AgentRunEvent(
+                    run_id=run_id,
+                    seq=seq,
+                    event_type="run_complete",
+                    payload=json.dumps(event_payload, ensure_ascii=False),
+                )
+            )
             session.commit()
             result = self._agent_run_to_dict(run)
             result["event_seq"] = seq
@@ -2461,7 +2463,7 @@ class ContentStore:
         event_type: str,
         payload: dict[str, Any],
         **fields: Any,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Compare-and-set a run state and append its event in one transaction.
 
         Returns ``None`` when another actor already moved the run out of an
@@ -2488,12 +2490,14 @@ class ContentStore:
                 run.completed_at = run.completed_at or datetime.now()
             seq = int(run.next_event_seq or 1)
             run.next_event_seq = seq + 1
-            session.add(AgentRunEvent(
-                run_id=run_id,
-                seq=seq,
-                event_type=event_type,
-                payload=json.dumps(payload, ensure_ascii=False),
-            ))
+            session.add(
+                AgentRunEvent(
+                    run_id=run_id,
+                    seq=seq,
+                    event_type=event_type,
+                    payload=json.dumps(payload, ensure_ascii=False),
+                )
+            )
             session.commit()
             result = self._agent_run_to_dict(run)
             result["event_seq"] = seq
@@ -2509,7 +2513,7 @@ class ContentStore:
         run_id: str,
         after_seq: int = 0,
         limit: int = 200,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         session = self._get_session()
         try:
             events = (
@@ -2532,7 +2536,7 @@ class ContentStore:
             session.close()
 
     @staticmethod
-    def _agent_run_to_dict(run: AgentRun) -> Dict[str, Any]:
+    def _agent_run_to_dict(run: AgentRun) -> dict[str, Any]:
         return {
             "id": run.id,
             "user_id": run.user_id,
@@ -2561,7 +2565,7 @@ class ContentStore:
         return title[:40] or "Untitled thread"
 
     @staticmethod
-    def _agent_message_to_dict(message: AgentMessage) -> Dict[str, Any]:
+    def _agent_message_to_dict(message: AgentMessage) -> dict[str, Any]:
         return {
             "id": message.id,
             "thread_id": message.thread_id,
@@ -2581,11 +2585,9 @@ class ContentStore:
         thread: AgentThread,
         session: Session,
         message_count: int | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if message_count is None:
-            message_count = (
-                session.query(AgentMessage).filter(AgentMessage.thread_id == thread.id).count()
-            )
+            message_count = session.query(AgentMessage).filter(AgentMessage.thread_id == thread.id).count()
         return {
             "id": thread.id,
             "title": thread.title,
@@ -2600,7 +2602,7 @@ class ContentStore:
         }
 
     @staticmethod
-    def _content_to_dict(content: Content) -> Dict[str, Any]:
+    def _content_to_dict(content: Content) -> dict[str, Any]:
         return {
             "id": content.id,
             "title": content.title,
@@ -2617,7 +2619,7 @@ class ContentStore:
         }
 
     @staticmethod
-    def _media_asset_to_dict(asset: MediaAsset) -> Dict[str, Any]:
+    def _media_asset_to_dict(asset: MediaAsset) -> dict[str, Any]:
         return {
             "id": asset.id,
             "content_id": asset.content_id,
@@ -2633,7 +2635,7 @@ class ContentStore:
         }
 
     @staticmethod
-    def _publication_to_dict(publication: PlatformPublication) -> Dict[str, Any]:
+    def _publication_to_dict(publication: PlatformPublication) -> dict[str, Any]:
         return {
             "id": publication.id,
             "content_id": publication.content_id,
@@ -2653,7 +2655,7 @@ class ContentStore:
         }
 
     @staticmethod
-    def _job_to_dict(job: Job) -> Dict[str, Any]:
+    def _job_to_dict(job: Job) -> dict[str, Any]:
         return {
             "id": job.id,
             "user_id": job.user_id,

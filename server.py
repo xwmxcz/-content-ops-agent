@@ -1,8 +1,8 @@
 """FastAPI development server entry point."""
+
 import uvicorn
 
 from src.utils import config
-
 
 if __name__ == "__main__":
     uvicorn.run(

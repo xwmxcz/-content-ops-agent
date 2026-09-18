@@ -3,8 +3,8 @@
 更新日期：2026-09-05。验证起始代码基线：`e7e9744`，本轮修复与验证证据随提交保留。
 
 本文件只保留当前状态。此前交接记录含互相矛盾的历史测试数和环境状态，已原样保存于
-[2026-09-04 归档](archive/WORKFLOW_CHECKPOINT_2026-09-04.md)。历史记录中的“恢复后第一件事”
-和“已完成”不覆盖本文件；详细实施历史仍见 [IMPROVEMENT_LOG.md](IMPROVEMENT_LOG.md)。
+[2026-09-04 归档](WORKFLOW_CHECKPOINT_2026-09-04.md)。历史记录中的“恢复后第一件事”
+和“已完成”不覆盖本文件；详细实施历史仍见 [IMPROVEMENT_LOG.md](../IMPROVEMENT_LOG.md)。
 
 ## 当前阶段
 
@@ -62,7 +62,7 @@ python3 scripts/verify_browser.py
 ```
 
 浏览器脚本所需镜像、浏览器安装、测试边界和清理策略见
-[BROWSER_VERIFICATION.md](BROWSER_VERIFICATION.md)。它创建自己的数据库和卷，
+[BROWSER_VERIFICATION.md](../BROWSER_VERIFICATION.md)。它创建自己的数据库和卷，
 可与使用 `content_ops_test` 的后端套件同时运行。
 
 ## 尚未闭环

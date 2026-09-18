@@ -1,4 +1,5 @@
 """Request correlation middleware for structured operational logs."""
+
 from __future__ import annotations
 
 import logging
@@ -9,7 +10,6 @@ from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.utils.structured_logging import log_event
-
 
 logger = logging.getLogger(__name__)
 

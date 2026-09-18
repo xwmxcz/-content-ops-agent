@@ -7,6 +7,7 @@ Run:
 Creates/reuses manual_calendar in that test database and scopes all business
 writes to its workspace. DATABASE_URL is never used as a fallback.
 """
+
 from __future__ import annotations
 
 import sys
@@ -16,14 +17,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.storage import ContentStore  # noqa: E402
-from src.storage.content_store import Content  # noqa: E402
-from src.storage.account_store import AccountStore  # noqa: E402
 from src.api.passwords import hash_password  # noqa: E402
+from src.storage import ContentStore  # noqa: E402
+from src.storage.account_store import AccountStore  # noqa: E402
+from src.storage.content_store import Content  # noqa: E402
 
 
 def main() -> int:
     import os
+
     test_db_url = os.environ.get("TEST_DATABASE_URL")
     if not test_db_url:
         print("[skip] TEST_DATABASE_URL not set (need a scratch PostgreSQL database)")
@@ -31,11 +33,11 @@ def main() -> int:
     system_store = ContentStore(database_url=test_db_url)
     accounts = AccountStore(system_store)
     user = accounts.get_user_by_username("manual_calendar") or accounts.create_user(
-        "manual_calendar", hash_password("Manual-calendar-test-only-2026"),
+        "manual_calendar",
+        hash_password("Manual-calendar-test-only-2026"),
     )
     store = system_store.for_user(user["id"])
     try:
-
         # Seed a test content item
         session = store.SessionLocal()
         try:
@@ -67,34 +69,27 @@ def main() -> int:
         try:
             event_id = store.save_calendar_event(content_id, "xiaohongshu", yesterday)
             print(f"  [FAIL] Expected rejection, but got event_id={event_id}")
-            test1_pass = False
         except ValueError as e:
             if "past" in str(e).lower() or "before" in str(e).lower():
                 print(f"  [PASS] Past date rejected: {e}")
-                test1_pass = True
             else:
                 print(f"  [FAIL] Wrong error: {e}")
-                test1_pass = False
 
         # Test 2: Today should be accepted
         print(f"\n[Test 2] Scheduling for today ({today})...")
         try:
             event_id = store.save_calendar_event(content_id, "xiaohongshu", today)
             print(f"  [PASS] Today accepted, event_id={event_id}")
-            test2_pass = True
         except Exception as e:
             print(f"  [FAIL] Unexpected error: {e}")
-            test2_pass = False
 
         # Test 3: Future date should be accepted
         print(f"\n[Test 3] Scheduling for tomorrow ({tomorrow})...")
         try:
             event_id = store.save_calendar_event(content_id, "xiaohongshu", tomorrow)
             print(f"  [PASS] Future date accepted, event_id={event_id}")
-            test3_pass = True
         except Exception as e:
             print(f"  [FAIL] Unexpected error: {e}")
-            test3_pass = False
 
         print("\n" + "=" * 70)
 

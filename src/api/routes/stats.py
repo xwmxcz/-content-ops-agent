@@ -3,7 +3,6 @@ from fastapi import APIRouter, Depends
 from src.api.dependencies import get_store
 from src.storage import ContentStore
 
-
 router = APIRouter()
 
 
