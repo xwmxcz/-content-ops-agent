@@ -359,6 +359,20 @@ import {
 } from '../api/jobs'
 import { useJobPolling } from '../composables/useJobPolling'
 import { usePipelineStream, type StreamConnectionState } from '../composables/usePipelineStream'
+import {
+  agentLabel,
+  contentTypeOptions,
+  formatToolArgs,
+  formatToolPreview,
+  isResearchStep,
+  modeOptions,
+  statusLabel,
+  statusToPill,
+  styleOptions,
+  toolEventsFor as resolveToolEvents,
+  workflowDescription,
+  type StudioMode
+} from '../composables/useStudioPresentation'
 import type { AgentRunPayload, AgentRunResponse, AgentStep } from '../api/agent'
 
 interface FinalContent {
@@ -369,59 +383,13 @@ interface FinalContent {
   tags: string[]
 }
 
-type Mode = 'dynamic' | 'workflow'
 type RunStatus = 'idle' | 'planning' | 'running' | 'completed' | 'failed' | 'cancelled'
 
 const route = useRoute()
 const router = useRouter()
 
-const contentTypeOptions = [
-  { label: '小红书', value: 'xiaohongshu' },
-  { label: '微博', value: 'weibo' },
-  { label: '博客文章', value: 'blog' },
-  { label: '视频脚本', value: 'video_script' },
-  { label: 'Twitter / X', value: 'twitter' }
-]
-
-const styleOptions = [
-  { label: '专业', value: 'professional' },
-  { label: '轻松', value: 'casual' },
-  { label: '营销', value: 'marketing' },
-  { label: '故事', value: 'storytelling' }
-]
-
-const QUICK_PROMPTS_BY_MODE: Record<Mode, string[]> = {
-  workflow: [],
-  dynamic: []
-}
-
-const quickPrompts = computed(() => QUICK_PROMPTS_BY_MODE[mode.value])
-void quickPrompts // kept for future re-introduction; not currently rendered
-
-const modeOptions = [
-  { label: '标准工作流', value: 'workflow' },
-  { label: '研究型 Pipeline', value: 'dynamic' }
-]
-
-const AGENT_LABELS: Record<string, string> = {
-  strategy: '策略',
-  writer: '初稿',
-  editor: '润色',
-  reviewer: '审核',
-  review: '审核',
-  researcher: '调研',
-  fact_checker: '事实校验'
-}
-
-const WORKFLOW_DESCRIPTIONS: Record<string, string> = {
-  strategy: '分析受众、角度、结构与转化意图',
-  writer: '把策略转成可编辑的第一版内容',
-  editor: '优化表达、节奏与平台适配',
-  review: '给出 1-100 分以及风险与改进建议'
-}
-
-const initialMode: Mode = route.query.mode === 'dynamic' ? 'dynamic' : 'workflow'
-const mode = ref<Mode>(initialMode)
+const initialMode: StudioMode = route.query.mode === 'dynamic' ? 'dynamic' : 'workflow'
+const mode = ref<StudioMode>(initialMode)
 
 const form = reactive({
   topic: '',
@@ -684,12 +652,6 @@ const dynamicSourcesValid = computed(() =>
   mode.value !== 'dynamic' || activeSourceCount.value > 0
 )
 
-const RESEARCH_AGENTS = new Set(['researcher', 'fact_checker'])
-
-function isResearchStep(agentId: string): boolean {
-  return RESEARCH_AGENTS.has(agentId)
-}
-
 const pipelineTitle = computed(() => {
   if (status.value === 'planning') return '正在规划研究步骤…'
   if (status.value === 'running') return '执行中…'
@@ -760,66 +722,13 @@ watch(mode, value => {
   }
 })
 
-function agentLabel(id: string): string {
-  return AGENT_LABELS[id] ?? id
-}
-
-function statusLabel(s: PipelinePlanStep['status']) {
-  const map: Record<PipelinePlanStep['status'], string> = {
-    pending: '待运行',
-    running: '运行中',
-    completed: '已完成',
-    failed: '失败',
-    skipped: '已跳过'
-  }
-  return map[s]
-}
-
-function statusToPill(s: PipelinePlanStep['status']) {
-  if (s === 'running') return 'running'
-  if (s === 'completed') return 'success'
-  if (s === 'failed') return 'failed'
-  return ''
-}
-
-function toolEventsFor(stepIndex: number): SubAgentToolEvent[] {
-  const live = stepToolEvents[stepIndex]
-  if (live && live.length) return live
-  const step = plan.value.find(s => s.index === stepIndex)
-  return step?.tool_events ?? []
-}
-
-function registerStepCard(_index: number, _el: HTMLElement | null): void {
-  // No-op now that step detail lives in a dialog. Kept so the template's
-  // legacy :ref="..." (if any other path still passes through) doesn't error.
+function toolEventsFor(stepIndex: number) {
+  return resolveToolEvents(stepIndex, stepToolEvents, plan.value)
 }
 
 function scrollToStep(index: number): void {
   stepDialogIndex.value = index
   stepDialogOpen.value = true
-}
-
-function formatToolArgs(args: Record<string, unknown>): string {
-  const entries = Object.entries(args || {})
-  if (!entries.length) return ''
-  return entries
-    .map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`)
-    .join(', ')
-}
-
-function formatToolPreview(preview?: string | null): string {
-  const trimmed = (preview || '').trim()
-  if (!trimmed) return '完成'
-  try {
-    const parsed = JSON.parse(trimmed)
-    if (Array.isArray(parsed) && parsed.length === 0) return '无结果'
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.keys(parsed).length === 0) {
-      return '无结果'
-    }
-  } catch {
-    // Plain text previews are displayed as-is.
-  }
-  return trimmed
 }
 
 function resetWorkspace() {
@@ -931,7 +840,7 @@ async function runWorkflow() {
   plan.value = ['strategy', 'writer', 'editor', 'review'].map((id, idx) => ({
     index: idx + 1,
     agent_id: id as SubAgentId,
-    description: WORKFLOW_DESCRIPTIONS[id] || '',
+    description: workflowDescription(id),
     instruction: '',
     inputs_from: [],
     status: idx === 0 ? 'running' : 'pending',

@@ -285,6 +285,16 @@ import {
 } from '@element-plus/icons-vue'
 import ModelSelector from '../components/ModelSelector.vue'
 import { useChatStore } from '../stores/chat'
+import {
+  eventStatusLabel,
+  hasArgs,
+  intentConfidence,
+  intentLabel,
+  planMarker,
+  prettyArgs,
+  prettyOutput,
+  summarizeEvent
+} from '../composables/useChatPresentation'
 import type { AgentThread, ChatIntent, ChatIntentName, ChatToolEvent, PlanStep } from '../api/agent'
 
 const tools = [
@@ -460,73 +470,6 @@ async function scrollToBottom() {
   }
 }
 
-function hasArgs(args: Record<string, unknown> | undefined) {
-  return !!args && Object.keys(args).length > 0
-}
-
-function prettyArgs(args: Record<string, unknown> | undefined) {
-  if (!args) return ''
-  try {
-    return JSON.stringify(args, null, 2)
-  } catch {
-    return String(args)
-  }
-}
-
-function prettyOutput(output: string | undefined) {
-  if (!output) return ''
-  const trimmed = output.trim()
-  if (!trimmed) return ''
-  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-    try {
-      return JSON.stringify(JSON.parse(trimmed), null, 2)
-    } catch {
-      return output
-    }
-  }
-  return output
-}
-
-function eventStatusLabel(status: ChatToolEvent['status']) {
-  if (status === 'completed') return 'ok'
-  if (status === 'proposed') return 'confirm'
-  return 'failed'
-}
-
-function summarizeEvent(event: ChatToolEvent) {
-  if (event.status === 'failed') {
-    return event.error || event.output || 'failed'
-  }
-  const text = (event.output || '').replace(/\s+/g, ' ').trim()
-  return text.length > 80 ? `${text.slice(0, 80)}…` : text
-}
-
-function intentLabel(name: ChatIntentName) {
-  const labels: Record<ChatIntentName, string> = {
-    content_create: '新建内容',
-    content_refine: '内容改写',
-    title_generate: '标题生成',
-    seo_optimize: 'SEO 优化',
-    content_search: '内容检索',
-    topic_strategy: '选题策略',
-    performance_review: '效果复盘',
-    calendar_view: '查看日历',
-    schedule_propose: '排期提案',
-    schedule_commit: '确认排期',
-    memory_update: '记忆更新',
-    action_confirm: '确认操作',
-    smalltalk: '闲聊',
-    clarify: '需要澄清',
-    unknown: '未分类'
-  }
-  return labels[name] || name
-}
-
-function intentConfidence(value: number | undefined) {
-  const ratio = typeof value === 'number' ? value : 0
-  return `${Math.round(ratio * 100)}%`
-}
-
 function studioTopicFor(index: number) {
   for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
     const message = chat.messages[cursor]
@@ -546,17 +489,6 @@ function openInStudio(index: number, intent: ChatIntent) {
       research_focus: researchFocus || undefined
     }
   })
-}
-
-function planMarker(status: PlanStep['status']) {
-  const map: Record<PlanStep['status'], string> = {
-    pending: '○',
-    running: '◐',
-    completed: '●',
-    failed: '✗',
-    skipped: '–'
-  }
-  return map[status] ?? '○'
 }
 
 function threadLabel(threadId: string) {
