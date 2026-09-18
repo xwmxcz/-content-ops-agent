@@ -12,7 +12,9 @@
 import { chromium } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
 
-const BASE = 'http://127.0.0.1:5173'
+// Vite binds to `localhost` by default, which resolves to IPv6 here; using
+// 127.0.0.1 fails to connect. Override with BASE_URL if yours differs.
+const BASE = process.env.BASE_URL || 'http://localhost:5173'
 const OUT = 'e2e/shots'
 mkdirSync(OUT, { recursive: true })
 
@@ -51,15 +53,18 @@ await page.evaluate(t => localStorage.setItem('content_ops_agent_auth_token', t)
 // necessarily the database the API is pointed at.
 if (userId && process.env.SEED_THREAD !== '0') {
   const { execFileSync } = await import('node:child_process')
+  // Override when your database is not the default compose container.
+  const container = process.env.SEED_CONTAINER || 'content-ops-agent-postgres-1'
   const db = process.env.SEED_DB || 'content_ops'
   const sql = `INSERT INTO agent_threads (id, user_id, title, pinned, archived, title_pinned, created_at, updated_at)
      VALUES ('visual-thread', '${userId}', '视觉回归测试会话', false, false, false, now(), now())
      ON CONFLICT (id) DO UPDATE SET user_id = EXCLUDED.user_id;`
   try {
-    execFileSync('docker', ['exec', 'content-ops-test-pg', 'psql', '-U', 'content_ops', '-d', db, '-c', sql], { stdio: 'ignore' })
-    console.log(`seeded one thread for ${userId} into ${db}`)
+    execFileSync('docker', ['exec', container, 'psql', '-U', 'content_ops', '-d', db, '-c', sql], { stdio: 'ignore' })
+    console.log(`seeded one thread for ${userId} into ${container}/${db}`)
   } catch (e) {
-    console.log('seed skipped:', String(e.message).split(String.fromCharCode(10))[0])
+    console.log('seed skipped (set SEED_CONTAINER/SEED_DB if your DB differs):',
+      String(e.message).split(String.fromCharCode(10))[0])
   }
 }
 
