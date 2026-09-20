@@ -135,6 +135,19 @@ class Config:
     # Hard ceiling on one subscription. The client reconnects with `after_seq`, so
     # this bounds server-side resource hold time without losing events.
     SSE_STREAM_TIMEOUT_SECONDS = int(os.getenv("SSE_STREAM_TIMEOUT_SECONDS", "600"))
+    # Streamed tokens are coalesced before they are persisted: every run event is
+    # a transaction that locks the run row, and one per token meant ~2000 of them
+    # for a single draft. The first delta of a step is never held back. 0 seconds
+    # disables coalescing.
+    SSE_TOKEN_BATCH_SECONDS = float(os.getenv("SSE_TOKEN_BATCH_SECONDS", "0.15"))
+    SSE_TOKEN_BATCH_MAX_CHARS = int(os.getenv("SSE_TOKEN_BATCH_MAX_CHARS", "400"))
+    # Streams are woken by PostgreSQL NOTIFY instead of sweeping the event table
+    # every SSE_POLL_INTERVAL_SECONDS. The table stays the source of truth: a
+    # notification only says "look now", and while the listener is healthy the
+    # sweep slows to this fallback interval, which bounds the delay of a lost
+    # notification. If the listener is down, streams return to the fast sweep.
+    SSE_NOTIFY_ENABLED = os.getenv("SSE_NOTIFY_ENABLED", "true").lower() == "true"
+    SSE_NOTIFY_FALLBACK_POLL_SECONDS = float(os.getenv("SSE_NOTIFY_FALLBACK_POLL_SECONDS", "2.0"))
 
     # Media and MCP integration
     MEDIA_STORAGE_ROOT = os.getenv("MEDIA_STORAGE_ROOT", "data/media")

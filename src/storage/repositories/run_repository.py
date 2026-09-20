@@ -9,6 +9,9 @@ import logging
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
 from src.storage.models import (
     AgentRun,
     AgentRunEvent,
@@ -17,6 +20,24 @@ from src.storage.models import (
 from src.storage.repositories.base import RepositoryMixin
 
 logger = logging.getLogger(__name__)
+
+# The SSE hub (src/api/services/run_event_hub.py) listens on this channel.
+RUN_EVENTS_CHANNEL = "run_events"
+
+
+def _notify_run_event(session: Session, run_id: str) -> None:
+    """Wake SSE streams of this run once the surrounding transaction commits.
+
+    PostgreSQL delivers a NOTIFY only on commit and drops it on rollback, so a
+    stream can never be woken for an event it cannot read yet. That only holds on
+    the session's own connection, which is why this does not open another one.
+
+    It goes through the Core connection rather than ``session.execute`` because
+    workspace sessions reject non-ORM statements to keep raw SQL away from tenant
+    tables. This statement reads and writes no table, so there is nothing for
+    that guard to scope; ``tenancy`` uses the same route for its own checks.
+    """
+    session.connection().execute(select(func.pg_notify(RUN_EVENTS_CHANNEL, run_id)))
 
 
 class RunRepositoryMixin(RepositoryMixin):
@@ -128,6 +149,7 @@ class RunRepositoryMixin(RepositoryMixin):
                     payload=json.dumps(payload, ensure_ascii=False),
                 )
             )
+            _notify_run_event(session, run_id)
             session.commit()
             return seq
         except Exception:
@@ -191,6 +213,7 @@ class RunRepositoryMixin(RepositoryMixin):
                     payload=json.dumps(event_payload, ensure_ascii=False),
                 )
             )
+            _notify_run_event(session, run_id)
             session.commit()
             result = self._agent_run_to_dict(run)
             result["event_seq"] = seq
@@ -245,6 +268,7 @@ class RunRepositoryMixin(RepositoryMixin):
                     payload=json.dumps(payload, ensure_ascii=False),
                 )
             )
+            _notify_run_event(session, run_id)
             session.commit()
             result = self._agent_run_to_dict(run)
             result["event_seq"] = seq

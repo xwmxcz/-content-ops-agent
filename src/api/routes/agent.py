@@ -27,6 +27,7 @@ from src.api.schemas.agent import (
 from src.api.services.agent_pipeline import PipelineExecutionError, run_agent_pipeline
 from src.api.services.chat_agent import ChatAgentExecutionError, ChatAgentService
 from src.api.services.dynamic_pipeline import DynamicPipeline
+from src.api.services.run_event_hub import get_run_event_hub
 from src.api.services.tool_policy import SIDE_EFFECT_TOOLS
 from src.jobs.queue import JobQueueError, enqueue_pipeline_run
 from src.llm.litellm_client import LiteLLMClient
@@ -142,8 +143,13 @@ async def stream_pipeline_run(
     after_seq: int | None = Query(default=None, ge=0),
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
 ):
-    if not store.get_run(run_id):
+    # The store is synchronous. Its queries run in a worker thread so that one
+    # open stream cannot stall the event loop that serves every other request.
+    if not await asyncio.to_thread(store.get_run, run_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Run {run_id} was not found")
+
+    hub = get_run_event_hub()
+    hub.ensure_started()
 
     async def event_stream():
         last_seq = after_seq if after_seq is not None else _parse_last_event_id(last_event_id)
@@ -154,20 +160,27 @@ async def stream_pipeline_run(
         # Include a named ping so the browser can refresh its silence timer.
         # No id is emitted: heartbeats never consume a persisted event sequence.
         last_activity = time.time()
-        while time.time() < deadline:
-            events = store.list_run_events(run_id, after_seq=last_seq, limit=100)
-            for evt in events:
-                last_seq = evt["seq"]
-                yield f"id: {evt['seq']}\nevent: {evt['event_type']}\ndata: {evt['payload']}\n\n"
-                if evt["event_type"] in terminal:
-                    return
-            now = time.time()
-            if events:
-                last_activity = now
-            elif now - last_activity >= config.SSE_KEEPALIVE_SECONDS:
-                yield ": keepalive\nevent: ping\ndata: {}\n\n"
-                last_activity = now
-            await asyncio.sleep(config.SSE_POLL_INTERVAL_SECONDS)
+        with hub.subscribe(run_id) as woken:
+            while time.time() < deadline:
+                # Cleared before the read, not after: a notification that lands
+                # while the query runs must still cut the next wait short.
+                woken.clear()
+                events = await asyncio.to_thread(store.list_run_events, run_id, after_seq=last_seq, limit=100)
+                for evt in events:
+                    last_seq = evt["seq"]
+                    yield f"id: {evt['seq']}\nevent: {evt['event_type']}\ndata: {evt['payload']}\n\n"
+                    if evt["event_type"] in terminal:
+                        return
+                now = time.time()
+                if events:
+                    last_activity = now
+                    # A full page means more rows are waiting; do not sleep on them.
+                    if len(events) >= 100:
+                        continue
+                elif now - last_activity >= config.SSE_KEEPALIVE_SECONDS:
+                    yield ": keepalive\nevent: ping\ndata: {}\n\n"
+                    last_activity = now
+                await hub.wait(woken)
 
     return StreamingResponse(
         event_stream(),

@@ -4,6 +4,10 @@ import os
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("SCHEMA_MANAGEMENT", "create")
 os.environ.setdefault("AUTH_SECRET_KEY", "test-signing-key-with-at-least-32-characters")
+# Opening any SSE stream would otherwise start a listener thread that dials
+# DATABASE_URL, including in the suites that run without a database. The hub's
+# own tests enable it explicitly against the disposable PostgreSQL.
+os.environ.setdefault("SSE_NOTIFY_ENABLED", "false")
 
 import pytest
 

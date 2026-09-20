@@ -44,6 +44,14 @@ x-app-env: &app-env
   # a dead connection.
   SSE_KEEPALIVE_SECONDS: ${SSE_KEEPALIVE_SECONDS:-15}
   SSE_POLL_INTERVAL_SECONDS: ${SSE_POLL_INTERVAL_SECONDS:-0.4}
+  # Streams are woken by PostgreSQL NOTIFY; each API process holds one extra
+  # connection to listen. While that listener is up the table sweep slows to the
+  # fallback interval, and returns to SSE_POLL_INTERVAL_SECONDS whenever it is not.
+  SSE_NOTIFY_ENABLED: ${SSE_NOTIFY_ENABLED:-true}
+  SSE_NOTIFY_FALLBACK_POLL_SECONDS: ${SSE_NOTIFY_FALLBACK_POLL_SECONDS:-2.0}
+  # Streamed tokens are persisted in batches rather than one transaction each.
+  SSE_TOKEN_BATCH_SECONDS: ${SSE_TOKEN_BATCH_SECONDS:-0.15}
+  SSE_TOKEN_BATCH_MAX_CHARS: ${SSE_TOKEN_BATCH_MAX_CHARS:-400}
   SSE_STREAM_TIMEOUT_SECONDS: ${SSE_STREAM_TIMEOUT_SECONDS:-600}
   MEDIA_STORAGE_ROOT: /app/data/media
   MEDIA_MAX_IMAGE_COUNT: ${MEDIA_MAX_IMAGE_COUNT:-9}

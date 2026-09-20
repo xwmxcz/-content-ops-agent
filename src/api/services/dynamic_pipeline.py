@@ -22,10 +22,12 @@ Hard guards:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from src.api.schemas.agent import (
@@ -102,6 +104,48 @@ REVISION_SYSTEM_PROMPT = (
 
 class PipelineExecutionError(RuntimeError):
     pass
+
+
+class _TokenBatcher:
+    """Coalesces one step's streamed deltas into fewer persisted events.
+
+    Every run event is a transaction that locks the run row, so persisting each
+    delta cost about one transaction per token. Clients append ``delta`` to the
+    step's text, which makes a joined delta indistinguishable from the pieces.
+
+    The first delta is emitted at once so time-to-first-token is unchanged. The
+    rest is flushed when the interval or the size cap is reached, and by the
+    caller before any other event of the step so the event order is preserved.
+    """
+
+    def __init__(self, emit: Callable[[str], Awaitable[None]]) -> None:
+        self._emit = emit
+        self._parts: list[str] = []
+        self._chars = 0
+        self._last_flush: float | None = None
+
+    async def add(self, delta: str) -> None:
+        if not delta:
+            return
+        self._parts.append(delta)
+        self._chars += len(delta)
+        interval = config.SSE_TOKEN_BATCH_SECONDS
+        if (
+            interval <= 0
+            or self._last_flush is None
+            or self._chars >= config.SSE_TOKEN_BATCH_MAX_CHARS
+            or time.monotonic() - self._last_flush >= interval
+        ):
+            await self.flush()
+
+    async def flush(self) -> None:
+        if not self._parts:
+            return
+        delta = "".join(self._parts)
+        self._parts = []
+        self._chars = 0
+        self._last_flush = time.monotonic()
+        await self._emit(delta)
 
 
 class DynamicPipeline:
@@ -210,16 +254,24 @@ class DynamicPipeline:
             started = time.perf_counter()
             success = True
             step_tool_events: list[dict[str, Any]] = []
+
+            async def emit_tokens(delta: str, _idx=step.index):
+                await self._emit(run_id, "step_token", {"index": _idx, "delta": delta})
+
+            tokens = _TokenBatcher(emit_tokens)
             try:
                 if spec is None:
                     raise ValueError(f"Unknown agent_id: {step.agent_id}")
 
-                async def token_sink(delta: str, _idx=step.index):
-                    await self._emit(run_id, "step_token", {"index": _idx, "delta": delta})
-
                 async def tool_sink(
-                    event_type: str, payload: dict[str, Any], _idx=step.index, _events=step_tool_events
+                    event_type: str,
+                    payload: dict[str, Any],
+                    _idx=step.index,
+                    _events=step_tool_events,
+                    _tokens=tokens,
                 ):
+                    # Text streamed before a tool call must reach clients before it.
+                    await _tokens.flush()
                     enriched = {"index": _idx, **payload}
                     if event_type == "tool_call_result":
                         _events.append(
@@ -240,10 +292,11 @@ class DynamicPipeline:
                     provider=provider,
                     model=request.model or config.get_model(provider),
                     max_tokens=request.max_tokens,
-                    token_sink=token_sink,
+                    token_sink=tokens.add,
                     tool_sink=tool_sink,
                     allowed_tools=research_tools if step.agent_id in ("researcher", "fact_checker") else None,
                 )
+                await tokens.flush()
                 duration = int((time.perf_counter() - started) * 1000)
                 cost = estimate_cost(litellm_model, p_tok, c_tok)
 
@@ -280,6 +333,9 @@ class DynamicPipeline:
                 duration = int((time.perf_counter() - started) * 1000)
                 step.status = "failed"
                 step.duration_ms = duration
+                # Whatever was streamed before the failure is still part of the
+                # record, and must precede the event that ends the step.
+                await tokens.flush()
                 await self._emit(
                     run_id,
                     "step_failed",
@@ -832,6 +888,8 @@ class DynamicPipeline:
     # -- emit -------------------------------------------------------------
 
     async def _emit(self, run_id: str, event_type: str, payload: dict[str, Any]) -> None:
-        # Always inline-write: tests expect events visible immediately after .run() returns.
-        # SSE consumers always read from DB so latency is dominated by the polling interval anyway.
-        self.store.append_run_event(run_id, event_type, payload)
+        # Awaited, so events are durable and ordered by the time .run() returns. The
+        # write is a blocking transaction that takes the run-row lock; in
+        # `background` mode this coroutine shares the API's event loop, so running
+        # it inline stalled every other request and stream for its duration.
+        await asyncio.to_thread(self.store.append_run_event, run_id, event_type, payload)

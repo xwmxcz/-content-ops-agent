@@ -1,5 +1,48 @@
 # Improvement Log
 
+## 2026-09-20 — 流水线事件推送：token 合批、移出事件循环、NOTIFY 唤醒
+
+下文历史记录里的残余风险第 5 条（“`SSE_POLL_INTERVAL_SECONDS` 仍是轮询”）在此关闭；读代码时还发现两个比轮询更重的问题。
+
+1. **每个 token 一次事务**：`token_sink` 对每个流式增量调用 `append_run_event`，后者要锁 run 行、插入、提交。
+   修复：`_TokenBatcher` 在生产端合批——步骤的第一个增量立即写出（首 token 延迟不变），其余按
+   `SSE_TOKEN_BATCH_SECONDS`（0.15）或 `SSE_TOKEN_BATCH_MAX_CHARS`（400）刷出；在任何工具事件、
+   `step_complete`、`step_failed` 之前强制刷出，事件顺序不变。前端本来就是把 `delta` 追加到步骤文本，合批对它透明。
+2. **同步数据库调用跑在事件循环上**：写入端 `_emit` 和读取端 SSE 生成器都是。`background` 模式下被阻塞的就是
+   API 自己的事件循环。两处都改为 `asyncio.to_thread`，仍然逐个 await，所以“`run()` 返回时事件已落库且有序”的契约不变。
+3. **轮询改为唤醒**：写入方在插入事件的**同一事务**里 `pg_notify(run_id)`（提交才投递、回滚即丢弃，
+   所以流不会为读不到的事件被唤醒）；每个 API 进程一个监听线程，把通知转成对应 run 的 `asyncio.Event`。
+   事件表仍是唯一事实来源：通知只表示“现在去读”，可以丢。监听健康时兜底轮询放慢到
+   `SSE_NOTIFY_FALLBACK_POLL_SECONDS`（2.0），监听断开时自动回到原来的 0.4 秒；重连后唤醒所有流。
+   失去监听只会退化回旧行为，不影响正确性。
+
+两个实现上的取舍：
+
+- 监听用**线程 + 同步连接**而不是 psycopg 的异步连接，因为后者不能跑在 Windows 默认的 Proactor 事件循环上，而本项目在 Windows 上开发。
+- 租户会话会拒绝一切非 ORM 语句（防止裸 SQL 绕过工作区隔离），这道防线没有动。`pg_notify` 不读写任何表、
+  没有可隔离的数据，且必须在会话自己的连接上才具备事务性，所以走 `session.connection()`——`tenancy.py` 自己做引用校验时用的是同一条路。
+
+实测（本机一次性 PostgreSQL 16）：
+
+```text
+1500 个 token 的流      每 token 一个事件 1500 次事务  ->  合批后 152 次
+空闲流 10 秒            纯轮询 25 次查询               ->  NOTIFY + 2s 兜底 5 次
+新事件被流读到的延迟    纯轮询 345 ms                  ->  NOTIFY 17 ms
+```
+
+验证：新增 `tests/test_run_event_delivery.py` 18 个用例（合批 6、脚本化连接下的 hub 6、真实 PostgreSQL 4、
+流水线顺序 2）。把两种轮询都调到 60 秒来测 NOTIFY，使“通知没到”只能表现为测试失败；临时去掉 `pg_notify`
+时依赖它的 3 个用例如期失败。第一版基准脚本给出过 2053 ms 的“延迟”，查明是测量竞态
+（读取计数在提交之后才取基线，而唤醒可以早于提交调用返回），修正后为 17 ms。
+
+未做 / 残余：
+
+- 流水线里其余低频的同步 store 调用（`get_run`、`update_run`、checkpoint，每步一次量级）仍在事件循环上。
+- 合批只在新 token 到来时检查时间，没有独立定时器；模型停顿期间，最后不足一个间隔的文本会等到下一个 token 或步骤结束才写出。
+- 经过事务级连接池（如 PgBouncer transaction 模式）时 NOTIFY 不可用，需直连或关闭 `SSE_NOTIFY_ENABLED`，已写入运维文档。
+- 没有做多流并发的负载测试（原计划的 k6 10/50/100 路 SSE）；上面的数字是单流测量。
+- Chat 仍是一次性返回，流式输出是下一步。
+
 ## 2026-09-19 — 效果数据录入（补上分析链路缺失的写入端）
 
 `content_metrics` 一直只有读取方：`aggregate_performance`、`list_optimization_candidates`
