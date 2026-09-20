@@ -156,10 +156,14 @@ class RunEventHub:
             try:
                 with self._connect() as connection:
                     connection.execute(f"LISTEN {RUN_EVENTS_CHANNEL}")
+                    # Wake first, then report healthy. In the other order a caller
+                    # that saw `healthy` could still receive this catch-up wake and
+                    # mistake it for a notification. A stream that subscribes in
+                    # between loses nothing: it reads the table before it waits.
+                    self._wake_all()
                     self._healthy.set()
                     delay = _RECONNECT_INITIAL_SECONDS
                     log_event(logger, "run_event_listener_connected")
-                    self._wake_all()
                     while not self._stop.is_set():
                         for notification in connection.notifies(timeout=_LISTEN_SLICE_SECONDS):
                             self.publish(notification.payload)

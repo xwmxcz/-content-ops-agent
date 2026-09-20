@@ -247,7 +247,9 @@ async def test_reconnect_wakes_every_stream_because_notifications_were_missed(sc
         script.fail_next_listen = True
         await _until(lambda: script.connects >= 2 and a.is_set() and b.is_set())
 
-    assert hub.healthy
+    # The hub wakes the streams first and reports healthy right after, so this is
+    # waited for rather than asserted at the instant the wake is observed.
+    await _until(lambda: hub.healthy)
 
 
 async def test_unsubscribing_forgets_the_run_and_stop_ends_the_thread(scripted_hub):
