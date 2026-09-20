@@ -418,6 +418,15 @@ export async function getPipelineRun(runId: string) {
   return data
 }
 
+/**
+ * Starts a failed run again from its last completed step. The run keeps its id
+ * and its event log, so the caller reopens the same stream at its cursor.
+ */
+export async function resumePipelineRun(runId: string) {
+  const { data } = await api.post<PipelineRunHandle>(`/agent/runs/${runId}/resume`)
+  return data
+}
+
 export async function cancelPipelineRun(runId: string) {
   const { data } = await api.delete<{ run_id: string; status: string; cancelled: boolean }>(
     `/agent/runs/${runId}`
