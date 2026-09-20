@@ -1,5 +1,48 @@
 # Improvement Log
 
+## 2026-09-20 — 流水线断点续跑
+
+P1-04 留下了 checkpoint 的表、仓储层和 `src/jobs/checkpoint.py`，但 `DynamicPipeline` 从未调用过它们（下文 P1-04
+残余第 2 条）。动手时发现缺的不止接线：流水线 run **根本没有第二次执行的入口**——失败即终态，run 行也只存了
+主题、平台、风格，没存长度、关键词、研究来源和 token 上限，想重跑也不知道原请求是什么。所以这一轮补的是一条完整链路：
+
+1. **存请求**：`agent_runs.request_json`（迁移 `0010_agent_run_request`，可空）。此前创建的 run 没有这一列的值，
+   续跑接口会明确拒绝（409），不去猜参数。
+2. **存进度**：计划在生成和每次修订时写回 run 行；每个完成的步骤写一条 checkpoint（输出、耗时、token、费用、工具事件）。
+   checkpoint **先于** `step_complete` 事件写入：两者之间进程死掉，续跑时不会重跑这一步，恢复出的计划里也仍有它；
+   反过来的顺序会让这一步执行并计费两次。
+3. **恢复**：`run()` 开头若发现 run 行已有计划，就跳过规划器，用 checkpoint 把已完成步骤填回去，其余一律回到
+   `pending`——计划行记得的状态不算数，只有 checkpoint 算数，所以失败的、跑到一半的步骤都会重跑。
+   checkpoint 的 `step_name` 与计划里该序号的 `agent_id` 不一致时不采信。恢复出的步骤照常喂给下游步骤的提示词，
+   token 和费用照常计入总数。成功或取消后清掉 checkpoint。
+4. **入口**：`POST /api/agent/runs/{id}/resume`。只接受 `failed`；用 compare-and-set 把状态改回 `running` 并写入
+   `run_resumed` 事件，两个并发的续跑请求只有一个能入队；入队失败则退回 `failed`。同样受 LLM 预算限制。
+   run 的 id 和事件日志都不变，客户端从自己的游标继续读同一条流。
+5. **SSE 回放**：续跑后的日志里会留着那条旧的 `run_failed`。回放时若它的下一条是 `run_resumed`，服务端不再发送它，
+   否则从头回放的客户端会在半路挂断。判断“下一条”时考虑了分页边界。
+6. **前端**：Studio 失败提示里出现“从断点继续”，并写明已完成的 N 步不会重跑。接受后复用 `usePipelineStream.resume()`
+   带游标重开；新增 `run_resumed` 事件处理，服务端随后发来的 `plan_ready` 带着已完成步骤的输出，原有的整体替换逻辑直接可用。
+
+顺带改掉的一个行为：**所有内容步骤都失败的 run 以前会“成功”**。步骤失败只记 `step_failed`，循环继续；最后
+`_select_final_output(...) or request.topic` 会把研究笔记、甚至主题字符串本身当作正文保存成一篇内容，run 标为 `completed`。
+供应商宕机时，这正是最常见的失败形态，而它恰恰不会进入 `failed`，也就无从续跑。现在没有任何 writer/editor 完成时，
+run 以 `run_failed`（带 `code: "no_content"`，前端据此用中文说明原因）结束、不保存内容、保留 checkpoint。writer 成功而 editor 失败仍按原样用初稿完成。
+
+另修一处上一轮留下的测试竞态：监听线程先置 `healthy` 再做“重连后全体唤醒”，看到 `healthy` 的调用方仍可能收到这次唤醒。
+改为先唤醒、后报健康；中间订阅的流不会丢东西，因为流总是先读表再等待。
+
+验证：新增 `tests/test_pipeline_resume.py` 12 个用例（真实 PostgreSQL），`test_sse_stream.py` 增 3 个，
+`usePipelineStream.spec.ts` 增 1 个。临时关掉恢复逻辑时，依赖它的 4 个用例如期失败。
+
+未做 / 残余：
+
+- **worker 被杀死的 run 仍会永远停在 `running`**。流水线 run 不走 jobs 表，没有租约也没有 reaper 覆盖，
+  所以它进不了 `failed`，也就点不了续跑。需要给 run 加心跳，或把流水线并入带租约的 job 体系。这是剩下的最大缺口。
+- 只有失败可续跑；取消是终态。
+- 续跑沿用原请求和原模型。想换模型重跑剩余步骤，目前只能新建 run。
+- 步骤内部不续跑：写到一半失败的 writer 从头重写。
+- 失败步骤消耗的 token 不计入总数（此前即如此）。
+
 ## 2026-09-20 — Chat 流式输出
 
 `POST /api/agent/chat` 一次性返回整条回复，带意图识别、规划和多轮工具调用的回合可能十几秒没有任何反馈。
@@ -1290,7 +1333,7 @@ NOTE    prometheus_client 未安装，metrics 优雅降级为 NoOp（与 Phase 2
 ### 残余风险
 
 1. **checkpoint 不是幂等替代品**：步骤 commit 与 checkpoint 写入之间崩溃 → 步骤已完成但未记录，重试会重跑。写业务数据的步骤必须继续依赖 P1-02 账本。
-2. **`_run_pipeline_job_async` 尚未接入 checkpoint**：本轮提供 checkpoint 基础设施与 store/service 层，DynamicPipeline 的分步接线未做（会改动 Phase 0 已审查的主路径，超出本任务边界）。当前 pipeline 失败仍从头重跑。
+2. **`_run_pipeline_job_async` 尚未接入 checkpoint**：本轮提供 checkpoint 基础设施与 store/service 层，DynamicPipeline 的分步接线未做（会改动 Phase 0 已审查的主路径，超出本任务边界）。当前 pipeline 失败仍从头重跑。（已于 2026-09-20“流水线断点续跑”关闭；当时的实际情况是失败后没有任何重跑入口。）
 3. **background 模式无独立队列**：reaper 回收后作业已回到 `queued`，但 background 模式下没有队列可推送，依赖下一次 enqueue 路径拾取。生产用 RQ 模式不受影响。
 4. **reaper 尚未挂进 API/worker 启动**：目前是 CLI（`--loop` 可常驻）。接入 lifespan 会改动启动路径，留待部署时决定用 sidecar 还是进程内 task。
 5. **心跳与租约时长的比例需按部署调**：默认 30s/300s（10 倍余量）。数据库延迟高的环境需同步调大租约。
