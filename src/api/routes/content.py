@@ -5,10 +5,14 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, stat
 
 from src.api.dependencies import enforce_llm_budget, get_litellm_client, get_store
 from src.api.schemas.content import (
+    ContentMetricsRequest,
+    ContentMetricsResponse,
     ContentResponse,
     ContentSummary,
     GenerateRequest,
     GenerateResponse,
+    MetricsImportRequest,
+    MetricsImportResponse,
     RefineRequest,
     SeoRequest,
     TextResult,
@@ -60,6 +64,56 @@ def delete_content(content_id: int = Path(..., gt=0), store: ContentStore = Depe
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Content not found")
     _delete_local_media_files(content_id, deleted.get("media_assets", []))
     return {"deleted": True}
+
+
+@router.get("/{content_id}/metrics", response_model=list[ContentMetricsResponse])
+def list_content_metrics(content_id: int = Path(..., gt=0), store: ContentStore = Depends(get_store)) -> list[dict]:
+    metrics = store.list_content_metrics(content_id)
+    if metrics is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Content not found")
+    return metrics
+
+
+@router.put("/{content_id}/metrics", response_model=ContentMetricsResponse)
+def record_content_metrics(
+    request: ContentMetricsRequest,
+    content_id: int = Path(..., gt=0),
+    store: ContentStore = Depends(get_store),
+) -> dict:
+    """Set one platform's current totals. PUT because repeating it changes nothing."""
+    recorded = store.record_content_metrics(
+        content_id,
+        request.platform,
+        views=request.views,
+        likes=request.likes,
+        comments=request.comments,
+        shares=request.shares,
+    )
+    if recorded is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Content not found")
+    return recorded
+
+
+@router.post("/metrics/import", response_model=MetricsImportResponse)
+def import_content_metrics(request: MetricsImportRequest, store: ContentStore = Depends(get_store)) -> dict:
+    """Record a spreadsheet's worth of platform numbers in one request."""
+    recorded = 0
+    missing: list[int] = []
+    for row in request.rows:
+        result = store.record_content_metrics(
+            row.content_id,
+            row.platform,
+            views=row.views,
+            likes=row.likes,
+            comments=row.comments,
+            shares=row.shares,
+        )
+        if result is None:
+            if row.content_id not in missing:
+                missing.append(row.content_id)
+        else:
+            recorded += 1
+    return {"recorded": recorded, "missing_content_ids": missing}
 
 
 @router.post("/generate", response_model=GenerateResponse, status_code=status.HTTP_201_CREATED)

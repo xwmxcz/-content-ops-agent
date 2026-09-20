@@ -401,6 +401,91 @@ class ContentRepositoryMixin(MediaRepositoryMixin, RepositoryMixin):
         finally:
             session.close()
 
+    def list_content_metrics(self, content_id: int) -> list[dict[str, Any]] | None:
+        """Recorded numbers per platform, or None when the content is not in this workspace."""
+        session = self._get_session()
+        try:
+            if session.query(Content.id).filter(Content.id == content_id).first() is None:
+                return None
+            rows = (
+                session.query(ContentMetrics)
+                .filter(ContentMetrics.content_id == content_id)
+                .order_by(ContentMetrics.platform, ContentMetrics.recorded_at.desc(), ContentMetrics.id.desc())
+                .all()
+            )
+            latest: dict[str | None, ContentMetrics] = {}
+            for row in rows:
+                latest.setdefault(row.platform, row)
+            return [self._content_metrics_to_dict(row) for row in latest.values()]
+        finally:
+            session.close()
+
+    def record_content_metrics(
+        self,
+        content_id: int,
+        platform: str,
+        *,
+        views: int,
+        likes: int,
+        comments: int,
+        shares: int,
+    ) -> dict[str, Any] | None:
+        """Set one platform's current numbers; None when the content is not in this workspace.
+
+        Platforms report running totals, so a new reading replaces the previous
+        one rather than adding a row. The analytics above keep the highest-view
+        row per content, which would otherwise let a stale reading outrank a
+        downward correction.
+        """
+        platform = platform.strip().lower()
+        session = self._get_session()
+        try:
+            # Locking the content row serializes writers for this content: there is
+            # no unique (content_id, platform) constraint to catch a racing insert.
+            if session.query(Content.id).filter(Content.id == content_id).with_for_update().first() is None:
+                return None
+            rows = (
+                session.query(ContentMetrics)
+                .filter(ContentMetrics.content_id == content_id, ContentMetrics.platform == platform)
+                .order_by(ContentMetrics.recorded_at.desc(), ContentMetrics.id.desc())
+                .all()
+            )
+            if rows:
+                row = rows[0]
+                for stale in rows[1:]:
+                    session.delete(stale)
+            else:
+                row = ContentMetrics(content_id=content_id, platform=platform)
+                session.add(row)
+            row.views = views
+            row.likes = likes
+            row.comments = comments
+            row.shares = shares
+            row.recorded_at = datetime.now()
+            session.commit()
+            return self._content_metrics_to_dict(row)
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    @staticmethod
+    def _content_metrics_to_dict(row: ContentMetrics) -> dict[str, Any]:
+        views = row.views or 0
+        interactions = (row.likes or 0) + (row.comments or 0) + (row.shares or 0)
+        return {
+            "id": row.id,
+            "content_id": row.content_id,
+            "platform": row.platform,
+            "views": views,
+            "likes": row.likes or 0,
+            "comments": row.comments or 0,
+            "shares": row.shares or 0,
+            "engagement_rate": round(interactions / views, 4) if views else 0.0,
+            "recorded_at": row.recorded_at.isoformat() if row.recorded_at else None,
+        }
+
     def archive_content(self, content_id: int) -> bool:
         session = self._get_session()
         try:
