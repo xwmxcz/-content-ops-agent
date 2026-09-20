@@ -193,6 +193,38 @@ async def idempotency_stats(days: int = 7):
 
 ---
 
+## Run Event Streaming
+
+Pipeline progress reaches the browser as Server-Sent Events read from the
+`agent_run_events` table. Two settings groups control the cost of that path.
+
+**Token batching.** Every run event is a transaction that locks the run row, so
+streamed tokens are coalesced before they are persisted. The first delta of a
+step is written at once; the rest is flushed every `SSE_TOKEN_BATCH_SECONDS`
+(default 0.15) or `SSE_TOKEN_BATCH_MAX_CHARS` (400), and always before a tool
+event, `step_complete` or `step_failed`, so event order is unchanged. Measured
+on a 1500-token stream: 1500 transactions before, about 150 after. Set
+`SSE_TOKEN_BATCH_SECONDS=0` to restore one event per delta.
+
+**Wake-ups.** Writers `pg_notify` the run id inside the transaction that inserts
+an event, and each API process keeps one listening connection that wakes the
+streams of that run. The table remains the source of truth: a notification only
+means "read now", and may be lost without losing an event.
+
+| State | Table sweep per open stream | Live event latency |
+| --- | --- | --- |
+| Listener connected | every `SSE_NOTIFY_FALLBACK_POLL_SECONDS` (2.0) | tens of milliseconds |
+| Listener down, or `SSE_NOTIFY_ENABLED=false` | every `SSE_POLL_INTERVAL_SECONDS` (0.4) | up to the sweep interval |
+
+- The listener reconnects with backoff (1 s up to 30 s) and wakes every stream
+  when it comes back, since notifications sent meanwhile are gone. Watch the
+  `run_event_listener_disconnected` / `run_event_listener_connected` log events.
+- Budget one extra PostgreSQL connection per API process (`WEB_CONCURRENCY`),
+  outside the SQLAlchemy pool. It is opened by the first stream, not at startup.
+- NOTIFY does not cross a transaction-pooling proxy such as PgBouncer in
+  `transaction` mode. Behind one, point `DATABASE_URL` at a session-mode port or
+  set `SSE_NOTIFY_ENABLED=false`; streams then simply keep sweeping.
+
 ## Maintenance Tasks
 
 ### Lease Reaper
