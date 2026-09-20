@@ -6,12 +6,13 @@ import json
 import logging
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages.utils import message_chunk_to_message
 from langchain_core.tools import StructuredTool
 from pydantic import ValidationError
 
@@ -180,6 +181,8 @@ def _build_system_prompt(memory_snapshot: dict[str, str] | None = None) -> str:
 
 
 ModelFactory = Callable[[str, str, float, int], Any]
+# Receives (event_type, payload) while a chat turn runs. See ChatAgentService.chat.
+ChatEventSink = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 
 def _build_planner_system_prompt(available_tools: list[str]) -> str:
@@ -208,10 +211,16 @@ class ChatAgentService:
         self.context_engine = context_engine
         self.intent_recognizer = intent_recognizer or IntentRecognizer(self.model_factory, store=store)
 
-    async def chat(self, request: ChatRequest) -> ChatResponse:
+    async def chat(self, request: ChatRequest, sink: ChatEventSink | None = None) -> ChatResponse:
+        """Run one chat turn. ``sink`` receives progress events while it runs.
+
+        The sink is an observer: the returned ``ChatResponse`` and everything
+        persisted are identical with or without it.
+        """
         provider = resolve_provider(request.provider)
         model = request.model or config.get_model(provider)
         thread_id = request.thread_id or f"chat_{uuid4().hex[:10]}"
+        await self._notify(sink, "turn_start", {"thread_id": thread_id, "provider": provider, "model": model})
         title = self._make_thread_title(request.message)
 
         # Title here is an auto-generated suggestion. ContentStore guards against
@@ -238,6 +247,7 @@ class ChatAgentService:
         except Exception as exc:  # noqa: BLE001 -- intent recognition is best-effort; never fail the chat turn
             logger.warning("intent recognition failed, treating as unknown: %s", exc.__class__.__name__)
             intent = ChatIntent(name="unknown", confidence=0.0)
+        await self._notify(sink, "intent", {"intent": intent.model_dump(mode="json")})
 
         if intent.name == "clarify":
             response = intent.clarification or self._clarification_fallback(request.message)
@@ -276,6 +286,8 @@ class ChatAgentService:
             except Exception as exc:  # noqa: BLE001 -- planning is an optimisation; agent runs unplanned
                 logger.warning("chat planner failed, running without a plan: %s", exc.__class__.__name__)
                 plan = []
+        if plan:
+            await self._notify(sink, "plan", {"plan": [step.model_dump(mode="json") for step in plan]})
 
         try:
             response, tool_events, plan = await self._run_agent(
@@ -288,6 +300,7 @@ class ChatAgentService:
                 plan=plan,
                 thread_id=thread_id,
                 intent=intent,
+                sink=sink,
             )
         except LLMConfigurationError:
             raise
@@ -369,6 +382,7 @@ class ChatAgentService:
         plan: list[PlanStep] | None = None,
         thread_id: str | None = None,
         intent: ChatIntent | None = None,
+        sink: ChatEventSink | None = None,
     ) -> tuple[str, list[ChatToolEvent], list[PlanStep]]:
         plan = plan or []
         tools = self._build_tools(
@@ -424,12 +438,15 @@ class ChatAgentService:
         failure_count: dict[str, int] = {}
         last_content = ""
         for _ in range(MAX_LOOPS):
-            ai_message = await chat_model.ainvoke(messages)
+            ai_message = await self._invoke_model(chat_model, messages, sink)
             messages.append(ai_message)
             last_content = self._message_content_to_text(ai_message.content)
             tool_calls = getattr(ai_message, "tool_calls", None) or []
             if not tool_calls:
                 break
+            # Text streamed ahead of a tool call is the model thinking aloud, not
+            # the reply: only the last round is returned and persisted.
+            await self._notify(sink, "draft_reset", {})
 
             for call in tool_calls:
                 name = call.get("name", "")
@@ -452,6 +469,7 @@ class ChatAgentService:
                     tool_events.append(event)
                     continue
 
+                await self._notify(sink, "tool_start", {"name": name, "args": args, "attempt": attempt_no})
                 started = time.perf_counter()
                 try:
                     # The consumed capability id is this write's request identity.
@@ -584,6 +602,7 @@ class ChatAgentService:
                         )
                     messages.append(ToolMessage(content=feedback, tool_call_id=call.get("id") or name))
                 tool_events.append(event)
+                await self._notify(sink, "tool_end", {"event": event.model_dump(mode="json")})
 
         for step in plan:
             if step.status in ("pending", "running"):
@@ -591,6 +610,58 @@ class ChatAgentService:
 
         final = last_content or "The Agent completed tool work but did not produce a final reply."
         return final, tool_events, plan
+
+    @staticmethod
+    async def _notify(sink: ChatEventSink | None, event_type: str, payload: dict[str, Any]) -> None:
+        """Report progress without letting the observer affect the turn.
+
+        A closed connection on the streaming side must not fail a turn that may
+        be half-way through a write tool.
+        """
+        if sink is None:
+            return
+        try:
+            await sink(event_type, payload)
+        except Exception as exc:  # noqa: BLE001 -- observer boundary; the turn outranks its progress feed
+            logger.warning("chat event sink failed for %s: %s", event_type, exc.__class__.__name__)
+
+    async def _invoke_model(
+        self, chat_model: Any, messages: list[BaseMessage], sink: ChatEventSink | None
+    ) -> BaseMessage:
+        """One model round, streamed to ``sink`` when there is one to stream to."""
+        if sink is None or not hasattr(chat_model, "astream"):
+            return await chat_model.ainvoke(messages)
+
+        merged: Any = None
+        try:
+            async for chunk in chat_model.astream(messages):
+                merged = chunk if merged is None else merged + chunk
+                delta = self._content_text(chunk.content)
+                if delta:
+                    await self._notify(sink, "token", {"delta": delta})
+        except Exception as exc:  # noqa: BLE001 -- providers and gateways reject streaming in many ways
+            if merged is not None:
+                # Part of a reply already reached the user; a silent second attempt
+                # would show them two different answers.
+                raise
+            logger.warning("chat streaming unavailable, falling back to one-shot: %s", exc.__class__.__name__)
+        if merged is None:
+            return await chat_model.ainvoke(messages)
+        # Chunks add up to a chunk; the history and the tool loop expect a message.
+        return message_chunk_to_message(merged)
+
+    @staticmethod
+    def _content_text(content: Any) -> str:
+        """The visible text of a message or chunk, whatever shape the provider uses."""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "".join(
+                block if isinstance(block, str) else str(block.get("text") or "")
+                for block in content
+                if isinstance(block, str) or (isinstance(block, dict) and block.get("type") == "text")
+            )
+        return ""
 
     @staticmethod
     def _associate_plan_step(plan: list[PlanStep], tool_name: str, *, success: bool) -> int | None:
@@ -886,4 +957,8 @@ class ChatAgentService:
     def _message_content_to_text(content: Any) -> str:
         if isinstance(content, str):
             return content
+        # Anthropic returns a list of blocks once a reply is streamed or carries a
+        # tool call. Its text blocks are the reply, not a JSON document to show.
+        if isinstance(content, list) and all(isinstance(block, (str, dict)) for block in content):
+            return ChatAgentService._content_text(content)
         return json.dumps(content, ensure_ascii=False)
