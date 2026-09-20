@@ -136,6 +136,10 @@ job_checkpoints_saved_total = _create_counter(
     "job_checkpoints_saved_total", "Total completed run-step checkpoints persisted", labelnames=["step_name"]
 )
 
+job_checkpoints_resumed_total = _create_counter(
+    "job_checkpoints_resumed_total", "Total completed steps a resumed run restored instead of repeating"
+)
+
 job_cancellations_total = _create_counter(
     "job_cancellations_total", "Total jobs that observed a cancellation request while running", labelnames=["job_type"]
 )

@@ -56,7 +56,12 @@ class RunRepositoryMixin(RepositoryMixin):
         provider: str | None = None,
         model: str | None = None,
         thread_id: str | None = None,
+        request: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """``request`` is the JSON-safe request the run was started with.
+
+        It is what a resume re-runs; a run created without it is not resumable.
+        """
         session = self._get_session()
         try:
             run = AgentRun(
@@ -67,6 +72,7 @@ class RunRepositoryMixin(RepositoryMixin):
                 style=style,
                 provider=provider,
                 model=model,
+                request_json=json.dumps(request, ensure_ascii=False) if request is not None else None,
                 status="running",
             )
             session.add(run)
@@ -258,6 +264,9 @@ class RunRepositoryMixin(RepositoryMixin):
             run.status = new_status
             if new_status in {"completed", "failed", "cancelled"}:
                 run.completed_at = run.completed_at or datetime.now()
+            else:
+                # Leaving a terminal state (a resume): the old end time is no longer true.
+                run.completed_at = None
             seq = int(run.next_event_seq or 1)
             run.next_event_seq = seq + 1
             session.add(
@@ -318,6 +327,7 @@ class RunRepositoryMixin(RepositoryMixin):
             "provider": run.provider,
             "model": run.model,
             "plan": json.loads(run.plan_json) if run.plan_json else [],
+            "request": json.loads(run.request_json) if run.request_json else None,
             "revision_count": run.revision_count or 0,
             "total_prompt_tokens": run.total_prompt_tokens or 0,
             "total_completion_tokens": run.total_completion_tokens or 0,

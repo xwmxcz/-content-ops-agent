@@ -104,6 +104,7 @@ async def create_pipeline_run(
         provider=provider,
         model=model,
         thread_id=thread_id,
+        request=request.model_dump(mode="json"),
     )
 
     try:
@@ -131,6 +132,75 @@ async def create_pipeline_run(
         ) from exc
 
     return PipelineRunHandle(run_id=run_id, thread_id=thread_id, provider=provider, model=model)
+
+
+@router.post("/runs/{run_id}/resume", response_model=PipelineRunHandle, status_code=status.HTTP_202_ACCEPTED)
+async def resume_pipeline_run(
+    run_id: str,
+    background_tasks: BackgroundTasks,
+    store: ContentStore = Depends(get_store),
+    _budget: None = Depends(enforce_llm_budget),
+) -> PipelineRunHandle:
+    """Start a failed run again from its last completed step.
+
+    Completed steps are restored from their checkpoints and not executed, so the
+    caller pays only for what is missing. The run keeps its id and its event log;
+    a client continues on /runs/{id}/stream from the sequence it already has.
+    """
+    run = store.get_run(run_id)
+    if not run:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Run {run_id} was not found")
+    if run["status"] != "failed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Only a failed run can be resumed; this run is {run['status']}",
+        )
+    request_data = run.get("request")
+    if not request_data:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This run has no stored request and cannot be resumed; start a new run instead",
+        )
+    try:
+        PipelineRunRequest(**request_data)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The stored request of this run is no longer valid; start a new run instead",
+        ) from exc
+
+    # Compare-and-set: of two concurrent resumes only one leaves "failed", so the
+    # run is enqueued once.
+    resumed = store.transition_run_and_append_event(
+        run_id,
+        expected_statuses={"failed"},
+        new_status="running",
+        event_type="run_resumed",
+        payload={"previous_error": run.get("error")},
+        error=None,
+    )
+    if resumed is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This run is already being resumed")
+
+    try:
+        enqueue_pipeline_run(run_id, request_data, store.database_url, background_tasks)
+    except JobQueueError as exc:
+        store.transition_run_and_append_event(
+            run_id,
+            expected_statuses={"running"},
+            new_status="failed",
+            event_type="run_failed",
+            payload={"error": str(exc)},
+            error=str(exc),
+        )
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+    return PipelineRunHandle(
+        run_id=run_id,
+        thread_id=run.get("thread_id") or run_id,
+        provider=run.get("provider") or "",
+        model=run.get("model") or "",
+    )
 
 
 @router.get("/runs/{run_id}", response_model=dict)
@@ -171,8 +241,18 @@ async def stream_pipeline_run(
                 # while the query runs must still cut the next wait short.
                 woken.clear()
                 events = await asyncio.to_thread(store.list_run_events, run_id, after_seq=last_seq, limit=100)
-                for evt in events:
+                for position, evt in enumerate(events):
                     last_seq = evt["seq"]
+                    if evt["event_type"] in terminal:
+                        # A resumed run keeps its log, so a replay walks past the
+                        # failure that the resume superseded. That run_failed is
+                        # history, and sending it would make clients hang up
+                        # before the events of the attempt that followed.
+                        following = events[position + 1 : position + 2] or await asyncio.to_thread(
+                            store.list_run_events, run_id, after_seq=last_seq, limit=1
+                        )
+                        if following and following[0]["event_type"] == "run_resumed":
+                            continue
                     yield f"id: {evt['seq']}\nevent: {evt['event_type']}\ndata: {evt['payload']}\n\n"
                     if evt["event_type"] in terminal:
                         return
