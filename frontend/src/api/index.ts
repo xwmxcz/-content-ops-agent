@@ -63,19 +63,22 @@ api.interceptors.response.use(
     const detail = error.response?.data?.detail
     const status = error.response?.status
     const requestUrl = error.config?.url ?? ''
-    if (status === 401 && !requestUrl.startsWith('/auth/')) {
-      clearAuthToken()
-      const next = `${window.location.pathname}${window.location.search}`
-      if (!window.location.pathname.startsWith('/login')) {
-        window.location.assign(`/login?next=${encodeURIComponent(next)}`)
-      }
-    }
+    if (status === 401 && !requestUrl.startsWith('/auth/')) handleExpiredSession()
     const message = typeof detail === 'string' ? detail : detail?.message ?? fallbackApiMessage(status, error.message)
     return Promise.reject(new ApiError(message, error.response?.status, detail))
   }
 )
 
-function fallbackApiMessage(status?: number, rawMessage = '请求失败') {
+/** Signs out and returns to the login page. Shared with the fetch-based chat stream. */
+export function handleExpiredSession() {
+  clearAuthToken()
+  const next = `${window.location.pathname}${window.location.search}`
+  if (!window.location.pathname.startsWith('/login')) {
+    window.location.assign(`/login?next=${encodeURIComponent(next)}`)
+  }
+}
+
+export function fallbackApiMessage(status?: number, rawMessage = '请求失败') {
   if (status === 400) return '请求参数有误'
   if (status === 401) return '未授权，请重新登录'
   if (status === 403) return '没有权限执行该操作'

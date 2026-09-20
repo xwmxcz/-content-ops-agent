@@ -1,4 +1,5 @@
-import { api } from './index'
+import { api, ApiError, fallbackApiMessage, getAuthToken, handleExpiredSession } from './index'
+import { readSseStream } from './sse'
 
 export interface AgentRunPayload {
   topic: string
@@ -168,6 +169,120 @@ export interface UpdateThreadPatch {
 export async function chat(payload: ChatPayload) {
   const { data } = await api.post<ChatResponse>('/agent/chat', payload)
   return data
+}
+
+export interface ChatStreamHandlers {
+  /** The thread is known before any text: a first message creates it server-side. */
+  onTurnStart?(info: { thread_id: string; provider: string; model: string }): void
+  onIntent?(intent: ChatIntent): void
+  onPlan?(plan: PlanStep[]): void
+  onToken?(delta: string): void
+  /** Text streamed so far preceded a tool call and is not part of the reply. */
+  onDraftReset?(): void
+  onToolStart?(call: { name: string; args: Record<string, unknown>; attempt: number }): void
+  onToolEnd?(event: ChatToolEvent): void
+}
+
+/**
+ * The server provably never started a turn (the endpoint does not exist, or this
+ * environment cannot read a streamed body), so sending the message through the
+ * plain endpoint cannot duplicate it. Anything less certain, such as a dropped
+ * connection, is not this error: the request may have been received.
+ */
+export class ChatStreamUnavailableError extends Error {}
+
+/**
+ * The connection dropped after the server had started the turn. The turn keeps
+ * running and is saved, so the caller should reload the thread, not resend.
+ */
+export class ChatStreamInterruptedError extends Error {
+  constructor(public threadId: string) {
+    super('连接中断，回复仍在生成，稍后会出现在会话中')
+  }
+}
+
+function lostConnection(threadId: string | undefined) {
+  if (threadId) return new ChatStreamInterruptedError(threadId)
+  // No turn_start was read, but the request was sent: the server may be running it.
+  return new ApiError('连接在回复开始前中断，请刷新会话确认消息是否已发送')
+}
+
+/**
+ * POST /agent/chat/stream. Resolves with the same ChatResponse the plain endpoint
+ * returns, after reporting progress through `handlers`.
+ */
+export async function chatStream(payload: ChatPayload, handlers: ChatStreamHandlers = {}): Promise<ChatResponse> {
+  const token = getAuthToken()
+  let response: Response
+  try {
+    response = await fetch('/api/agent/chat/stream', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify(payload)
+    })
+  } catch {
+    throw new ApiError(fallbackApiMessage(undefined, 'Network Error'))
+  }
+
+  if (!response.ok) {
+    if (response.status === 401) handleExpiredSession()
+    // An API that predates the endpoint answers 404/405: nothing ran.
+    if (response.status === 404 || response.status === 405) throw new ChatStreamUnavailableError('no chat stream')
+    const detail = await response.json().then(body => body?.detail, () => undefined)
+    const message = typeof detail === 'string' ? detail : detail?.message ?? fallbackApiMessage(response.status)
+    throw new ApiError(message, response.status, detail)
+  }
+  if (!response.body) throw new ChatStreamUnavailableError('streaming responses are not supported here')
+
+  let threadId: string | undefined
+  let result: ChatResponse | undefined
+  let failure: ApiError | undefined
+  try {
+    await readSseStream(response.body, frame => {
+      const data = JSON.parse(frame.data)
+      switch (frame.event) {
+        case 'turn_start':
+          threadId = data.thread_id
+          handlers.onTurnStart?.(data)
+          break
+        case 'intent':
+          handlers.onIntent?.(data.intent)
+          break
+        case 'plan':
+          handlers.onPlan?.(data.plan)
+          break
+        case 'token':
+          handlers.onToken?.(data.delta)
+          break
+        case 'draft_reset':
+          handlers.onDraftReset?.()
+          break
+        case 'tool_start':
+          handlers.onToolStart?.(data)
+          break
+        case 'tool_end':
+          handlers.onToolEnd?.(data.event)
+          break
+        case 'done':
+          result = data
+          break
+        case 'error':
+          failure = new ApiError(data.detail ?? fallbackApiMessage(data.status), data.status, data.detail)
+          break
+      }
+    })
+  } catch {
+    throw lostConnection(threadId)
+  }
+
+  if (failure) throw failure
+  if (result) return result
+  // The body ended without a verdict: a proxy or the server closed it early.
+  throw lostConnection(threadId)
 }
 
 export async function runAgentPipeline(payload: AgentRunPayload) {

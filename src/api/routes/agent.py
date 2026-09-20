@@ -1,4 +1,6 @@
 import asyncio
+import json
+import logging
 import time
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, status
@@ -30,10 +32,13 @@ from src.api.services.dynamic_pipeline import DynamicPipeline
 from src.api.services.run_event_hub import get_run_event_hub
 from src.api.services.tool_policy import SIDE_EFFECT_TOOLS
 from src.jobs.queue import JobQueueError, enqueue_pipeline_run
-from src.llm.litellm_client import LiteLLMClient
+from src.llm.litellm_client import LiteLLMClient, LLMConfigurationError
 from src.storage import ContentStore
 from src.storage.tenancy import TenantAccessError
 from src.utils import config
+from src.utils.structured_logging import log_event
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -249,6 +254,84 @@ async def chat(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except ChatAgentExecutionError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+
+# Turns started by /chat/stream. asyncio keeps only weak references to tasks, so a
+# turn that outlives its connection would otherwise be garbage-collected mid-run.
+_CHAT_TURNS: set[asyncio.Task[None]] = set()
+
+
+@router.post("/chat/stream")
+async def chat_stream(
+    request: ChatRequest,
+    agent_service: ChatAgentService = Depends(get_chat_agent_service),
+    _budget: None = Depends(enforce_llm_budget),
+) -> StreamingResponse:
+    """The same turn as POST /chat, reported as Server-Sent Events while it runs.
+
+    Events: ``turn_start``, ``intent``, ``plan``, ``token``, ``draft_reset``,
+    ``tool_start``, ``tool_end``, then exactly one of ``done`` (the ChatResponse
+    that POST /chat would have returned) or ``error`` ({status, detail}).
+
+    The turn runs as its own task, not inside the response generator. Closing the
+    connection therefore stops the feed, not the turn: it still finishes and is
+    persisted, exactly as a POST /chat whose client went away. Cancelling it with
+    the connection could abandon a write tool half-way through.
+    """
+    queue: asyncio.Queue[tuple[str, dict] | None] = asyncio.Queue()
+    listening = True
+
+    async def sink(event_type: str, payload: dict) -> None:
+        # Nobody drains the queue after a disconnect; do not let it grow.
+        if listening:
+            queue.put_nowait((event_type, payload))
+
+    async def run_turn() -> None:
+        try:
+            response = await agent_service.chat(request, sink=sink)
+            await sink("done", response.model_dump(mode="json"))
+        except TenantAccessError:
+            await sink("error", {"status": status.HTTP_404_NOT_FOUND, "detail": "Resource not found"})
+        except ChatAgentExecutionError as exc:
+            await sink("error", {"status": status.HTTP_502_BAD_GATEWAY, "detail": str(exc)})
+        except (ValueError, LLMConfigurationError) as exc:
+            # A missing API key or an unknown provider: the operator can act on the text.
+            await sink("error", {"status": status.HTTP_400_BAD_REQUEST, "detail": str(exc)})
+        except Exception as exc:  # noqa: BLE001 -- the headers are sent; an error event is the only channel left
+            log_event(logger, "chat_stream_turn_failed", level=logging.ERROR, error_class=exc.__class__.__name__)
+            await sink(
+                "error",
+                {"status": status.HTTP_500_INTERNAL_SERVER_ERROR, "detail": "The chat turn failed unexpectedly"},
+            )
+        finally:
+            queue.put_nowait(None)
+
+    turn = asyncio.create_task(run_turn())
+    _CHAT_TURNS.add(turn)
+    turn.add_done_callback(_CHAT_TURNS.discard)
+
+    async def event_stream():
+        nonlocal listening
+        try:
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=config.SSE_KEEPALIVE_SECONDS or None)
+                except asyncio.TimeoutError:
+                    # Intent recognition, planning and tools emit nothing for a while.
+                    yield ": keepalive\n\n"
+                    continue
+                if item is None:
+                    return
+                event_type, payload = item
+                yield f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        finally:
+            listening = False
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
 
 
 @router.post(

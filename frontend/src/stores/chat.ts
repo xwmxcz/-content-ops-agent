@@ -3,6 +3,9 @@ import { defineStore } from 'pinia'
 import { readActiveThreadFromStorage, writeActiveThreadToStorage } from '../workspaceSession'
 import {
   chat,
+  chatStream,
+  ChatStreamInterruptedError,
+  ChatStreamUnavailableError,
   deleteAgentThread,
   getAgentMessages,
   getAgentThreads,
@@ -24,6 +27,10 @@ export type UiMessage = Partial<AgentMessage> & {
   role: 'user' | 'assistant'
   content: string
   pending?: boolean
+  /** The reply is still arriving; `content` and `tool_events` grow in place. */
+  streaming?: boolean
+  /** The tool the agent is waiting on, while `streaming`. */
+  activeTool?: string
   intent?: ChatIntent | null
   tool_events?: ChatToolEvent[]
   plan?: PlanStep[]
@@ -146,6 +153,7 @@ export const useChatStore = defineStore('chat', {
     async sendMessage(payload: Omit<ChatPayload, 'thread_id'>) {
       if (this.sending) return
       const contextVersion = this.messageContextVersion
+      const inContext = () => contextVersion === this.messageContextVersion
       const localMessage: UiMessage = {
         local_id: `local-${Date.now()}`,
         role: 'user',
@@ -157,13 +165,73 @@ export const useChatStore = defineStore('chat', {
       }
       this.messages.push(localMessage)
       this.sending = true
+      const request = { ...payload, thread_id: this.activeThreadId }
+
+      // The reply is rendered from a draft that grows as events arrive. It is read
+      // back out of the array so writes go through the reactive proxy; mutating the
+      // plain object would not repaint. If the user switched threads, the events
+      // belong to a view that is gone and are dropped.
+      let draft: UiMessage | undefined
+      const currentDraft = () => {
+        if (!inContext()) return undefined
+        if (!draft) {
+          this.messages.push({ local_id: `draft-${Date.now()}`, role: 'assistant', content: '', streaming: true, tool_events: [] })
+          draft = this.messages[this.messages.length - 1]
+        }
+        return draft
+      }
+      const discardDraft = () => {
+        if (draft && inContext()) this.messages = this.messages.filter(message => message.local_id !== draft?.local_id)
+        draft = undefined
+      }
+
       try {
-        const result: ChatResponse = await chat({ ...payload, thread_id: this.activeThreadId })
+        let result: ChatResponse
+        try {
+          result = await chatStream(request, {
+            onTurnStart: info => {
+              const target = currentDraft()
+              if (target) Object.assign(target, { provider: info.provider, model: info.model })
+            },
+            onIntent: intent => {
+              const target = currentDraft()
+              if (target) target.intent = intent
+            },
+            onPlan: plan => {
+              const target = currentDraft()
+              if (target) target.plan = plan
+            },
+            onToken: delta => {
+              const target = currentDraft()
+              if (target) target.content += delta
+            },
+            onDraftReset: () => {
+              const target = currentDraft()
+              if (target) target.content = ''
+            },
+            onToolStart: call => {
+              const target = currentDraft()
+              if (target) target.activeTool = call.name
+            },
+            onToolEnd: event => {
+              const target = currentDraft()
+              if (!target) return
+              target.activeTool = undefined
+              target.tool_events = [...(target.tool_events ?? []), event]
+            }
+          })
+        } catch (error) {
+          // Only when no turn can have started; see ChatStreamUnavailableError.
+          if (!(error instanceof ChatStreamUnavailableError)) throw error
+          discardDraft()
+          result = await chat(request)
+        }
         localMessage.pending = false
-        if (contextVersion === this.messageContextVersion) {
+        if (inContext()) {
           this.activeThreadId = result.thread_id
           writeActiveThreadToStorage(result.thread_id)
-          this.messages.push({
+          // The server's response is authoritative: it replaces whatever was streamed.
+          const final: UiMessage = {
             id: result.message_id,
             thread_id: result.thread_id,
             role: 'assistant',
@@ -173,13 +241,25 @@ export const useChatStore = defineStore('chat', {
             intent: result.intent,
             tool_events: result.tool_events,
             plan: result.plan,
-            status: 'completed'
-          })
+            status: 'completed',
+            streaming: false,
+            activeTool: undefined
+          }
+          const target = currentDraft()
+          // Updated in place so the bubble the user is reading is not re-created.
+          if (target) Object.assign(target, final)
+          else this.messages.push(final)
         }
         // Refresh the thread list so message counts and last_model reflect the new turn.
         await this.loadThreads({ reset: true })
       } catch (error) {
         localMessage.pending = false
+        discardDraft()
+        if (error instanceof ChatStreamInterruptedError && inContext()) {
+          // The turn is still running server-side and will be saved to this thread.
+          this.activeThreadId = error.threadId
+          writeActiveThreadToStorage(error.threadId)
+        }
         throw error
       } finally {
         this.sending = false
