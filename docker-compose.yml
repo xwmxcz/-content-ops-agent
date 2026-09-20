@@ -33,6 +33,12 @@ x-app-env: &app-env
   JOB_QUEUE_NAME: ${JOB_QUEUE_NAME:-content_ops}
   JOB_TIMEOUT_SECONDS: ${JOB_TIMEOUT_SECONDS:-300}
   MAX_PROVIDER_INFLIGHT_JOBS: ${MAX_PROVIDER_INFLIGHT_JOBS:-8}
+  # A worker that dies mid-job stops renewing its lease; the reaper service
+  # requeues the job once the lease lapses. Keep the lease several heartbeats long.
+  JOB_LEASE_DURATION_SECONDS: ${JOB_LEASE_DURATION_SECONDS:-300}
+  JOB_HEARTBEAT_INTERVAL_SECONDS: ${JOB_HEARTBEAT_INTERVAL_SECONDS:-30}
+  JOB_REAPER_INTERVAL_SECONDS: ${JOB_REAPER_INTERVAL_SECONDS:-60}
+  JOB_REAPER_BATCH_SIZE: ${JOB_REAPER_BATCH_SIZE:-50}
   # SSE run streaming. The keepalive interval must stay well below the browser
   # client's staleness budget (45s), or a normal long-running step is reported as
   # a dead connection.
@@ -153,6 +159,34 @@ services:
           python -c "import sys; from redis import Redis; from rq import Worker;
           from src.utils import config;
           sys.exit(0 if Worker.all(connection=Redis.from_url(config.REDIS_URL)) else 1)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Without this service an OOM-killed or evicted worker leaves its job
+  # `running` forever: nothing else notices that the lease stopped being renewed.
+  reaper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    command: ["python", "-m", "src.jobs.reaper", "--execute", "--loop"]
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # Replaces the image's HTTP probe, which would mark this container
+      # unhealthy forever: the reaper listens on no port. It touches a heartbeat
+      # file after every sweep and this checks the file's age instead.
+      test: ["CMD", "python", "-m", "src.jobs.reaper", "--healthcheck"]
       interval: 30s
       timeout: 10s
       retries: 3

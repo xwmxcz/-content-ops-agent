@@ -123,6 +123,7 @@ Docker 模式会启动：
 | `migrate` | 一次性 Alembic 升级；成功后 API/worker 才启动。 |
 | `api` | FastAPI 应用；生产启动时校验配置和 schema revision。 |
 | `worker` | RQ worker；仅校验 schema revision，不执行 DDL。 |
+| `reaper` | 回收 worker 中途崩溃、租约不再续期的任务，并重新入队。 |
 | `postgres` | PostgreSQL 16 数据库。 |
 | `redis` | RQ 使用的 Redis。 |
 

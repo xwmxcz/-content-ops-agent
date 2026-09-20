@@ -195,6 +195,25 @@ async def idempotency_stats(days: int = 7):
 
 ## Maintenance Tasks
 
+### Lease Reaper
+
+A worker killed by SIGKILL, OOM, or node loss leaves its job `running`; the only
+signal is that the lease stops being renewed. The `reaper` Compose service
+(`python -m src.jobs.reaper --execute --loop`) sweeps every
+`JOB_REAPER_INTERVAL_SECONDS` and requeues those jobs without charging a retry.
+**Lease recovery does not happen unless this service is running.**
+
+- **Health**: the service touches `JOB_REAPER_HEARTBEAT_FILE` after every sweep;
+  `python -m src.jobs.reaper --healthcheck` exits 1 once that is three intervals
+  old. A failed sweep (database down) still counts as alive, since restarting the
+  reaper would not help, so watch the `job_reaper_sweep_failed` log event as well.
+- **Signals**: `job_lease_reclaimed_total{job_type}` and the `job_lease_reclaimed`
+  log event. A steady non-zero rate means workers are dying, usually from memory
+  limits or a lease shorter than the longest provider call.
+- **Inspect without changing anything**: `python3 -m src.jobs.reaper --dry-run`.
+- In `JOB_QUEUE_MODE=background` there is no queue to push to: a reclaimed job
+  returns to `queued` but nothing executes it again. Use `rq` mode in production.
+
 ### Job Cleanup
 
 Old job records should be archived periodically to prevent unbounded table growth.

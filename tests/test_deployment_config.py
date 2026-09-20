@@ -81,6 +81,53 @@ def test_gunicorn_config_binds_configured_host_and_port():
     assert namespace["forwarded_allow_ips"] == ""
 
 
+def _compose_services() -> dict:
+    import yaml
+
+    return yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))["services"]
+
+
+def test_compose_runs_the_lease_reaper_as_a_service():
+    """Lease recovery only exists while something runs the reaper.
+
+    The reaper shipped as a CLI that no service, cron entry, or document ever
+    invoked, so in the deployed stack a worker killed mid-job left that job
+    `running` forever: the recovery code was tested but never executed.
+    """
+    services = _compose_services()
+
+    assert "reaper" in services, "docker-compose.yml must run src.jobs.reaper as a long-lived service"
+    command = services["reaper"]["command"]
+    assert command[:3] == ["python", "-m", "src.jobs.reaper"]
+    # Without --execute the CLI is a dry run that reclaims nothing.
+    assert "--execute" in command
+    assert "--loop" in command
+    assert services["reaper"]["restart"] == "unless-stopped"
+    assert services["reaper"]["depends_on"]["migrate"]["condition"] == "service_completed_successfully"
+
+
+def test_every_service_on_the_api_image_overrides_its_http_healthcheck():
+    """The api image bakes in a probe of port 8000 that only the api serves.
+
+    Any other service built from that target inherits the probe and is reported
+    unhealthy forever unless it declares a healthcheck of its own.
+    """
+    services = _compose_services()
+    api_image_services = {
+        name: service
+        for name, service in services.items()
+        if isinstance(service.get("build"), dict)
+        and service["build"].get("target") == "api"
+        and service.get("restart") != "no"
+    }
+
+    assert {"api", "worker", "reaper"} <= set(api_image_services)
+    for name, service in api_image_services.items():
+        assert "healthcheck" in service, f"{name} would inherit the api image's HTTP healthcheck"
+
+    assert services["reaper"]["healthcheck"]["test"] == ["CMD", "python", "-m", "src.jobs.reaper", "--healthcheck"]
+
+
 def test_alembic_logging_config_preserves_application_loggers():
     """Alembic's fileConfig must not disable the application's loggers.
 

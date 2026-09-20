@@ -13,6 +13,10 @@ Usage:
     python -m src.jobs.reaper --dry-run
     python -m src.jobs.reaper --execute
     python -m src.jobs.reaper --execute --loop
+    python -m src.jobs.reaper --healthcheck
+
+Leases are only recovered while something runs this: deploy ``--execute --loop``
+as a long-lived service next to the workers (the Compose stack does).
 """
 
 from __future__ import annotations
@@ -20,13 +24,21 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import sys
+import time
+from pathlib import Path
 from typing import Any
 
 from src.storage import ContentStore
+from src.storage.schema import assert_schema_current
 from src.utils import config, metrics
-from src.utils.structured_logging import log_event
+from src.utils.structured_logging import configure_logging, log_event
 
 logger = logging.getLogger(__name__)
+
+# The daemon is reported dead after this many sweep intervals without a
+# heartbeat: one slow sweep or database blip must not flap the healthcheck.
+_HEARTBEAT_STALE_INTERVALS = 3
 
 
 def find_expired_leases(store: ContentStore, limit: int | None = None) -> list[dict[str, Any]]:
@@ -141,16 +153,39 @@ def _requeue_reclaimed(store: ContentStore, job_ids: list[str]) -> int:
     return requeued
 
 
+def heartbeat_is_fresh(heartbeat_path: str | Path, interval_seconds: int, now: float | None = None) -> bool:
+    """Whether the reaper daemon completed a sweep iteration recently."""
+    try:
+        age = (now if now is not None else time.time()) - Path(heartbeat_path).stat().st_mtime
+    except OSError:
+        return False
+    return age < interval_seconds * _HEARTBEAT_STALE_INTERVALS
+
+
+def _touch_heartbeat(heartbeat_path: str | Path) -> None:
+    try:
+        path = Path(heartbeat_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    except OSError as exc:
+        # Recovering jobs matters more than reporting health; an unwritable
+        # heartbeat surfaces through the failing healthcheck instead.
+        log_event(logger, "job_reaper_heartbeat_failed", level=logging.ERROR, error=str(exc))
+
+
 async def run_reaper_loop(
     store: ContentStore,
     interval_seconds: int | None = None,
     stop_event: asyncio.Event | None = None,
+    heartbeat_path: str | Path | None = None,
 ) -> None:
     """Sweep expired leases forever, until ``stop_event`` is set.
 
     Exceptions are swallowed per-iteration: a transient database error must not
     kill the recovery loop, or the very outage that stranded the jobs would also
-    disable the mechanism that recovers them.
+    disable the mechanism that recovers them. The heartbeat is therefore touched
+    after failed sweeps too: it reports that the loop is alive, and restarting
+    the reaper would not bring an unreachable database back.
     """
     interval = interval_seconds or config.JOB_REAPER_INTERVAL_SECONDS
     while not (stop_event and stop_event.is_set()):
@@ -172,6 +207,9 @@ async def run_reaper_loop(
                 error=str(exc),
             )
 
+        if heartbeat_path:
+            _touch_heartbeat(heartbeat_path)
+
         if stop_event:
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=interval)
@@ -181,7 +219,7 @@ async def run_reaper_loop(
         await asyncio.sleep(interval)
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     """CLI entry point for the lease reaper."""
     parser = argparse.ArgumentParser(description="Recover jobs whose worker lease expired")
     parser.add_argument(
@@ -214,21 +252,45 @@ def main() -> None:
         default=None,
         help=f"Max jobs per sweep (default: {config.JOB_REAPER_BATCH_SIZE})",
     )
+    parser.add_argument(
+        "--healthcheck",
+        action="store_true",
+        default=False,
+        help="Exit 0 if a --loop daemon sharing this filesystem swept recently, 1 otherwise",
+    )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     dry_run = not args.execute
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
+    if args.healthcheck:
+        interval = args.interval_seconds or config.JOB_REAPER_INTERVAL_SECONDS
+        sys.exit(0 if heartbeat_is_fresh(config.JOB_REAPER_HEARTBEAT_FILE, interval) else 1)
+
+    if args.loop:
+        if dry_run:
+            parser.error("--loop requires --execute")
+        # A long-lived service gets the same startup contract as worker.py:
+        # structured logs, fail-closed config, and no sweeping a stale schema.
+        configure_logging(config.LOG_LEVEL)
+        config.validate_runtime()
+    else:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        )
 
     store = ContentStore(database_url=config.DATABASE_URL, initialize_schema=False)
     try:
         if args.loop:
-            if dry_run:
-                parser.error("--loop requires --execute")
-            asyncio.run(run_reaper_loop(store, interval_seconds=args.interval_seconds))
+            if config.SCHEMA_MANAGEMENT == "validate":
+                assert_schema_current(store.engine)
+            asyncio.run(
+                run_reaper_loop(
+                    store,
+                    interval_seconds=args.interval_seconds,
+                    heartbeat_path=config.JOB_REAPER_HEARTBEAT_FILE,
+                )
+            )
             return
 
         result = reap_expired_leases(store, dry_run=dry_run, limit=args.limit)
