@@ -114,6 +114,50 @@ def test_all_terminal_event_types_end_the_stream(terminal):
     assert f"event: {terminal}" in frames[1]
 
 
+def test_replay_walks_past_a_failure_that_a_resume_superseded():
+    """A resumed run keeps its log. The old run_failed must not end the replay."""
+    store = FakeStore(
+        [
+            event(1, "step_start", {"index": 1}),
+            event(2, "run_failed", {"error": "provider down"}),
+            event(3, "run_resumed", {}),
+            event(4, "plan_ready", {"plan": []}),
+            event(5, "run_complete", {}),
+        ]
+    )
+
+    frames = asyncio.run(collect(store))
+    body = "".join(frames)
+
+    assert "event: run_failed" not in body
+    assert "event: run_resumed" in body
+    assert "event: run_complete" in frames[-1]
+
+
+def test_a_superseded_failure_is_recognised_across_a_page_boundary():
+    """The resume may be the first row of the next page rather than of this one."""
+    filler = [event(seq, "step_token", {"delta": "x"}) for seq in range(1, 100)]
+    store = FakeStore(
+        [*filler, event(100, "run_failed", {}), event(101, "run_resumed", {}), event(102, "run_complete", {})]
+    )
+
+    frames = asyncio.run(collect(store, limit=200))
+
+    assert "event: run_failed" not in "".join(frames)
+    assert "event: run_complete" in frames[-1]
+
+
+def test_a_failure_that_was_resumed_and_failed_again_still_ends_the_stream():
+    store = FakeStore(
+        [event(1, "run_failed", {}), event(2, "run_resumed", {}), event(3, "run_failed", {"error": "again"})]
+    )
+
+    frames = asyncio.run(collect(store))
+
+    assert "".join(frames).count("event: run_failed") == 1
+    assert '"again"' in frames[-1]
+
+
 def test_after_seq_resumes_strictly_after_the_cursor():
     store = FakeStore(
         [

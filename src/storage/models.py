@@ -303,6 +303,8 @@ class AgentRun(OwnedMixin, Base):
     provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
     model: Mapped[str | None] = mapped_column(String(200), nullable=True)
     plan_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The PipelineRunRequest the run was started with; what a resume re-runs.
+    request_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     revision_count: Mapped[int | None] = mapped_column(Integer, default=0)
     total_prompt_tokens: Mapped[int | None] = mapped_column(Integer, default=0)
     total_completion_tokens: Mapped[int | None] = mapped_column(Integer, default=0)

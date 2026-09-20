@@ -73,8 +73,14 @@ export interface PipelineStreamHandlers {
   onStepFailed(index: number, error: string): void
   onPlanRevised(plan: PipelinePlanStep[], revision: number): void
   onRunComplete(event: PipelineRunCompleteEvent): void
-  onRunFailed(error?: string): void
+  /** `code` identifies failures the UI words itself, e.g. `no_content`. */
+  onRunFailed(error?: string, code?: string): void
   onRunCancelled?(): void
+  /**
+   * The run left `failed` and is executing again. Seen live by other tabs, and by
+   * any replay of a resumed run; the server withholds the failure it superseded.
+   */
+  onRunResumed?(): void
   /**
    * Transport gave up after exhausting retries. The run itself may well have
    * finished; the caller is expected to reconcile against GET /agent/runs/{id}
@@ -299,6 +305,11 @@ export function usePipelineStream(
       if (data) handlers.onPlanRevised(data.plan, data.revision)
     })
 
+    source.addEventListener('run_resumed', event => {
+      if (!accept(event)) return
+      handlers.onRunResumed?.()
+    })
+
     source.addEventListener('run_complete', event => {
       if (!accept(event)) return
       const data = parseEvent<PipelineRunCompleteEvent>(event)
@@ -308,9 +319,9 @@ export function usePipelineStream(
 
     source.addEventListener('run_failed', event => {
       if (!accept(event)) return
-      const data = parseEvent<{ error?: string }>(event)
+      const data = parseEvent<{ error?: string; code?: string }>(event)
       finish()
-      handlers.onRunFailed(data?.error)
+      handlers.onRunFailed(data?.error, data?.code)
     })
 
     source.addEventListener('run_cancelled', event => {

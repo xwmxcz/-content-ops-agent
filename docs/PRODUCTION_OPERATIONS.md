@@ -225,6 +225,25 @@ means "read now", and may be lost without losing an event.
   `transaction` mode. Behind one, point `DATABASE_URL` at a session-mode port or
   set `SSE_NOTIFY_ENABLED=false`; streams then simply keep sweeping.
 
+### Resuming a failed run
+
+`POST /api/agent/runs/{id}/resume` starts a `failed` run again. Steps with a
+completed checkpoint in `run_steps` are restored, not executed, so only the
+missing steps are billed. The run keeps its id and event log; clients continue on
+the same stream, and a replay no longer sends the `run_failed` that a
+`run_resumed` superseded.
+
+- Requires migration `0010_agent_run_request`. Runs created before it have no
+  stored request and answer 409; start a new run for those.
+- A run now fails, instead of completing, when no `writer` or `editor` step
+  completed (a provider outage, typically). Nothing is saved as content, and the
+  run is resumable once the provider is back.
+- `job_checkpoints_resumed_total` counts restored steps, which is the work a
+  resume did not have to repeat.
+- Not covered: a run whose worker was killed stays `running`, because pipeline
+  runs hold no lease and the reaper does not see them. It cannot be resumed until
+  it is marked failed by hand.
+
 ## Maintenance Tasks
 
 ### Lease Reaper

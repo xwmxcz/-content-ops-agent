@@ -8,6 +8,9 @@ The flow:
   4. Every state transition (plan_ready / step_start / step_token / step_complete /
      step_failed / plan_revised / run_complete / run_failed) is appended to the
      `agent_run_events` table — that table also serves as the SSE bus.
+  5. The plan is persisted when it is made or revised, and every completed step
+     writes a checkpoint. A run that is started again (POST /runs/{id}/resume)
+     picks both up and only executes the steps without a completed checkpoint.
 
 Hard guards:
   - MAX_STEPS = 8
@@ -53,6 +56,7 @@ from src.api.services.sub_agents import (
     SubAgentRunner,
     estimate_cost,
 )
+from src.jobs.checkpoint import clear_checkpoints, load_completed_steps, save_step_checkpoint
 from src.llm.litellm_client import LiteLLMClient, LLMConfigurationError
 from src.storage import ContentStore
 from src.utils import config, metrics
@@ -61,6 +65,9 @@ from src.utils.structured_logging import log_event
 logger = logging.getLogger(__name__)
 WORKSPACE_RESEARCH_TOOLS = ("search_history", "view_content", "list_recent_contents")
 WEB_RESEARCH_TOOLS = ("web_search",)
+# Agents whose output is shippable content, in order of preference. A run that
+# completes none of them has nothing to deliver, whatever its research produced.
+CONTENT_AGENTS = ("editor", "writer")
 
 PLANNER_SYSTEM_PROMPT = (
     "You are the Pipeline Planner for a RESEARCH-ORIENTED content pipeline. "
@@ -179,47 +186,33 @@ class DynamicPipeline:
                 provider=provider,
                 model=litellm_model,
                 thread_id=thread_id,
+                request=request.model_dump(mode="json"),
             )
 
-        try:
-            outcome = await self._make_plan(request, provider, request.model)
-        except LLMConfigurationError:
-            # Misconfigured credentials are the operator's problem, not a planner
-            # shape problem. Falling back here would start a full run against a
-            # provider that cannot answer, so surface it instead.
-            raise
-        except Exception as exc:  # noqa: BLE001 -- planner boundary; falls back to the canonical plan
+        restored = await asyncio.to_thread(self._restore_progress, run_id)
+        if restored is not None:
+            plan, revisions = restored
             log_event(
                 logger,
-                "planner_fallback",
-                level=logging.WARNING,
+                "pipeline_run_resumed",
                 run_id=run_id,
-                provider=provider,
-                model=litellm_model,
-                reason="exception",
-                error_class=exc.__class__.__name__,
+                completed_steps=[s.index for s in plan if s.status == "completed"],
+                pending_steps=[s.index for s in plan if s.status == "pending"],
             )
-            metrics.planner_plans_parsed_total.labels(source="text_json", mode="fallback").inc()
-            plan = self._default_plan(request)
         else:
-            self._record_plan_outcome(
-                outcome,
-                run_id=run_id,
-                provider=provider,
-                model=litellm_model,
-            )
-            if outcome.steps:
-                plan = outcome.steps
-            else:
-                plan = self._default_plan(request)
+            plan = await self._plan_run(request, run_id=run_id, provider=provider, litellm_model=litellm_model)
+            revisions = 0
+            await asyncio.to_thread(self.store.update_run, run_id, plan=[s.model_dump() for s in plan])
+        # On a resume this carries the completed steps with their outputs, so a
+        # client that never saw the first attempt can still draw the whole run.
         await self._emit(run_id, "plan_ready", {"plan": [s.model_dump() for s in plan]})
 
-        outputs: dict[int, str] = {}
-        revisions = 0
+        done = [s for s in plan if s.status == "completed"]
+        outputs: dict[int, str] = {s.index: s.output for s in done}
         i = 0
-        total_prompt = 0
-        total_completion = 0
-        total_cost = 0.0
+        total_prompt = sum(s.prompt_tokens for s in done)
+        total_completion = sum(s.completion_tokens for s in done)
+        total_cost = sum(s.cost_estimate for s in done)
 
         cancelled = False
 
@@ -312,6 +305,24 @@ class DynamicPipeline:
                 total_completion += c_tok
                 total_cost += cost
 
+                # Before the event, not after: if the process dies between the two,
+                # a resume replays nothing and the restored plan still shows the
+                # step. The other order would run, and bill, the step twice.
+                await asyncio.to_thread(
+                    save_step_checkpoint,
+                    self.store,
+                    run_id,
+                    step.index,
+                    step.agent_id,
+                    {
+                        "output": text,
+                        "duration_ms": duration,
+                        "prompt_tokens": p_tok,
+                        "completion_tokens": c_tok,
+                        "cost_estimate": cost,
+                        "tool_events": step_tool_events,
+                    },
+                )
                 await self._emit(
                     run_id,
                     "step_complete",
@@ -362,6 +373,12 @@ class DynamicPipeline:
                 if revised is not None:
                     plan = revised
                     revisions += 1
+                    await asyncio.to_thread(
+                        self.store.update_run,
+                        run_id,
+                        plan=[s.model_dump() for s in plan],
+                        revision_count=revisions,
+                    )
                     await self._emit(
                         run_id,
                         "plan_revised",
@@ -393,6 +410,8 @@ class DynamicPipeline:
                 total_completion_tokens=total_completion,
                 total_cost=total_cost,
             )
+            # A cancelled run is not resumable, so its checkpoints have no reader.
+            await asyncio.to_thread(clear_checkpoints, self.store, run_id)
             # The DELETE endpoint already emitted run_cancelled, so we do NOT emit
             # again here — duplicate terminal events would only confuse SSE clients.
             return PipelineRunResponse(
@@ -416,7 +435,60 @@ class DynamicPipeline:
                 status="cancelled",
             )
 
-        final_text = self._select_final_output(plan, outputs) or request.topic
+        final_text = self._select_final_output(plan, outputs)
+        if not final_text.strip():
+            # Every content step failed, typically because the provider was down.
+            # This used to complete the run and save the bare topic (or a research
+            # note) as the article. Failing keeps the checkpoints, so a resume
+            # re-runs only what is missing once the provider is back.
+            error = "No writer or editor step completed, so the run produced no content"
+            failed = self.store.transition_run_and_append_event(
+                run_id,
+                expected_statuses={"running"},
+                new_status="failed",
+                event_type="run_failed",
+                # `code` lets the UI explain this case in its own language.
+                payload={"error": error, "code": "no_content"},
+                error=error,
+                plan=[s.model_dump() for s in plan],
+                revision_count=revisions,
+                total_prompt_tokens=total_prompt,
+                total_completion_tokens=total_completion,
+                total_cost=total_cost,
+            )
+            current = failed or self.store.get_run(run_id) or {}
+            log_event(
+                logger,
+                "pipeline_run_finished",
+                level=logging.WARNING,
+                run_id=run_id,
+                thread_id=thread_id,
+                provider=provider,
+                model=litellm_model,
+                status=current.get("status", "failed"),
+                failed_steps=[s.index for s in plan if s.status == "failed"],
+            )
+            return PipelineRunResponse(
+                run_id=run_id,
+                thread_id=thread_id,
+                plan=plan,
+                final_content=AgentFinalContent(
+                    title=request.topic[:80],
+                    content="",
+                    content_type=request.content_type.value,
+                    style=request.style.value,
+                    tags=request.keywords or [],
+                ),
+                provider=provider,
+                model=litellm_model,
+                total_prompt_tokens=total_prompt,
+                total_completion_tokens=total_completion,
+                total_cost=total_cost,
+                revision_count=revisions,
+                # A cancel that raced the transition is the state that actually holds.
+                status="cancelled" if current.get("status") == "cancelled" else "failed",
+                error=error,
+            )
 
         content_fields = None
         if request.save_final and final_text.strip():
@@ -479,6 +551,8 @@ class DynamicPipeline:
                 response.error = "Run completion did not commit"
         else:
             response.saved_content_id = transitioned.get("saved_content_id")
+            # The result is durable; nothing will read these again.
+            await asyncio.to_thread(clear_checkpoints, self.store, run_id)
         log_event(
             logger,
             "pipeline_run_finished",
@@ -494,7 +568,85 @@ class DynamicPipeline:
         )
         return response
 
+    # -- resume -------------------------------------------------------------
+
+    def _restore_progress(self, run_id: str) -> tuple[list[PipelinePlanStep], int] | None:
+        """The persisted plan with completed steps filled in, or None to plan afresh.
+
+        The plan row says what the run intended; only a checkpoint says a step is
+        done. A step without one goes back to ``pending``, whatever status the plan
+        row remembers, so a step that failed or was cut off mid-flight runs again.
+        """
+        run = self.store.get_run(run_id) or {}
+        stored_plan = run.get("plan") or []
+        if not stored_plan:
+            return None
+        try:
+            plan = [PipelinePlanStep(**raw) for raw in stored_plan]
+        except (TypeError, ValueError):
+            # An unreadable plan cannot be resumed; planning again is always safe.
+            log_event(logger, "pipeline_resume_plan_unreadable", level=logging.WARNING, run_id=run_id)
+            return None
+
+        completed = load_completed_steps(self.store, run_id)
+        for step in plan:
+            checkpoint = completed.get(step.index)
+            result = (checkpoint or {}).get("result_data") or {}
+            # The name check guards the one way an index could change meaning: a
+            # checkpoint written under a plan that was later replaced.
+            if checkpoint and checkpoint.get("step_name") == step.agent_id and result.get("output"):
+                step.status = "completed"
+                step.output = result["output"]
+                step.duration_ms = int(result.get("duration_ms") or 0)
+                step.prompt_tokens = int(result.get("prompt_tokens") or 0)
+                step.completion_tokens = int(result.get("completion_tokens") or 0)
+                step.cost_estimate = float(result.get("cost_estimate") or 0.0)
+                step.tool_events = [SubAgentToolEvent(**e) for e in result.get("tool_events") or []]
+            else:
+                step.status = "pending"
+                step.output = ""
+                step.duration_ms = 0
+                step.prompt_tokens = 0
+                step.completion_tokens = 0
+                step.cost_estimate = 0.0
+                step.tool_events = []
+        restored = sum(1 for step in plan if step.status == "completed")
+        if restored:
+            metrics.job_checkpoints_resumed_total.inc(restored)
+        return plan, int(run.get("revision_count") or 0)
+
     # -- planner ------------------------------------------------------------
+
+    async def _plan_run(
+        self,
+        request: PipelineRunRequest,
+        *,
+        run_id: str,
+        provider: str,
+        litellm_model: str,
+    ) -> list[PipelinePlanStep]:
+        try:
+            outcome = await self._make_plan(request, provider, request.model)
+        except LLMConfigurationError:
+            # Misconfigured credentials are the operator's problem, not a planner
+            # shape problem. Falling back here would start a full run against a
+            # provider that cannot answer, so surface it instead.
+            raise
+        except Exception as exc:  # noqa: BLE001 -- planner boundary; falls back to the canonical plan
+            log_event(
+                logger,
+                "planner_fallback",
+                level=logging.WARNING,
+                run_id=run_id,
+                provider=provider,
+                model=litellm_model,
+                reason="exception",
+                error_class=exc.__class__.__name__,
+            )
+            metrics.planner_plans_parsed_total.labels(source="text_json", mode="fallback").inc()
+            return self._default_plan(request)
+        self._record_plan_outcome(outcome, run_id=run_id, provider=provider, model=litellm_model)
+        return outcome.steps or self._default_plan(request)
 
     async def _make_plan(
         self,
@@ -867,14 +1019,12 @@ class DynamicPipeline:
 
     @staticmethod
     def _select_final_output(plan: list[PipelinePlanStep], outputs: dict[int, str]) -> str:
-        # Prefer the latest completed editor output, then writer, then any.
-        for agent_id in ("editor", "writer"):
+        # The latest completed editor output, else the latest writer draft. Research
+        # notes and review scores are not content, so they are never a fallback.
+        for agent_id in CONTENT_AGENTS:
             for step in reversed(plan):
                 if step.agent_id == agent_id and step.status == "completed" and step.output:
                     return step.output
-        for step in reversed(plan):
-            if step.status == "completed" and step.output:
-                return step.output
         return ""
 
     @staticmethod

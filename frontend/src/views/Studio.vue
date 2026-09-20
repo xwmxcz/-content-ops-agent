@@ -165,7 +165,12 @@
             </div>
           </div>
 
-          <el-alert v-if="errorMessage" type="error" :title="errorMessage" show-icon :closable="false" class="surface-alert" />
+          <el-alert v-if="errorMessage" type="error" :title="errorMessage" show-icon :closable="false" class="surface-alert">
+            <div v-if="canResume" class="resume-row">
+              <el-button size="small" type="primary" :loading="resuming" @click="resumeRun">从断点继续</el-button>
+              <span class="resume-hint">{{ resumeHint }}</span>
+            </div>
+          </el-alert>
 
           <el-alert
             v-if="connectionNotice"
@@ -302,6 +307,7 @@ import {
   cancelPipelineRun,
   createPipelineRun,
   getPipelineRun,
+  resumePipelineRun,
   type PipelinePlanStep,
   type PipelineRunPayload,
   type SubAgentId,
@@ -476,10 +482,13 @@ const pipelineStream = usePipelineStream({
     closeStream()
     ElMessage.success(savedContentId.value ? `已完成，已保存 #${savedContentId.value}` : '已完成')
   },
-  onRunFailed(error) {
+  onRunFailed(error, code) {
     status.value = 'failed'
     running.value = false
-    errorMessage.value = error || '运行失败'
+    errorMessage.value =
+      code === 'no_content'
+        ? '写作步骤全部失败，没有生成内容。通常是模型服务暂时不可用，可稍后从断点继续。'
+        : error || '运行失败'
     closeStream()
   },
   onRunCancelled() {
@@ -487,6 +496,12 @@ const pipelineStream = usePipelineStream({
     running.value = false
     errorMessage.value = '已停止运行'
     closeStream()
+  },
+  onRunResumed() {
+    // The restored plan follows in plan_ready; this only lifts the failed state.
+    status.value = 'running'
+    running.value = true
+    errorMessage.value = ''
   },
   onConnectionLost() {
     // Retries are spent. The run may still be progressing server-side, so ask the
@@ -557,6 +572,37 @@ async function reconcileRun() {
     // inventing a terminal state from a failed status probe.
   } finally {
     reconciling.value = false
+  }
+}
+
+// Only a run the server recorded as failed can be resumed: a request that never
+// produced a run id has nothing to resume, and a cancelled run is final.
+const resuming = ref(false)
+const canResume = computed(
+  () => mode.value === 'dynamic' && status.value === 'failed' && !!runId.value && !running.value
+)
+const resumeHint = computed(() =>
+  completedSteps.value > 0
+    ? `已完成的 ${completedSteps.value} 步不会重跑，也不会再次计费`
+    : '将沿用原来的请求重新执行'
+)
+
+async function resumeRun() {
+  const id = runId.value
+  if (!id || resuming.value) return
+  resuming.value = true
+  try {
+    await resumePipelineRun(id)
+    errorMessage.value = ''
+    status.value = 'running'
+    running.value = true
+    streamExhausted.value = false
+    // Same run, same log: reopen at the cursor instead of replaying from zero.
+    pipelineStream.resume()
+  } catch (error) {
+    ElMessage.error((error as Error).message || '无法继续运行')
+  } finally {
+    resuming.value = false
   }
 }
 
@@ -1239,6 +1285,19 @@ onBeforeUnmount(() => {
 
 .surface-alert {
   margin-bottom: 14px;
+}
+
+.resume-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.resume-hint {
+  font-size: 12px;
+  color: var(--c-text-secondary);
 }
 
 .field-stack {

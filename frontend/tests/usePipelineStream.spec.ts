@@ -309,8 +309,33 @@ describe('usePipelineStream', () => {
       FakeEventSource.last.emit('run_failed', { error: 'boom' }, 3)
       await vi.advanceTimersByTimeAsync(60000)
 
-      expect(handlers.onRunFailed).toHaveBeenCalledWith('boom')
+      expect(handlers.onRunFailed).toHaveBeenCalledWith('boom', undefined)
       expect(FakeEventSource.openCount).toBe(1)
+    })
+
+    it('reopens after the failure when the run is resumed, without replaying it', async () => {
+      const onRunResumed = vi.fn()
+      const { handlers } = makeHandlers({ onRunResumed })
+      const stream = usePipelineStream(handlers)
+      await stream.subscribe('run-1')
+      FakeEventSource.last.emit('run_failed', { error: 'boom' }, 7)
+
+      // What Studio does once POST /runs/{id}/resume has been accepted.
+      stream.resume()
+
+      expect(FakeEventSource.openCount).toBe(2)
+      expect(FakeEventSource.last.afterSeqParam).toBe(7)
+
+      FakeEventSource.last.emit('run_resumed', {}, 8)
+      FakeEventSource.last.emit('plan_ready', { plan: [{ index: 1, status: 'completed' }] }, 9)
+      FakeEventSource.last.fail()
+      await vi.advanceTimersByTimeAsync(1000)
+
+      expect(onRunResumed).toHaveBeenCalledTimes(1)
+      expect(handlers.onPlanReady).toHaveBeenCalledTimes(1)
+      // The resumed run is live again, so a dropped connection is retried once more.
+      expect(FakeEventSource.openCount).toBe(3)
+      expect(FakeEventSource.last.afterSeqParam).toBe(9)
     })
 
     it('stops retrying after run_cancelled', async () => {
