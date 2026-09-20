@@ -1,18 +1,29 @@
-"""Streamed tokens are coalesced before they are persisted.
+"""How run events get from the pipeline to an SSE stream.
 
-Every run event is a transaction that locks the run row, and one per token meant
-roughly one per generated token. Coalescing must not lose, reorder, or delay the
-first piece of a step's text, and must not let text overtake the events around it.
+Three things changed here and each is pinned separately:
+
+- streamed tokens are coalesced before they are persisted (one transaction with
+  a run-row lock per token meant roughly one per generated token);
+- streams are woken by PostgreSQL NOTIFY instead of sweeping the event table
+  every 0.4 s, with the table still the source of truth;
+- losing the listener degrades to the old sweep rather than to lost events.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
+import time
+from contextlib import contextmanager
+from types import SimpleNamespace
 
 import pytest
 
-from src.api.services import dynamic_pipeline
+from src.api.routes.agent import stream_pipeline_run
+from src.api.services import dynamic_pipeline, run_event_hub
 from src.api.services.dynamic_pipeline import DynamicPipeline, _TokenBatcher
+from src.api.services.run_event_hub import RunEventHub, _libpq_dsn
 from src.api.services.sub_agents import SubAgentSpec
 from src.models import ContentStyle, ContentType
 from src.utils import config
@@ -111,6 +122,244 @@ async def test_no_text_is_lost_or_reordered_by_coalescing(clock):
 
     assert "".join(emitted) == text
     assert len(emitted) < len(text) / 5
+
+
+# ─── Hub, against a scripted connection ────────────────────────────────────
+
+
+class _Connection:
+    """Yields queued notifications the way psycopg's Connection.notifies does."""
+
+    def __init__(self, script: _Script) -> None:
+        self.script = script
+
+    def execute(self, sql: str) -> None:
+        self.script.statements.append(sql)
+
+    def notifies(self, timeout: float):
+        if self.script.fail_next_listen:
+            self.script.fail_next_listen = False
+            raise ConnectionError("server closed the connection")
+        deadline = time.monotonic() + min(timeout, 0.05)
+        while time.monotonic() < deadline:
+            with self.script.lock:
+                payloads, self.script.pending = self.script.pending, []
+            for payload in payloads:
+                yield SimpleNamespace(payload=payload)
+            time.sleep(0.005)
+
+
+class _Script:
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.pending: list[str] = []
+        self.statements: list[str] = []
+        self.connects = 0
+        self.refuse_connections = 0
+        self.fail_next_listen = False
+
+    @contextmanager
+    def connect(self):
+        self.connects += 1
+        if self.refuse_connections:
+            self.refuse_connections -= 1
+            raise ConnectionError("connection refused")
+        yield _Connection(self)
+
+    def notify(self, run_id: str) -> None:
+        with self.lock:
+            self.pending.append(run_id)
+
+
+@pytest.fixture
+def scripted_hub(monkeypatch):
+    monkeypatch.setattr(run_event_hub, "_RECONNECT_INITIAL_SECONDS", 0.02)
+    monkeypatch.setattr(run_event_hub, "_LISTEN_SLICE_SECONDS", 0.05)
+    monkeypatch.setattr(config, "SSE_POLL_INTERVAL_SECONDS", 0.4)
+    monkeypatch.setattr(config, "SSE_NOTIFY_FALLBACK_POLL_SECONDS", 30.0)
+    script = _Script()
+    hub = RunEventHub(connect=script.connect)
+    try:
+        yield hub, script
+    finally:
+        hub.stop()
+
+
+async def _until(predicate, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        assert time.monotonic() < deadline, "condition was not reached in time"
+        await asyncio.sleep(0.01)
+
+
+async def test_notification_wakes_only_the_streams_of_that_run(scripted_hub):
+    hub, script = scripted_hub
+    hub.ensure_started()
+    await _until(lambda: hub.healthy)
+
+    with hub.subscribe("run-a") as a, hub.subscribe("run-a") as a2, hub.subscribe("run-b") as b:
+        for woken in (a, a2, b):
+            woken.clear()
+        script.notify("run-a")
+        await _until(lambda: a.is_set() and a2.is_set())
+
+        assert not b.is_set()
+    assert script.statements == ["LISTEN run_events"]
+
+
+async def test_wait_returns_on_notification_long_before_the_fallback_poll(scripted_hub):
+    hub, script = scripted_hub
+    hub.ensure_started()
+    await _until(lambda: hub.healthy)
+
+    with hub.subscribe("run-a") as woken:
+        woken.clear()
+        started = time.monotonic()
+        asyncio.get_running_loop().call_later(0.05, script.notify, "run-a")
+        await hub.wait(woken)
+
+    assert woken.is_set()
+    assert time.monotonic() - started < 5
+
+
+async def test_streams_sweep_fast_until_the_listener_is_up_and_slow_once_it_is(scripted_hub):
+    hub, script = scripted_hub
+    script.refuse_connections = 10_000
+
+    hub.ensure_started()
+    await _until(lambda: script.connects >= 2)
+    assert not hub.healthy
+    assert hub.poll_interval() == 0.4
+
+    script.refuse_connections = 0
+    await _until(lambda: hub.healthy)
+    assert hub.poll_interval() == 30.0
+
+
+async def test_reconnect_wakes_every_stream_because_notifications_were_missed(scripted_hub):
+    hub, script = scripted_hub
+    hub.ensure_started()
+    await _until(lambda: hub.healthy)
+
+    with hub.subscribe("run-a") as a, hub.subscribe("run-b") as b:
+        a.clear()
+        b.clear()
+        script.fail_next_listen = True
+        await _until(lambda: script.connects >= 2 and a.is_set() and b.is_set())
+
+    assert hub.healthy
+
+
+async def test_unsubscribing_forgets_the_run_and_stop_ends_the_thread(scripted_hub):
+    hub, script = scripted_hub
+    hub.ensure_started()
+    await _until(lambda: hub.healthy)
+    with hub.subscribe("run-a"):
+        assert "run-a" in hub._subscribers
+
+    assert hub._subscribers == {}
+    thread = hub._thread
+    hub.stop()
+    assert thread is not None and not thread.is_alive()
+    assert not hub.healthy
+
+
+def test_sqlalchemy_url_is_rewritten_for_libpq_without_masking_the_password():
+    dsn = _libpq_dsn("postgresql+psycopg://content_ops:s3cret@db.internal:5432/content_ops")
+
+    assert dsn == "postgresql://content_ops:s3cret@db.internal:5432/content_ops"
+
+
+# ─── Against PostgreSQL ────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def live_hub(store, monkeypatch):
+    # A notification that fails to arrive must fail the test, not be papered
+    # over by a sweep: push both sweeps far beyond the test's patience.
+    monkeypatch.setattr(config, "SSE_POLL_INTERVAL_SECONDS", 60.0)
+    monkeypatch.setattr(config, "SSE_NOTIFY_FALLBACK_POLL_SECONDS", 60.0)
+    hub = RunEventHub(database_url=store.database_url)
+    hub.ensure_started()
+    try:
+        yield hub
+    finally:
+        hub.stop()
+
+
+def _run(store, run_id: str = "run_notify") -> str:
+    store.create_run(run_id, "topic", "blog", "casual")
+    return run_id
+
+
+async def test_appending_an_event_wakes_a_subscriber_through_postgres(store, live_hub):
+    run_id = _run(store)
+    await _until(lambda: live_hub.healthy)
+
+    with live_hub.subscribe(run_id) as woken, live_hub.subscribe("run_other") as other:
+        woken.clear()
+        other.clear()
+        await asyncio.to_thread(store.append_run_event, run_id, "step_start", {"index": 1})
+        await _until(woken.is_set)
+
+        assert not other.is_set()
+
+
+async def test_terminal_transitions_notify_too(store, live_hub):
+    run_id = _run(store)
+    await _until(lambda: live_hub.healthy)
+
+    with live_hub.subscribe(run_id) as woken:
+        woken.clear()
+        await asyncio.to_thread(
+            lambda: store.transition_run_and_append_event(
+                run_id,
+                expected_statuses={"running"},
+                new_status="cancelled",
+                event_type="run_cancelled",
+                payload={"run_id": run_id},
+            )
+        )
+        await _until(woken.is_set)
+
+
+async def test_an_event_discarded_after_the_run_ended_notifies_nobody(store, live_hub):
+    run_id = _run(store)
+    store.transition_run_and_append_event(
+        run_id, expected_statuses={"running"}, new_status="cancelled", event_type="run_cancelled", payload={}
+    )
+    await _until(lambda: live_hub.healthy)
+
+    with live_hub.subscribe(run_id) as woken:
+        await asyncio.sleep(0.3)  # let the cancellation's own notification drain
+        woken.clear()
+        assert await asyncio.to_thread(store.append_run_event, run_id, "step_token", {"delta": "late"}) is None
+        await asyncio.sleep(0.5)
+
+        assert not woken.is_set()
+
+
+async def test_stream_delivers_a_live_event_without_waiting_for_a_sweep(store, live_hub, monkeypatch):
+    run_id = _run(store)
+    store.append_run_event(run_id, "plan_ready", {"plan": []})
+    monkeypatch.setattr(run_event_hub, "_hub", live_hub)
+    await _until(lambda: live_hub.healthy)
+
+    response = await stream_pipeline_run(run_id, store=store, after_seq=None, last_event_id=None)
+    frames = response.body_iterator
+    assert await anext(frames) == "event: hello\ndata: {}\n\n"
+    assert "event: plan_ready" in await anext(frames)
+
+    # The stream is now parked in hub.wait() with a 60 s sweep. Only a
+    # notification can deliver this within the timeout below.
+    pending = asyncio.ensure_future(anext(frames))
+    await asyncio.sleep(0.2)
+    assert not pending.done()
+    await asyncio.to_thread(store.append_run_event, run_id, "step_start", {"index": 1})
+
+    frame = await asyncio.wait_for(pending, timeout=5)
+    assert frame.startswith("id: 2\nevent: step_start\n")
+    await frames.aclose()
 
 
 # ─── Pipeline ordering with coalescing on ──────────────────────────────────

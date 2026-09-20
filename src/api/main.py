@@ -10,6 +10,7 @@ from src.api.middleware.metrics_middleware import MetricsMiddleware
 from src.api.request_context import RequestContextMiddleware
 from src.api.routes import agent, auth, calendar, content, health, jobs, media, memory, metrics, models, publish, stats
 from src.api.security import AuthMiddleware, HttpsEnforcementMiddleware
+from src.api.services.run_event_hub import shutdown_run_event_hub
 from src.storage.tenancy import TenantAccessError
 from src.utils import config
 from src.utils.structured_logging import configure_logging
@@ -28,7 +29,12 @@ async def lifespan(app: FastAPI):
 
     config.validate_runtime()
     get_system_store()
-    yield
+    try:
+        yield
+    finally:
+        # Started lazily by the first SSE stream; stopping it here releases its
+        # database connection instead of leaving it to the daemon-thread exit.
+        shutdown_run_event_hub()
 
 
 app = FastAPI(
