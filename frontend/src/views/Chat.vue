@@ -95,7 +95,10 @@
             <div class="message-bubble">
               <div class="message-meta">
                 <span>{{ message.role === 'user' ? '我' : '内容助手' }}</span>
-                <small v-if="message.model">{{ message.provider }} / {{ message.model }}</small>
+                <small v-if="message.streaming" class="stream-status" aria-live="polite">
+                  {{ message.activeTool ? `正在调用 ${message.activeTool}` : '生成中' }}
+                </small>
+                <small v-else-if="message.model">{{ message.provider }} / {{ message.model }}</small>
                 <small v-else-if="message.pending">发送中</small>
               </div>
 
@@ -133,7 +136,8 @@
                 </ol>
               </section>
 
-              <p>{{ message.content }}</p>
+              <p v-if="message.streaming && !message.content" class="typing-indicator" aria-hidden="true"><i></i><i></i><i></i></p>
+              <p v-else>{{ message.content }}</p>
 
               <div v-if="message.tool_events?.length" class="tool-events">
                 <div class="tool-events-head">
@@ -198,7 +202,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import { ElMessageBox } from 'element-plus/es/components/message-box/index'
@@ -401,6 +405,22 @@ async function scrollToBottom() {
     logRef.value.scrollTop = logRef.value.scrollHeight
   }
 }
+
+// Follow a reply while it streams, but only for a reader who is already at the
+// bottom: someone who scrolled up to reread something must not be dragged back
+// down on every token. The default `pre` flush measures before the DOM grows.
+watch(
+  () => {
+    const last = chat.messages[chat.messages.length - 1]
+    return last?.streaming ? `${last.content.length}:${last.tool_events?.length ?? 0}:${last.activeTool ?? ''}` : ''
+  },
+  async marker => {
+    const log = logRef.value
+    if (!marker || !log) return
+    const followsBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80
+    if (followsBottom) await scrollToBottom()
+  }
+)
 
 function studioTopicFor(index: number) {
   for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
@@ -715,6 +735,34 @@ onMounted(async () => {
   overflow-wrap: anywhere;
 }
 
+.message-meta .stream-status {
+  color: var(--c-accent);
+}
+
+/* Shown until the first token: intent recognition and tools emit no text. */
+.message-bubble .typing-indicator {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+}
+
+.typing-indicator i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--c-border-strong);
+  animation: typing-pulse 1.2s ease-in-out infinite;
+}
+
+.typing-indicator i:nth-child(2) { animation-delay: .15s; }
+.typing-indicator i:nth-child(3) { animation-delay: .3s; }
+
+@keyframes typing-pulse {
+  0%, 60%, 100% { opacity: .35; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-3px); }
+}
+
 .intent-board {
   display: grid;
   gap: 10px;
@@ -976,6 +1024,11 @@ summary:focus-visible, .load-older:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   .chat-log {
     scroll-behavior: auto;
+  }
+
+  .typing-indicator i {
+    animation: none;
+    opacity: .7;
   }
 
 }
