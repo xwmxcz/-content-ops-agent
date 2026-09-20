@@ -32,9 +32,16 @@ class ErrorClassifier:
         - Business logic errors
         - Permission/authorization errors
         - Data integrity violations
+        - Publish calls whose outcome is unknown (a retry could post twice)
         """
         exc_class_name = exc.__class__.__name__
         exc_message = str(exc).lower()
+
+        # A publish whose outcome is unknown may already be live. Checked first
+        # because its message names the timeout that caused it, which the generic
+        # rules below would read as retriable and publish a second time.
+        if "McpOutcomeUnknownError" in exc_class_name:
+            return cls.PERMANENT
 
         # Configuration errors are permanent
         if "LLMConfigurationError" in exc_class_name:
