@@ -137,6 +137,7 @@ Docker mode starts:
 | `migrate` | One-shot Alembic upgrade; API/worker wait for successful completion. |
 | `api` | FastAPI application; production startup validates config and schema revision. |
 | `worker` | RQ worker for long-running jobs; validates schema revision without running DDL. |
+| `reaper` | Requeues jobs whose worker died mid-run and stopped renewing its lease. |
 | `postgres` | PostgreSQL 16 database. |
 | `redis` | Redis for RQ. |
 

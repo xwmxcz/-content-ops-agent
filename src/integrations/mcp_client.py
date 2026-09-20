@@ -14,8 +14,32 @@ class McpClientError(RuntimeError):
     """Raised when the remote MCP server cannot satisfy a request."""
 
 
+class McpRequestRejectedError(McpClientError):
+    """The server refused the request before running the tool."""
+
+
+class McpOutcomeUnknownError(McpClientError):
+    """A non-idempotent tool call was sent and its outcome cannot be determined.
+
+    Publishing to a real platform is not reversible and the provider is not known
+    to deduplicate, so neither the REST fallback nor the job retry layer may send
+    the request again: the first one may already have been accepted. The error
+    classifier treats this as permanent; a person has to check the platform.
+    """
+
+
+# JSON-RPC codes that mean the request never reached the tool: parse error,
+# invalid request, method not found, invalid params. Anything else (notably
+# -32603 internal error) can be raised after the tool has already acted.
+_REJECTED_BEFORE_EXECUTION_CODES = frozenset({-32700, -32600, -32601, -32602})
+
+# httpx failures raised before any request byte is written.
+_NEVER_SENT_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+
+
 class XiaohongshuMcpClient:
     MIN_TIMEOUT_SECONDS = 120.0
+    NON_IDEMPOTENT_TOOLS = frozenset({"publish_content", "publish_with_video"})
 
     def __init__(
         self,
@@ -39,6 +63,10 @@ class XiaohongshuMcpClient:
         if not config.XHS_MCP_ENABLED:
             raise McpClientError("Xiaohongshu MCP integration is disabled")
 
+        # Until the tools/call request is dispatched, a failure only says the server
+        # does not speak MCP, so the REST fallback is safe for every tool. After
+        # that point a publish may already have been accepted.
+        dispatched = False
         try:
             async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
                 session_id = await self._initialize(client)
@@ -49,10 +77,13 @@ class XiaohongshuMcpClient:
                     "method": "tools/call",
                     "params": {"name": name, "arguments": arguments},
                 }
+                dispatched = True
                 result = await self._post(client, payload, session_id=session_id)
-            return self._normalize_tool_result(result)
-        except (McpClientError, httpx.HTTPError):
+        except (McpClientError, httpx.HTTPError) as exc:
+            if dispatched and name in self.NON_IDEMPOTENT_TOOLS and self._outcome_is_unknown(exc):
+                raise self._outcome_unknown(name, exc) from exc
             return await self._call_rest_fallback(name, arguments)
+        return self._normalize_tool_result(result)
 
     async def _initialize(self, client: httpx.AsyncClient) -> str | None:
         payload = {
@@ -89,6 +120,8 @@ class XiaohongshuMcpClient:
         body, _ = await self._post_raw(client, payload, session_id=session_id)
         if "error" in body:
             message = body["error"].get("message", "MCP request failed")
+            if body["error"].get("code") in _REJECTED_BEFORE_EXECUTION_CODES:
+                raise McpRequestRejectedError(message)
             raise McpClientError(message)
         if not expect_result:
             return body
@@ -125,6 +158,25 @@ class XiaohongshuMcpClient:
         return data, response.headers
 
     @staticmethod
+    def _outcome_is_unknown(exc: Exception) -> bool:
+        """Whether a dispatched request may have been acted on despite ``exc``."""
+        if isinstance(exc, _NEVER_SENT_ERRORS):
+            return False
+        if isinstance(exc, httpx.HTTPStatusError):
+            # A 4xx is the server declining the request; a 5xx may be a gateway
+            # giving up on a backend that is still publishing.
+            return exc.response.status_code >= 500
+        return not isinstance(exc, McpRequestRejectedError)
+
+    @staticmethod
+    def _outcome_unknown(name: str, exc: Exception) -> McpOutcomeUnknownError:
+        return McpOutcomeUnknownError(
+            f"Xiaohongshu {name} was sent but its outcome is unknown "
+            f"({exc.__class__.__name__}: {exc}). The post may already exist: check the platform "
+            "before retrying. It was not re-sent automatically to avoid a duplicate post."
+        )
+
+    @staticmethod
     def _normalize_tool_result(result: dict[str, Any]) -> dict[str, Any]:
         content_items = result.get("content") or []
         texts: list[str] = []
@@ -144,9 +196,15 @@ class XiaohongshuMcpClient:
                     if isinstance(candidate, dict):
                         parsed = candidate
 
+        text = "\n".join(texts).strip()
+        # MCP reports a tool that ran and failed inside a successful JSON-RPC
+        # result; without this check a failed publish is recorded as completed.
+        if result.get("isError"):
+            raise McpClientError(text or "MCP tool reported an error")
+
         return {
             "raw": result,
-            "text": "\n".join(texts).strip(),
+            "text": text,
             "data": parsed,
             "content": content_items,
         }
@@ -176,21 +234,32 @@ class XiaohongshuMcpClient:
         endpoint = self._fallback_endpoint(name)
         method = "GET" if name == "check_login_status" else "POST"
         payload = self._fallback_payload(name, arguments)
+        non_idempotent = name in self.NON_IDEMPOTENT_TOOLS
+        # Sent as a header so a provider that ignores it cannot reject the body.
+        # Whether it deduplicates on the token is the provider's contract.
+        request_id = arguments.get("request_id")
+        headers = {"Idempotency-Key": str(request_id)} if request_id else None
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
                 if method == "GET":
                     response = await client.get(endpoint)
                 else:
-                    response = await client.post(endpoint, json=payload)
-        except httpx.TimeoutException as exc:
-            raise McpClientError(f"Xiaohongshu HTTP API timed out after {int(self.timeout_seconds)}s") from exc
+                    response = await client.post(endpoint, json=payload, headers=headers)
         except httpx.HTTPError as exc:
+            if non_idempotent and self._outcome_is_unknown(exc):
+                raise self._outcome_unknown(name, exc) from exc
+            if isinstance(exc, httpx.TimeoutException):
+                raise McpClientError(f"Xiaohongshu HTTP API timed out after {int(self.timeout_seconds)}s") from exc
             raise McpClientError(f"Xiaohongshu HTTP API request failed: {exc}") from exc
 
         try:
             data = response.json()
         except json.JSONDecodeError as exc:
+            # A structured error body is the API's own verdict; an unreadable one
+            # on a 2xx or a gateway 5xx says nothing about what the backend did.
+            if non_idempotent and not 400 <= response.status_code < 500:
+                raise self._outcome_unknown(name, exc) from exc
             raise McpClientError("Fallback HTTP API returned a non-JSON response") from exc
 
         if response.status_code >= 400:

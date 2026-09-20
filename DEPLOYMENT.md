@@ -125,6 +125,29 @@ Transient failures (network timeouts, rate limits, 5xx errors) are automatically
 
 Permanent errors (validation failures, 4xx errors, configuration issues) are not retried.
 
+A publish whose outcome is unknown is also permanent. If the Xiaohongshu request was
+sent and then timed out, the connection dropped, or a gateway answered 5xx, the post
+may already be live, so the client neither falls back to the REST API nor lets the job
+retry. The publication fails with a message asking you to check the platform first;
+re-submit it yourself only once you have confirmed nothing was posted.
+
+### Lease recovery
+
+A worker that is OOM-killed or evicted cannot mark its job failed; the job stays
+`running` and only its lease stops being renewed. The Compose stack runs a `reaper`
+service that requeues such jobs once the lease lapses, without charging a retry
+attempt. Outside Compose, run it next to your workers:
+
+```bash
+python3 -m src.jobs.reaper --execute --loop   # long-lived service
+python3 -m src.jobs.reaper --dry-run          # report expired leases, change nothing
+python3 -m src.jobs.reaper --healthcheck      # exit 0 if the service swept recently
+```
+
+Tuning: `JOB_LEASE_DURATION_SECONDS` (default 300), `JOB_HEARTBEAT_INTERVAL_SECONDS`
+(30), `JOB_REAPER_INTERVAL_SECONDS` (60), `JOB_REAPER_BATCH_SIZE` (50). Keep the lease
+several heartbeats long, or one slow database round-trip looks like a dead worker.
+
 ### Monitoring (Phase 2)
 
 **Prometheus metrics** are exposed at `GET /api/metrics`:

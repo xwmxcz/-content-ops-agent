@@ -12,12 +12,23 @@ then frozen for the rest of the session so Anthropic prompt caching stays warm.
 Within a file, entries are separated by a line containing just `§`. The
 delimiter lets a single entry span multiple lines while still allowing
 substring-based `replace`/`remove` operations.
+
+The API runs several gunicorn processes next to an RQ worker, all sharing one
+memory volume, so writers are serialized with an OS file lock rather than an
+in-process one, and every write lands through an atomic rename: a reader sees
+the old file or the new file, never a truncated one.
 """
 
 from __future__ import annotations
 
+import os
 import re
+import sys
+import tempfile
 import threading
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +37,37 @@ USER = "user"
 _VALID_TARGETS = {AGENT, USER}
 
 _SECTION = "§"
+
+_LOCK_FILE = ".lock"
+_LOCK_TIMEOUT_SECONDS = 10.0
+_LOCK_POLL_SECONDS = 0.02
+_REPLACE_ATTEMPTS = 10
+
+if sys.platform == "win32":
+    import msvcrt
+
+    def _try_lock(fd: int) -> bool:
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        return True
+
+    def _unlock(fd: int) -> None:
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+
+else:
+    import fcntl
+
+    def _try_lock(fd: int) -> bool:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return False
+        return True
+
+    def _unlock(fd: int) -> None:
+        fcntl.flock(fd, fcntl.LOCK_UN)
 
 
 class MemoryLimitExceeded(ValueError):
@@ -40,8 +82,12 @@ class MemoryAmbiguous(ValueError):
     """Raised when `old_text` matches more than one location in the file."""
 
 
+class MemoryLockTimeout(TimeoutError):
+    """Raised when another writer held the memory directory lock for too long."""
+
+
 class FileMemory:
-    """Thread-safe reader/writer for MEMORY.md and USER.md."""
+    """Process-safe reader/writer for MEMORY.md and USER.md."""
 
     def __init__(
         self,
@@ -66,51 +112,51 @@ class FileMemory:
         return path.read_text(encoding="utf-8")
 
     def save(self, target: str, content: str) -> None:
-        limit = self.limit_for(target)
-        if len(content) > limit:
-            raise MemoryLimitExceeded(f"{target} memory has {len(content)} chars, limit is {limit}")
-        path = self._path_for(target)
-        with self._lock:
-            path.write_text(content, encoding="utf-8")
+        self._check_limit(target, content)
+        with self._exclusive():
+            self._write(target, content)
+
+    # add/replace/remove read the file and write back a derived value, so the
+    # lock has to span the read as well: taken around the write alone, two
+    # concurrent adds both start from the same content and one entry is lost.
 
     def add(self, target: str, text: str) -> None:
         entry = text.strip()
         if not entry:
             raise ValueError("Cannot add an empty memory entry")
-        current = self.load(target).rstrip()
-        if current:
-            new = f"{current}\n{_SECTION}\n{entry}\n"
-        else:
-            new = f"{entry}\n"
-        self.save(target, new)
+        with self._exclusive():
+            current = self.load(target).rstrip()
+            if current:
+                new = f"{current}\n{_SECTION}\n{entry}\n"
+            else:
+                new = f"{entry}\n"
+            self._check_limit(target, new)
+            self._write(target, new)
 
     def replace(self, target: str, old_text: str, new_text: str) -> None:
-        current = self.load(target)
-        occurrences = current.count(old_text)
-        if occurrences == 0:
-            raise MemoryNotFound(f"old_text not found in {target} memory")
-        if occurrences > 1:
-            raise MemoryAmbiguous(
-                f"old_text matches {occurrences} locations in {target} memory; make it more specific so it is unique"
-            )
-        self.save(target, current.replace(old_text, new_text))
+        with self._exclusive():
+            current = self.load(target)
+            self._require_unique(target, current, old_text)
+            new = current.replace(old_text, new_text)
+            self._check_limit(target, new)
+            self._write(target, new)
 
     def remove(self, target: str, old_text: str) -> None:
-        current = self.load(target)
-        occurrences = current.count(old_text)
-        if occurrences == 0:
-            raise MemoryNotFound(f"old_text not found in {target} memory")
-        if occurrences > 1:
-            raise MemoryAmbiguous(
-                f"old_text matches {occurrences} locations in {target} memory; make it more specific so it is unique"
+        with self._exclusive():
+            current = self.load(target)
+            self._require_unique(target, current, old_text)
+            new = current.replace(old_text, "")
+            # Collapse leftover delimiter pairs / extra blank lines after removal.
+            new = re.sub(rf"(?m)^{re.escape(_SECTION)}\s*\n{re.escape(_SECTION)}\s*\n", f"{_SECTION}\n", new)
+            new = (
+                re.sub(rf"(?m)^{re.escape(_SECTION)}\s*\n", "", new, count=1)
+                if new.startswith(f"{_SECTION}\n")
+                else new
             )
-        new = current.replace(old_text, "")
-        # Collapse leftover delimiter pairs / extra blank lines after removal.
-        new = re.sub(rf"(?m)^{re.escape(_SECTION)}\s*\n{re.escape(_SECTION)}\s*\n", f"{_SECTION}\n", new)
-        new = re.sub(rf"(?m)^{re.escape(_SECTION)}\s*\n", "", new, count=1) if new.startswith(f"{_SECTION}\n") else new
-        new = re.sub(rf"\n{re.escape(_SECTION)}\s*\Z", "", new)
-        new = re.sub(r"\n{3,}", "\n\n", new)
-        self.save(target, new)
+            new = re.sub(rf"\n{re.escape(_SECTION)}\s*\Z", "", new)
+            new = re.sub(r"\n{3,}", "\n\n", new)
+            self._check_limit(target, new)
+            self._write(target, new)
 
     def stats(self, target: str) -> dict[str, Any]:
         content = self.load(target)
@@ -132,6 +178,68 @@ class FileMemory:
         return self.memory_limit if target == AGENT else self.user_limit
 
     # ─── Internals ─────────────────────────────────────────────────────────
+
+    @contextmanager
+    def _exclusive(self) -> Iterator[None]:
+        """Hold the directory's writer lock across threads and processes."""
+        with self._lock:
+            fd = os.open(self.dir / _LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o600)
+            try:
+                deadline = time.monotonic() + _LOCK_TIMEOUT_SECONDS
+                while not _try_lock(fd):
+                    if time.monotonic() >= deadline:
+                        raise MemoryLockTimeout(f"Memory directory {self.dir} stayed locked by another writer")
+                    time.sleep(_LOCK_POLL_SECONDS)
+                try:
+                    yield
+                finally:
+                    _unlock(fd)
+            finally:
+                os.close(fd)
+
+    def _write(self, target: str, content: str) -> None:
+        """Replace the file in one step. The caller holds the writer lock."""
+        path = self._path_for(target)
+        fd, tmp_name = tempfile.mkstemp(dir=self.dir, prefix=f".{path.name}.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            self._replace(tmp_name, path)
+        except BaseException:
+            with suppress(OSError):
+                os.unlink(tmp_name)
+            raise
+
+    @staticmethod
+    def _replace(tmp_name: str, path: Path) -> None:
+        # Windows refuses to replace a file that a concurrent load() has open;
+        # the reader is done within milliseconds, so a short retry covers it.
+        attempts = _REPLACE_ATTEMPTS if sys.platform == "win32" else 1
+        for attempt in range(attempts):
+            try:
+                os.replace(tmp_name, path)
+                return
+            except PermissionError:
+                if attempt == attempts - 1:
+                    raise
+                time.sleep(_LOCK_POLL_SECONDS)
+
+    def _check_limit(self, target: str, content: str) -> None:
+        limit = self.limit_for(target)
+        if len(content) > limit:
+            raise MemoryLimitExceeded(f"{target} memory has {len(content)} chars, limit is {limit}")
+
+    @staticmethod
+    def _require_unique(target: str, current: str, old_text: str) -> None:
+        occurrences = current.count(old_text)
+        if occurrences == 0:
+            raise MemoryNotFound(f"old_text not found in {target} memory")
+        if occurrences > 1:
+            raise MemoryAmbiguous(
+                f"old_text matches {occurrences} locations in {target} memory; make it more specific so it is unique"
+            )
 
     def _path_for(self, target: str) -> Path:
         self._validate_target(target)

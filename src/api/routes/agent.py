@@ -413,12 +413,3 @@ def delete_thread(
     if not store.delete_agent_thread(thread_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Thread {thread_id} was not found")
     return {"deleted": True}
-
-
-@router.get("/stream")
-async def legacy_stream(message: str, thread_id: str = "default"):
-    async def events():
-        yield "event: message\ndata: Streaming transport is ready. Use POST /api/agent/runs for full pipeline streaming.\n\n"
-        yield f"event: done\ndata: {thread_id}\n\n"
-
-    return StreamingResponse(events(), media_type="text/event-stream")

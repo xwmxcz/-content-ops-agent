@@ -1,5 +1,32 @@
 # Improvement Log
 
+## 2026-09-19 — 四项接线/正确性缺口
+
+对照代码复核历史残余风险时发现的四项，均为“机制已写好但没有真正生效”或既有缺陷：
+
+1. **Lease reaper 从未部署**：`src/jobs/reaper.py` 只有 CLI，Compose、cron 和文档都没有调用它，
+   所以部署栈里 worker 被 OOM/驱逐后任务永远停在 `running`。修复：Compose 新增 `reaper` 服务
+   （`--execute --loop`），loop 模式与 `worker.py` 同样做结构化日志、fail-closed 配置与 schema 校验；
+   因 api 镜像内置的 HEALTHCHECK 探测 8000 端口，reaper 改用心跳文件 + `--healthcheck`。
+   新增部署契约测试，保证以后基于 api 镜像的服务不会继承错误探针。
+2. **记忆文件丢更新**：锁只包住 `write_text`，读-改-写在锁外，且是线程锁；而 `FileMemory` 每请求新建一个实例，
+   gunicorn 3 进程 + RQ worker 共用同一卷。用旧实现复现：4 进程各 add 15 条，60 条只剩 18 条。
+   修复：目录级 OS 文件锁（`fcntl.flock` / `msvcrt.locking`）覆盖整个读-改-写，写入改为临时文件 +
+   `fsync` + `os.replace`。修复后 60/60。
+3. **小红书重复发布**：比此前记录的更严重。`tools/call` 发出后只要超时/断连，`call_tool` 就会用 REST
+   fallback **再发一次**；随后任务层又因消息含 “timed out” 判为 transient 而自动重试。修复：发布类工具在请求
+   已发出且结果不明（读超时、断连、5xx、无法解析的响应、JSON-RPC 内部错误）时抛
+   `McpOutcomeUnknownError`，不走 fallback，分类器判 permanent，由人工核对平台后再决定。
+   连接阶段失败、4xx、JSON-RPC 参数/方法错误等“确定未执行”的情况仍可 fallback/重试。
+   REST fallback 以 `Idempotency-Key` 头携带稳定 request id（平台是否去重取决于对方）。
+   同时修复 `_normalize_tool_result` 忽略 `isError`，此前工具报告失败会被记成发布成功。
+4. **删除 `/api/agent/stream` 遗留桩接口**：无任何调用方，只返回一句提示。
+
+验证：涉及的四个测试文件 54 passed；不带数据库的全量 `306 passed, 302 skipped`
+（跳过项全部因未设置 `TEST_DATABASE_URL`）；`ruff check`、`ruff format --check`、`mypy`
+（含 `--platform linux` 检查 fcntl 分支）通过。本机 Docker 守护进程未运行，
+PostgreSQL 全量套件与 Compose 运行时（reaper 容器健康检查）**未在本机执行**，需由 CI/部署环境确认。
+
 ## 2026-09-05 — 浏览器/TLS 验证与运行期缺陷修复
 
 当前进度以 [WORKFLOW_CHECKPOINT.md](archive/WORKFLOW_CHECKPOINT_2026-09-05.md) 为准，本文后续章节为历史记录。

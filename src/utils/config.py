@@ -3,6 +3,7 @@
 import ipaddress
 import math
 import os
+import tempfile
 from collections import Counter
 from urllib.parse import unquote, urlsplit
 
@@ -110,6 +111,12 @@ class Config:
     JOB_HEARTBEAT_INTERVAL_SECONDS = int(os.getenv("JOB_HEARTBEAT_INTERVAL_SECONDS", "30"))
     JOB_REAPER_INTERVAL_SECONDS = int(os.getenv("JOB_REAPER_INTERVAL_SECONDS", "60"))
     JOB_REAPER_BATCH_SIZE = int(os.getenv("JOB_REAPER_BATCH_SIZE", "50"))
+    # Touched after every sweep of the reaper daemon; its container healthcheck
+    # reads the age. The reaper has no HTTP surface to probe instead.
+    JOB_REAPER_HEARTBEAT_FILE = os.getenv(
+        "JOB_REAPER_HEARTBEAT_FILE",
+        os.path.join(tempfile.gettempdir(), "content-ops-reaper.heartbeat"),
+    )
 
     # Per-user throttle on the endpoints that spend an operator's LLM budget.
     # Auth endpoints were already rate-limited, but nothing bounded an
