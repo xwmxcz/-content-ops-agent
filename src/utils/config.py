@@ -135,6 +135,12 @@ class Config:
     # Hard ceiling on one subscription. The client reconnects with `after_seq`, so
     # this bounds server-side resource hold time without losing events.
     SSE_STREAM_TIMEOUT_SECONDS = int(os.getenv("SSE_STREAM_TIMEOUT_SECONDS", "600"))
+    # Streamed tokens are coalesced before they are persisted: every run event is
+    # a transaction that locks the run row, and one per token meant ~2000 of them
+    # for a single draft. The first delta of a step is never held back. 0 seconds
+    # disables coalescing.
+    SSE_TOKEN_BATCH_SECONDS = float(os.getenv("SSE_TOKEN_BATCH_SECONDS", "0.15"))
+    SSE_TOKEN_BATCH_MAX_CHARS = int(os.getenv("SSE_TOKEN_BATCH_MAX_CHARS", "400"))
 
     # Media and MCP integration
     MEDIA_STORAGE_ROOT = os.getenv("MEDIA_STORAGE_ROOT", "data/media")
