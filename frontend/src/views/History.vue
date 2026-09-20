@@ -7,6 +7,7 @@
       </div>
       <div class="hero-actions">
         <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
+        <el-button :icon="DataAnalysis" @click="metricsImportOpen = true">导入效果数据</el-button>
         <router-link to="/" class="create-link"><el-icon><Plus /></el-icon>新建内容</router-link>
       </div>
     </section>
@@ -259,9 +260,13 @@
               <el-empty v-if="!publications.length" description="暂无发布记录" />
             </div>
           </details>
+
+          <ContentMetricsPanel :content-id="selected.id" :default-platform="selected.content_type" :refresh-key="metricsRefreshKey" />
         </div>
       </div>
     </section>
+
+    <MetricsImportDialog v-model:open="metricsImportOpen" @imported="onMetricsImported" />
   </div>
 </template>
 
@@ -281,8 +286,10 @@ import 'element-plus/es/components/date-picker/style/css'
 import 'element-plus/es/components/empty/style/css'
 import 'element-plus/es/components/message-box/style/css'
 import 'element-plus/es/components/radio/style/css'
-import { Clock, Delete, Document, DocumentCopy, Edit, FolderDelete, Plus, Promotion, Refresh, Search, UploadFilled, VideoPlay } from '@element-plus/icons-vue'
+import { Clock, DataAnalysis, Delete, Document, DocumentCopy, Edit, FolderDelete, Plus, Promotion, Refresh, Search, UploadFilled, VideoPlay } from '@element-plus/icons-vue'
 import ContentCard from '../components/ContentCard.vue'
+import ContentMetricsPanel from '../components/ContentMetricsPanel.vue'
+import MetricsImportDialog from '../components/MetricsImportDialog.vue'
 import { archiveContent, deleteContentLocal, getContent, getContents, type ContentItem } from '../api/content'
 import { deleteMedia, getContentMedia, uploadMedia, type MediaAsset } from '../api/media'
 import { extractPublication, waitForJobResult } from '../api/jobs'
@@ -314,6 +321,9 @@ const isBulkArchiving = ref(false)
 const isBulkDeleting = ref(false)
 const selectionMode = ref(false)
 const selectedIds = ref<number[]>([])
+const metricsImportOpen = ref(false)
+// Bumped when an import touched the content on screen, so its panel reloads.
+const metricsRefreshKey = ref(0)
 const publishForm = reactive({
   publish_type: 'image_post' as 'image_post' | 'video_post',
   title: '',
@@ -386,6 +396,10 @@ async function open(id: number) {
   publishForm.content = ''
   publishForm.scheduled_at = ''
   await Promise.all([loadMedia(id), loadPublications(id), loadLoginStatus()])
+}
+
+function onMetricsImported(contentIds: number[]) {
+  if (selected.value && contentIds.includes(selected.value.id)) metricsRefreshKey.value += 1
 }
 
 function handleCardClick(id: number) {
