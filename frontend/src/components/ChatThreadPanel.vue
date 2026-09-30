@@ -13,6 +13,7 @@ import { formatTime, snippet } from '../composables/useChatPresentation'
 const props = defineProps<{
   threads: AgentThread[]
   threadsLoading: boolean
+  threadsError?: string
   includeArchived: boolean
   hasMoreThreads: boolean
   activeThreadId: string | undefined
@@ -20,6 +21,8 @@ const props = defineProps<{
   searchActive: boolean
   searching: boolean
   searchResults: AgentSearchHit[]
+  searchError?: string
+  mutatingThreadIds?: string[]
   /** Title lookup, owned by the parent because it resolves against the store. */
   threadLabel: (threadId: string) => string
 }>()
@@ -36,6 +39,8 @@ const emit = defineEmits<{
   (e: 'toggle-archive', thread: AgentThread): void
   (e: 'remove', thread: AgentThread): void
   (e: 'load-more'): void
+  (e: 'retry-threads'): void
+  (e: 'retry-search'): void
 }>()
 </script>
 
@@ -60,14 +65,19 @@ const emit = defineEmits<{
     </div>
 
     <label class="thread-toggle">
-      <input type="checkbox" :checked="includeArchived" @change="emit('toggle-archived', $event)" />
+      <input type="checkbox" :checked="includeArchived" :disabled="searchActive" @change="emit('toggle-archived', $event)" />
       <span>显示已归档</span>
     </label>
 
     <div class="thread-list">
       <!-- Search results override the thread list when a query is active. -->
       <div v-if="searchActive" class="search-results">
+        <p class="search-scope">搜索全部会话，包含已归档会话</p>
         <div v-if="searching" class="thread-empty">搜索中…</div>
+        <div v-else-if="searchError" class="thread-error" role="alert">
+          <p>{{ searchError }}</p>
+          <button type="button" @click="emit('retry-search')">重试搜索</button>
+        </div>
         <div v-else-if="!searchResults.length" class="thread-empty">无匹配结果</div>
         <button
           v-for="hit in searchResults"
@@ -84,7 +94,11 @@ const emit = defineEmits<{
       </div>
 
       <template v-else>
-        <div v-if="!threads.length && !threadsLoading" class="thread-empty">暂无会话</div>
+        <div v-if="threadsError" class="thread-error" role="alert">
+          <p>{{ threadsError }}</p>
+          <button type="button" :disabled="threadsLoading" @click="emit('retry-threads')">重试加载</button>
+        </div>
+        <div v-else-if="!threads.length && !threadsLoading" class="thread-empty">暂无会话</div>
         <div
           v-for="thread in threads"
           :key="thread.id"
@@ -100,11 +114,12 @@ const emit = defineEmits<{
             <small>{{ thread.message_count }} 条消息</small>
           </button>
           <div class="thread-actions" @click.stop>
-            <el-button text size="small" :icon="Edit" aria-label="重命名" @click="emit('rename', thread)" />
+            <el-button text size="small" :icon="Edit" :disabled="mutatingThreadIds?.includes(thread.id)" aria-label="重命名" @click="emit('rename', thread)" />
             <el-button
               text
               size="small"
               :icon="Top"
+              :disabled="mutatingThreadIds?.includes(thread.id)"
               :class="{ 'is-active': thread.pinned }"
               :aria-label="thread.pinned ? '取消置顶' : '置顶'"
               @click="emit('toggle-pin', thread)"
@@ -113,11 +128,12 @@ const emit = defineEmits<{
               text
               size="small"
               :icon="thread.archived ? FolderOpened : FolderRemove"
+              :disabled="mutatingThreadIds?.includes(thread.id)"
               :class="{ 'is-active': thread.archived }"
               :aria-label="thread.archived ? '取消归档' : '归档'"
               @click="emit('toggle-archive', thread)"
             />
-            <el-button text size="small" type="danger" :icon="Delete" aria-label="删除" @click="emit('remove', thread)" />
+            <el-button text size="small" type="danger" :icon="Delete" :disabled="mutatingThreadIds?.includes(thread.id)" aria-label="删除" @click="emit('remove', thread)" />
           </div>
         </div>
         <button
@@ -214,6 +230,11 @@ const emit = defineEmits<{
   text-align: center;
   font-size: 13px;
 }
+
+.search-scope { margin: 0 6px 6px; color: var(--c-text-tertiary); font-size: 11px; line-height: 1.5; }
+.thread-error { padding: 12px; color: var(--c-fail); font-size: 13px; }
+.thread-error p { margin: 0 0 10px; }
+.thread-error button { padding: 6px 10px; border: 1px solid var(--c-border); border-radius: 6px; color: var(--c-text); background: var(--c-surface); cursor: pointer; }
 
 .thread-item {
   display: grid;

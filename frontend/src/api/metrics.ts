@@ -1,4 +1,6 @@
 import { api } from './index'
+import { metricsChanged } from '../query/client'
+import { workspaceSessionId } from '../workspaceSession'
 
 export interface ContentMetrics {
   id: number
@@ -35,11 +37,15 @@ export async function getContentMetrics(contentId: number) {
 }
 
 export async function recordContentMetrics(contentId: number, payload: ContentMetricsPayload) {
+  const session = workspaceSessionId.value
   const { data } = await api.put<ContentMetrics>(`/content/${contentId}/metrics`, payload)
+  metricsChanged(session, [contentId])
   return data
 }
 
 export async function importContentMetrics(rows: MetricsImportRow[]) {
+  const session = workspaceSessionId.value
   const { data } = await api.post<MetricsImportResult>('/content/metrics/import', { rows })
+  metricsChanged(session, rows.filter(row => !data.missing_content_ids.includes(row.content_id)).map(row => row.content_id))
   return data
 }

@@ -12,6 +12,7 @@ from src.api.dependencies import get_publish_service, get_store
 from src.api.routes import media
 from src.api.services.publish_service import PublishService
 from src.storage import ContentStore
+from src.storage.repositories.media_repository import MediaContentNotFound, MediaLimitExceeded
 from src.utils import config
 
 
@@ -74,6 +75,25 @@ def test_failed_asset_save_removes_uploaded_file(client, upload_store, tmp_path)
 
     assert response.status_code == 500
     upload_store.save_media_asset.assert_called_once()
+    assert [path for path in tmp_path.rglob("*") if path.is_file()] == [existing_file]
+    assert existing_file.read_bytes() == b"previous upload"
+
+
+@pytest.mark.parametrize("error_type,http_status", [(MediaLimitExceeded, 400), (MediaContentNotFound, 404)])
+def test_rejected_upload_cleans_up_only_its_new_file(client, upload_store, tmp_path, error_type, http_status):
+    existing_file = tmp_path / "1" / "image" / "previous.png"
+    existing_file.parent.mkdir(parents=True)
+    existing_file.write_bytes(b"previous upload")
+    upload_store.save_media_asset.side_effect = error_type("Upload rejected")
+
+    response = client.post(
+        "/api/media/upload",
+        data={"content_id": 1, "media_type": "image"},
+        files={"file": ("photo.png", b"image-data", "image/png")},
+    )
+
+    assert response.status_code == http_status
+    assert response.json()["detail"] == "Upload rejected"
     assert [path for path in tmp_path.rglob("*") if path.is_file()] == [existing_file]
     assert existing_file.read_bytes() == b"previous upload"
 
@@ -153,3 +173,47 @@ def test_video_at_size_limit_is_accepted(client):
 
     assert response.status_code == 201
     assert Path(response.json()["file_path"]).read_bytes() == payload
+
+
+def test_media_delete_succeeds_when_content_cleanup_removes_the_file_first(client, upload_store, tmp_path, monkeypatch):
+    path = tmp_path / "1" / "image" / "old.png"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"old")
+    upload_store.delete_media_asset.return_value = {"id": 7, "file_path": str(path)}
+    unlink = Path.unlink
+
+    def concurrent_unlink(target, *args, **kwargs):
+        # A content deletion races exactly with unlink, after any exists check.
+        if target == path:
+            unlink(target)
+        return unlink(target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", concurrent_unlink)
+
+    response = client.delete("/api/media/7")
+
+    assert response.status_code == 200
+    assert response.json() == {"deleted": True}
+    assert not path.exists()
+
+
+def test_content_directory_removed_during_upload_returns_not_found(client, upload_store, tmp_path, monkeypatch):
+    open_file = Path.open
+    upload_store.get_content.side_effect = [{"id": 1}, None]
+
+    def missing_directory(target, *args, **kwargs):
+        if target.parent == tmp_path / "1" / "image":
+            raise FileNotFoundError("Content cleanup removed the directory")
+        return open_file(target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", missing_directory)
+
+    response = client.post(
+        "/api/media/upload",
+        data={"content_id": 1, "media_type": "image"},
+        files={"file": ("new.png", b"image-data", "image/png")},
+    )
+
+    assert response.status_code == 404
+    upload_store.save_media_asset.assert_not_called()
+    assert not [path for path in tmp_path.rglob("*") if path.is_file()]

@@ -13,6 +13,7 @@ from src.api.dependencies import get_publish_service, get_store
 from src.api.schemas.media import MediaAssetResponse, MediaUploadResponse
 from src.api.services.publish_service import PublicationValidationError, PublishService
 from src.storage import ContentStore
+from src.storage.repositories.media_repository import MediaContentNotFound, MediaLimitExceeded
 from src.utils import config
 
 router = APIRouter()
@@ -45,27 +46,15 @@ def upload_media(
     except PublicationValidationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    existing_assets = store.list_media_assets(content_id, media_type=media_type)
-    if media_type == "image" and len(existing_assets) >= config.MEDIA_MAX_IMAGE_COUNT:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Only {config.MEDIA_MAX_IMAGE_COUNT} images are allowed per content item",
-        )
-    if media_type == "video" and existing_assets:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only one video is allowed per content item in v1",
-        )
-
     storage_root = Path(config.MEDIA_STORAGE_ROOT).resolve()
     target_dir = storage_root / str(content_id) / media_type
-    target_dir.mkdir(parents=True, exist_ok=True)
 
     original_name = Path(file.filename or f"{media_type}.bin")
     target_path = target_dir / f"{uuid4().hex}{original_name.suffix.lower()}"
     max_size = config.MEDIA_MAX_VIDEO_SIZE_MB * 1024 * 1024 if media_type == "video" else None
     size = 0
     try:
+        target_dir.mkdir(parents=True, exist_ok=True)
         with target_path.open("wb") as destination:
             while chunk := file.file.read(1024 * 1024):
                 size += len(chunk)
@@ -86,8 +75,15 @@ def upload_media(
             file_path=str(target_path),
             mime_type=file.content_type,
         )
-    except Exception:
+    except Exception as exc:
         target_path.unlink(missing_ok=True)
+        if isinstance(exc, MediaLimitExceeded):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        if isinstance(exc, MediaContentNotFound):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        if isinstance(exc, OSError) and store.get_content(content_id) is None:
+            # Content cleanup may remove the directory between mkdir and open.
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Content not found") from exc
         raise
     return _with_file_url(asset)
 
@@ -102,8 +98,10 @@ def delete_media_asset(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media asset not found")
 
     file_path = _media_file_path(asset)
-    if file_path and file_path.exists():
-        file_path.unlink()
+    if file_path:
+        # Deleting the whole content can remove this file after the metadata
+        # transaction commits. That race must not turn a successful delete into 500.
+        file_path.unlink(missing_ok=True)
     return {"deleted": True}
 
 

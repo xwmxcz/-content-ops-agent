@@ -102,6 +102,7 @@ httpx==0.28.1
     #   -r requirements.txt
     #   huggingface-hub
     #   langchain-core
+    #   langgraph-sdk
     #   litellm
     #   openai
 httpx2==2.13.0
@@ -148,10 +149,26 @@ langchain-core==1.6.3
     #   -r requirements.txt
     #   langchain-anthropic
     #   langchain-openai
+    #   langgraph
+    #   langgraph-checkpoint
+    #   langgraph-prebuilt
+    #   langgraph-sdk
 langchain-openai==1.6.2
     # via -r requirements.txt
 langchain-protocol==0.0.19
-    # via langchain-core
+    # via
+    #   langchain-core
+    #   langgraph-sdk
+langgraph==1.2.12
+    # via -r requirements.txt
+langgraph-checkpoint==4.2.0
+    # via
+    #   langgraph
+    #   langgraph-prebuilt
+langgraph-prebuilt==1.1.0
+    # via langgraph
+langgraph-sdk==0.4.5
+    # via langgraph
 langsmith==0.12.6
     # via langchain-core
 litellm==1.101.0
@@ -170,8 +187,12 @@ openai==2.54.0
     # via
     #   langchain-openai
     #   litellm
-orjson==3.12.0 ; platform_python_implementation != 'PyPy'
-    # via langsmith
+orjson==3.12.0
+    # via
+    #   langgraph-sdk
+    #   langsmith
+ormsgpack==1.12.2
+    # via langgraph-checkpoint
 packaging==26.3
     # via
     #   huggingface-hub
@@ -199,6 +220,7 @@ pydantic==2.13.5
     #   fastapi
     #   langchain-anthropic
     #   langchain-core
+    #   langgraph
     #   langsmith
     #   litellm
     #   openai
@@ -329,12 +351,15 @@ uvloop==0.22.1 ; platform_python_implementation != 'PyPy' and sys_platform != 'c
     # via uvicorn
 watchfiles==1.2.0
     # via uvicorn
-websockets==17.1
+websockets==16.1.1
     # via
+    #   langgraph-sdk
     #   langsmith
     #   uvicorn
 xxhash==4.0.1
-    # via langsmith
+    # via
+    #   langgraph
+    #   langsmith
 yarl==1.25.1
     # via aiohttp
 zipp==4.1.0

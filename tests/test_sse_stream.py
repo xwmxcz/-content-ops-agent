@@ -23,14 +23,23 @@ _DEFAULT_RUN = object()
 
 
 class FakeStore:
-    """Minimal ContentStore stand-in for the two methods the stream uses."""
+    """Run lookup, expiry check, and event replay needed by the stream."""
 
-    def __init__(self, events=None, run=_DEFAULT_RUN):
+    def __init__(self, events=None, run=_DEFAULT_RUN, *, expired=False):
         self._events = list(events or [])
         # A sentinel is required so `run=None` can mean "this run does not exist"
         # rather than "use the default run".
         self._run = {"id": "run-1", "status": "running"} if run is _DEFAULT_RUN else run
         self.calls = []
+        self.expired = expired
+
+    def fail_expired_run(self, run_id):
+        if self._run and self._run["status"] == "running" and self.expired:
+            self._run["status"] = "failed"
+            seq = max((entry["seq"] for entry in self._events), default=0) + 1
+            self._events.append(event(seq, "run_failed", {"code": "worker_lost"}))
+            return self._run
+        return None
 
     def get_run(self, run_id):
         return self._run
@@ -102,6 +111,17 @@ def test_terminal_event_ends_the_stream():
 
     assert len(frames) == 2
     assert "step_token" not in "".join(frames)
+
+
+def test_stream_expiry_check_turns_silence_into_a_terminal_failure():
+    store = FakeStore([event(1, "plan_ready", {"plan": []})], expired=True)
+
+    frames = asyncio.run(collect(store, after_seq=1))
+
+    assert len(frames) == 2
+    assert frames[-1].startswith("id: 2\nevent: run_failed\n")
+    assert "worker_lost" in frames[-1]
+    assert store.get_run("run-1")["status"] == "failed"
 
 
 @pytest.mark.parametrize("terminal", ["run_complete", "run_failed", "run_cancelled"])

@@ -40,10 +40,11 @@
           <div>
             <h2>排期总览</h2>
           </div>
-          <span class="range-pill">{{ events.length ? '已同步' : '暂无计划' }}</span>
+          <span class="range-pill">{{ loading ? '加载中' : loadError ? '加载失败' : '已同步' }}</span>
         </div>
 
-        <el-calendar>
+        <p v-if="loadError" role="alert">{{ loadError }}，请点击刷新重试。</p>
+        <el-calendar v-model="calendarDate">
           <template #date-cell="{ data }">
             <button
               class="calendar-cell"
@@ -90,7 +91,13 @@
                 <strong>{{ event.content_title || `内容 #${event.content_id}` }}</strong>
                 <span>{{ platformLabel(event.platform) }} · {{ statusLabel(event.status) }}</span>
               </div>
-              <small>#{{ event.content_id }}</small>
+              <div class="agenda-actions">
+                <small>#{{ event.content_id }}</small>
+                <template v-if="event.status === 'planned'">
+                  <el-button size="small" :disabled="saving || deletingId !== null" @click="editEvent(event)">编辑</el-button>
+                  <el-button size="small" type="danger" :loading="deletingId === event.event_id" :disabled="saving || deletingId !== null" @click="removeEvent(event)">删除</el-button>
+                </template>
+              </div>
             </article>
           </div>
           <el-empty v-else description="当天没有发布计划" />
@@ -122,7 +129,8 @@
       </aside>
     </section>
 
-    <el-dialog v-model="dialog" title="添加发布计划" width="min(460px, calc(100vw - 32px))" class="calendar-dialog">
+    <el-dialog v-model="dialog" :title="editingId === null ? '添加发布计划' : '编辑发布计划'" :close-on-click-modal="!saving" :close-on-press-escape="!saving" :show-close="!saving" width="min(460px, calc(100vw - 32px))" class="calendar-dialog">
+      <p>此处管理本地内容排期，不会自动在平台发布。</p>
       <el-form label-position="top">
         <el-form-item label="内容 ID">
           <el-input-number v-model="form.content_id" :min="1" controls-position="right" />
@@ -137,7 +145,7 @@
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialog = false">取消</el-button>
+        <el-button :disabled="saving" @click="dialog = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="save">保存</el-button>
       </template>
     </el-dialog>
@@ -145,7 +153,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { ElCalendar } from 'element-plus/es/components/calendar/index'
 import { ElDatePicker } from 'element-plus/es/components/date-picker/index'
 import { ElDialog } from 'element-plus/es/components/dialog/index'
@@ -153,28 +161,37 @@ import { ElEmpty } from 'element-plus/es/components/empty/index'
 import { ElForm, ElFormItem } from 'element-plus/es/components/form/index'
 import { ElInputNumber } from 'element-plus/es/components/input-number/index'
 import { ElMessage } from 'element-plus/es/components/message/index'
+import { ElMessageBox } from 'element-plus/es/components/message-box/index'
 import 'element-plus/es/components/calendar/style/css'
 import 'element-plus/es/components/date-picker/style/css'
 import 'element-plus/es/components/dialog/style/css'
 import 'element-plus/es/components/empty/style/css'
 import 'element-plus/es/components/form/style/css'
 import 'element-plus/es/components/input-number/style/css'
+import 'element-plus/es/components/message-box/style/css'
 import { Plus, Refresh } from '@element-plus/icons-vue'
-import { createEvent, getEvents, type CalendarEvent } from '../api/calendar'
+import { createEvent, getEvents, updateEvent, deleteEvent, type CalendarEvent } from '../api/calendar'
 import { CONTENT_TYPE_OPTIONS, getContentTypeLabel } from '../constants/content'
 
 const platformOptions = CONTENT_TYPE_OPTIONS
 const events = ref<CalendarEvent[]>([])
+const calendarEvents = ref<CalendarEvent[]>([])
+const calendarDate = ref(new Date())
+const loadError = ref('')
 const loading = ref(false)
 const saving = ref(false)
 const dialog = ref(false)
+const editingId = ref<number | null>(null)
+const deletingId = ref<number | null>(null)
+let loadVersion = 0
+let disposed = false
 const todayKey = formatDateKey(new Date())
 const selectedDay = ref(todayKey)
 const form = reactive({ content_id: 1, platform: 'xiaohongshu', scheduled_date: todayKey })
 
 const eventsByDate = computed(() => {
   const grouped: Record<string, CalendarEvent[]> = {}
-  for (const event of events.value) {
+  for (const event of calendarEvents.value) {
     grouped[event.scheduled_date] ||= []
     grouped[event.scheduled_date].push(event)
   }
@@ -184,9 +201,9 @@ const eventsByDate = computed(() => {
   return grouped
 })
 
-const todayEvents = computed(() => eventsByDate.value[todayKey] || [])
+const todayEvents = computed(() => events.value.filter(event => event.scheduled_date === todayKey))
 const selectedDayEvents = computed(() => eventsByDate.value[selectedDay.value] || [])
-const activeDayCount = computed(() => Object.keys(eventsByDate.value).length)
+const activeDayCount = computed(() => new Set(events.value.map(event => event.scheduled_date)).size)
 const platformCount = computed(() => new Set(events.value.map(event => event.platform)).size)
 const upcomingEvents = computed(() =>
   [...events.value]
@@ -196,8 +213,10 @@ const upcomingEvents = computed(() =>
 
 const busiestDay = computed(() => {
   let candidate = { date: '', count: 0 }
-  for (const [date, items] of Object.entries(eventsByDate.value)) {
-    if (items.length > candidate.count) candidate = { date, count: items.length }
+  const counts = new Map<string, number>()
+  for (const event of events.value) counts.set(event.scheduled_date, (counts.get(event.scheduled_date) || 0) + 1)
+  for (const [date, count] of counts) {
+    if (count > candidate.count) candidate = { date, count }
   }
   return {
     count: candidate.count,
@@ -222,6 +241,8 @@ function selectDay(day: string) {
 }
 
 function openDialog(day = selectedDay.value) {
+  if (saving.value) return
+  editingId.value = null
   form.scheduled_date = day || todayKey
   dialog.value = true
 }
@@ -235,32 +256,87 @@ function overflowCount(day: string) {
 }
 
 async function load() {
+  const version = ++loadVersion
   loading.value = true
+  loadError.value = ''
+  calendarEvents.value = []
+  const date = calendarDate.value
+  // Include both adjacent-month edges displayed by the calendar grid.
+  const start = new Date(date.getFullYear(), date.getMonth(), 1)
+  start.setDate(start.getDate() - 6)
+  const end = new Date(date.getFullYear(), date.getMonth() + 1, 0)
+  end.setDate(end.getDate() + 6)
   try {
-    events.value = await getEvents(60)
+    const [visible, upcoming] = await Promise.all([
+      getEvents({ start_date: formatDateKey(start), end_date: formatDateKey(end) }),
+      getEvents(60)
+    ])
+    if (version !== loadVersion || disposed) return
+    calendarEvents.value = visible
+    events.value = upcoming
   } catch (error) {
+    if (version !== loadVersion || disposed) return
+    loadError.value = (error as Error).message || '日历加载失败'
     ElMessage.error((error as Error).message)
   } finally {
-    loading.value = false
+    if (version === loadVersion && !disposed) loading.value = false
   }
 }
 
 async function save() {
+  if (saving.value) return
   if (!form.scheduled_date) {
     ElMessage.warning('请选择发布日期')
     return
   }
+  if (!Number.isInteger(form.content_id) || form.content_id < 1 || !form.platform.trim()) {
+    ElMessage.warning('请填写有效的内容 ID 和平台')
+    return
+  }
   saving.value = true
+  const payload = { ...form, platform: form.platform.trim() }
+  const eventId = editingId.value
   try {
-    await createEvent(form)
+    if (eventId === null) await createEvent(payload)
+    else await updateEvent(eventId, payload)
+    if (disposed) return
     ElMessage.success('发布计划已保存')
     dialog.value = false
-    selectedDay.value = form.scheduled_date
-    await load()
+    selectedDay.value = payload.scheduled_date
+    const target = parseDateKey(payload.scheduled_date)
+    const monthChanged = target.getFullYear() !== calendarDate.value.getFullYear() || target.getMonth() !== calendarDate.value.getMonth()
+    calendarDate.value = target
+    if (!monthChanged) await load()
   } catch (error) {
     ElMessage.error((error as Error).message)
   } finally {
     saving.value = false
+  }
+}
+
+function editEvent(event: CalendarEvent) {
+  if (saving.value) return
+  editingId.value = event.event_id
+  Object.assign(form, { content_id: event.content_id, platform: event.platform, scheduled_date: event.scheduled_date })
+  dialog.value = true
+}
+
+async function removeEvent(event: CalendarEvent) {
+  if (deletingId.value !== null) return
+  deletingId.value = event.event_id
+  try {
+    await ElMessageBox.confirm(`删除「${event.content_title || `内容 #${event.content_id}`}」的本地发布计划？`, '删除计划', {
+      confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning'
+    })
+    if (disposed) return
+    await deleteEvent(event.event_id)
+    if (disposed) return
+    ElMessage.success('发布计划已删除')
+    await load()
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close' && !disposed) ElMessage.error((error as Error).message)
+  } finally {
+    deletingId.value = null
   }
 }
 
@@ -333,10 +409,23 @@ function relativeDate(dateKey: string) {
   return `${diff} 天后`
 }
 
+watch(calendarDate, (value, previous) => {
+  selectedDay.value = formatDateKey(value)
+  if (value.getFullYear() !== previous.getFullYear() || value.getMonth() !== previous.getMonth()) void load()
+})
 onMounted(load)
+onBeforeUnmount(() => { disposed = true; loadVersion++ })
 </script>
 
 <style scoped>
+.agenda-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .calendar-page {
   min-width: 0;
   padding: 32px;

@@ -1,0 +1,111 @@
+{
+  "date": "2026-09-29",
+  "phase": "framework-strengthening",
+  "environment": "Windows; Python 3.12; isolated local PostgreSQL 16; pinned project dependencies",
+  "frameworks": {
+    "langgraph": "1.2.12",
+    "langchain_core": "1.6.3",
+    "tanstack_vue_query": "5.104.0",
+    "default_new_pipeline_engine": "langgraph_v1",
+    "legacy_unmarked_runs": "legacy",
+    "durable_pipeline_state": "Existing PostgreSQL agent_runs.plan_json and run_steps; no LangGraph saver",
+    "minimum_supported_python": "3.11"
+  },
+  "backend": {
+    "status": "passed",
+    "passed": 802,
+    "skipped": 20,
+    "failed": 0,
+    "errors": 0,
+    "duration_seconds": 113.48,
+    "command": "python -m pytest -q -rs --basetemp=venv/pytest-framework-final --junitxml=venv/framework-pytest.xml",
+    "skip_reasons": {
+      "standalone_config_checks_run_separately": 19,
+      "gunicorn_posix_only_on_windows": 1
+    },
+    "supplement_after_full_collection": {
+      "command": "python -m pytest -q tests/test_pipeline_graph.py tests/jobs/test_pipeline_leases.py --basetemp=venv/pytest-framework-supplement --junitxml=venv/framework-supplement.xml",
+      "passed": 32,
+      "failed": 0,
+      "duration_seconds": 12.10,
+      "reason": "Added live-graph duplicate-delivery regression and parameterized lease-loss resume for legacy and LangGraph after full-suite collection",
+      "overlaps_full_suite": true
+    },
+    "warning": "Starlette TestClient imports the deprecated AnyIO BlockingPortal alias; not a test failure"
+  },
+  "production_config": {
+    "passed": 19,
+    "failed": 0
+  },
+  "frontend": {
+    "suites": 27,
+    "passed": 343,
+    "failed": 0,
+    "test_command": "npm test",
+    "typecheck": "passed",
+    "production_build": "passed",
+    "build_command": "npm run build",
+    "build_modules": 1891,
+    "build_duration_seconds": 5.36
+  },
+  "static_checks": {
+    "ruff_check": "passed",
+    "ruff_format": "passed",
+    "ruff_checked_files": 148,
+    "mypy": "passed",
+    "mypy_source_files": 90,
+    "pip_check": "passed",
+    "git_diff_check": "passed"
+  },
+  "regression_coverage": [
+    "Actual LangGraph nodes, conditional routing, revisions, bounded execution and shared legacy business methods",
+    "Persisted engine version survives configuration changes; historical unmarked runs use legacy; unknown versions reject",
+    "Checkpoint resume, concurrent delivery, cancellation and lease-loss fencing with real disposable PostgreSQL",
+    "Lease loss and cancellation propagate through sub-agent tool and event-sink boundaries",
+    "Query pagination, cache reuse, cancellation, read retries and selective write invalidation",
+    "First pending query cannot cache a pre-mutation snapshot after mutation success",
+    "Random session cache scope, old response/401 isolation, cross-tab resets and same-ID account switch",
+    "Old chat and pipeline stream messages cannot update a replaced session or connection",
+    "Pipeline completion, snapshot restore, Agent and chat writes invalidate related content/statistics",
+    "Stopped job attempts and late job creation/completion/errors cannot overwrite a restarted Studio workflow"
+  ],
+  "browser_smoke": {
+    "database": "content_ops_framework_browser",
+    "model": "Local scripted fake; production app/API/graph/DB/SSE code used",
+    "pipeline": {
+      "run_id": "run_c1e7265f0b61",
+      "engine": "langgraph_v1",
+      "status": "completed",
+      "completed_steps": 4,
+      "completion_events": 1,
+      "saved_content_rows": 1,
+      "remaining_checkpoints": 0
+    },
+    "content_count_before_after": [65, 66],
+    "pagination_loaded": [30, 60, 66],
+    "search_oldest_seeded_content": "passed",
+    "metric_write": {
+      "total_views_before_after": [6000, 7000],
+      "total_interactions": 450,
+      "resulting_engagement_percent_display": 6.4
+    },
+    "switch_to_empty_account": "History and Stats both show zero; no previous account content",
+    "expected_optional_service_failure": "Local Xiaohongshu connector absent; login-status reports 502, no publishing attempted"
+  },
+  "not_executed": [
+    "Production Docker/TLS deployment",
+    "Live LLM provider quality evaluation",
+    "Real Redis/RQ worker and OS-process termination fault injection",
+    "External Xiaohongshu publishing",
+    "Production-scale load testing"
+  ],
+  "new_schema_migration_this_phase": false,
+  "required_existing_migration": "0011_pipeline_run_leases",
+  "business_database_changed": false,
+  "deployed": false,
+  "cleanup": {
+    "temporary_browser_tab": "closed",
+    "local_api_and_vite": "stopped",
+    "disposable_postgresql": "stopped"
+  }
+}

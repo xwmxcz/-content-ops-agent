@@ -20,6 +20,7 @@ from src.integrations.mcp_client import McpClientError
 from src.jobs.error_classifier import ErrorClassifier
 from src.llm.litellm_client import LiteLLMClient, LLMConfigurationError, LLMGenerationError
 from src.storage import ContentStore
+from src.storage.repositories.run_repository import RunLeaseLostError
 from src.utils import config, metrics
 from src.utils.structured_logging import log_event, log_job_event
 
@@ -69,23 +70,57 @@ async def _run_pipeline_job_async(run_id: str, request_data: dict[str, Any], sto
     from src.api.schemas.agent import PipelineRunRequest
     from src.api.services.dynamic_pipeline import DynamicPipeline
 
-    try:
+    # An accepted queue item may arrive after cancellation or be delivered again
+    # after completion. Only the API's explicit resume transition reopens a run.
+    run = store.get_run(run_id)
+    if not run or run["status"] != "running":
+        return
+
+    # A token belongs to this delivery, not this process: concurrent background
+    # tasks in one API process must not share a re-entrant lease identity.
+    worker_id = f"pipeline_{uuid.uuid4().hex}"
+    if not await asyncio.to_thread(store.acquire_run_lease, run_id, worker_id, config.JOB_LEASE_DURATION_SECONDS):
+        return
+
+    async def execute() -> None:
         request = PipelineRunRequest(**request_data)
-        pipeline = DynamicPipeline(store=store, llm=create_litellm_client())
+        pipeline = DynamicPipeline(store=store, llm=create_litellm_client(), worker_id=worker_id)
         await pipeline.run(request, run_id=run_id)
+
+    exec_task = asyncio.create_task(execute())
+    monitor_state = {"lease_lost": False}
+    monitor_task = asyncio.create_task(_monitor_pipeline_lease(run_id, worker_id, store, exec_task, monitor_state))
+
+    async def fail_owned_run(error: str) -> None:
+        try:
+            await asyncio.to_thread(
+                store.transition_run_and_append_event,
+                run_id,
+                expected_statuses={"running"},
+                expected_worker_id=worker_id,
+                new_status="failed",
+                event_type="run_failed",
+                payload={"error": error},
+                error=error,
+            )
+        except RunLeaseLostError:
+            # Cancellation, expiry, or a newer resume owns the durable outcome.
+            pass
+
+    try:
+        await exec_task
+    except RunLeaseLostError:
+        log_event(logger, "pipeline_lease_lost", level=logging.WARNING, run_id=run_id, worker_id=worker_id)
+    except asyncio.CancelledError:
+        if not monitor_state["lease_lost"]:
+            await fail_owned_run("Pipeline worker was interrupted; resume the run to continue")
+            raise
     except Exception as exc:  # noqa: BLE001 -- job boundary: every failure must become a terminal run event
         # The run row was pre-created by the API before enqueue. Any failure here
         # — bad payload, LLM/config error, unexpected crash — must land as a terminal
         # run_failed event, otherwise SSE consumers hang until the stream deadline.
         error = str(exc) or exc.__class__.__name__
-        store.transition_run_and_append_event(
-            run_id,
-            expected_statuses={"running"},
-            new_status="failed",
-            event_type="run_failed",
-            payload={"error": error},
-            error=error,
-        )
+        await fail_owned_run(error)
         log_event(
             logger,
             "pipeline_job_failed",
@@ -93,6 +128,34 @@ async def _run_pipeline_job_async(run_id: str, request_data: dict[str, Any], sto
             run_id=run_id,
             error_class=exc.__class__.__name__,
         )
+    finally:
+        monitor_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await monitor_task
+
+
+async def _monitor_pipeline_lease(
+    run_id: str,
+    worker_id: str,
+    store: ContentStore,
+    exec_task: asyncio.Task[None],
+    state: dict[str, bool],
+) -> None:
+    while True:
+        await asyncio.sleep(config.JOB_HEARTBEAT_INTERVAL_SECONDS)
+        if exec_task.done():
+            return
+        try:
+            owned = await asyncio.to_thread(
+                store.extend_run_lease, run_id, worker_id, config.JOB_LEASE_DURATION_SECONDS
+            )
+        except Exception as exc:  # noqa: BLE001 -- losing contact with the lease store must stop further work
+            log_event(logger, "pipeline_heartbeat_failed", level=logging.ERROR, run_id=run_id, error=str(exc))
+            owned = False
+        if not owned:
+            state["lease_lost"] = True
+            exec_task.cancel()
+            return
 
 
 async def run_job_async(job_id: str, store: ContentStore) -> None:
@@ -115,26 +178,27 @@ async def run_job_async(job_id: str, store: ContentStore) -> None:
 
     job_type = job["job_type"]
     lease_duration = config.JOB_LEASE_DURATION_SECONDS
+    worker_id = f"{_WORKER_ID[:200]}:{uuid.uuid4().hex}"
     # P1-04: take the lease before marking the job running. The reverse order
     # would leave a running row with no lease holder, which the reaper cannot
     # recognise as abandoned because it sweeps on a non-null expiry.
-    if not store.acquire_job_lease(job_id, _WORKER_ID, lease_duration):
+    if not store.acquire_job_lease(job_id, worker_id, lease_duration):
         metrics.job_lease_conflicts_total.labels(job_type=job_type).inc()
         log_event(
             logger,
             "job_lease_conflict",
             job_id=job_id,
             job_type=job_type,
-            worker_id=_WORKER_ID,
+            worker_id=worker_id,
         )
         return
     metrics.job_lease_acquired_total.labels(job_type=job_type).inc()
 
     attempts = int(job.get("attempts") or 0) + 1
     max_retries = int(job.get("max_retries") or config.JOB_MAX_RETRIES)
-    job = store.start_job(job_id, attempts=attempts, progress=5)
+    job = store.start_job(job_id, attempts=attempts, progress=5, expected_worker_id=worker_id)
     if not job:
-        store.release_job_lease(job_id, _WORKER_ID)
+        store.release_job_lease(job_id, worker_id)
         return
     log_event(
         logger,
@@ -144,7 +208,7 @@ async def run_job_async(job_id: str, store: ContentStore) -> None:
         provider=job.get("provider"),
         model=job.get("model"),
         attempt=attempts,
-        worker_id=_WORKER_ID,
+        worker_id=worker_id,
     )
     llm = create_litellm_client()
 
@@ -152,7 +216,9 @@ async def run_job_async(job_id: str, store: ContentStore) -> None:
     # poll interval serves both and long-running work does not need to cooperate.
     monitor_state: dict[str, str | None] = {"reason": None}
     exec_task = asyncio.ensure_future(_execute_job(job, llm, store))
-    monitor_task = asyncio.ensure_future(_monitor_job_lease(job_id, job_type, store, exec_task, monitor_state))
+    monitor_task = asyncio.ensure_future(
+        _monitor_job_lease(job_id, job_type, store, exec_task, monitor_state, worker_id)
+    )
 
     try:
         try:
@@ -170,7 +236,7 @@ async def run_job_async(job_id: str, store: ContentStore) -> None:
                     level=logging.WARNING,
                     job_id=job_id,
                     job_type=job_type,
-                    worker_id=_WORKER_ID,
+                    worker_id=worker_id,
                 )
                 return
             if reason == "cancelled":
@@ -180,7 +246,7 @@ async def run_job_async(job_id: str, store: ContentStore) -> None:
                     "job_cancelled",
                     job_id=job_id,
                     job_type=job_type,
-                    worker_id=_WORKER_ID,
+                    worker_id=worker_id,
                 )
                 return
             raise
@@ -195,15 +261,27 @@ async def run_job_async(job_id: str, store: ContentStore) -> None:
         ) as exc:
             if _is_cancelled(job_id, store):
                 return
-            _handle_job_error(job_id, exc, attempts, max_retries, store, job["job_type"])
+            _handle_job_error(job_id, exc, attempts, max_retries, store, job["job_type"], worker_id=worker_id)
         except Exception as exc:  # noqa: BLE001 -- job boundary: classified into retry/fail by _handle_job_error
             if _is_cancelled(job_id, store):
                 return
-            _handle_job_error(job_id, exc, attempts, max_retries, store, job["job_type"])
+            _handle_job_error(job_id, exc, attempts, max_retries, store, job["job_type"], worker_id=worker_id)
         else:
             if _is_cancelled(job_id, store):
                 return
-            store.update_job(job_id, status="completed", progress=100, result=result, error=None)
+            completed = store.update_job(
+                job_id,
+                expected_statuses={"running"},
+                expected_worker_id=worker_id,
+                status="completed",
+                progress=100,
+                result=result,
+                error=None,
+                error_type=None,
+                next_retry_at=None,
+            )
+            if completed is None:
+                return
             # P2-01: Log completion
             log_job_event(logger, "completed", job_id, job_type=job["job_type"])
             log_event(logger, "job_completed", job_id=job_id, job_type=job["job_type"])
@@ -212,7 +290,7 @@ async def run_job_async(job_id: str, store: ContentStore) -> None:
         with suppress(asyncio.CancelledError):
             await monitor_task
         # Scoped to this worker id, so a no-op when the lease was already reaped.
-        store.release_job_lease(job_id, _WORKER_ID)
+        store.release_job_lease(job_id, worker_id)
 
 
 async def _monitor_job_lease(
@@ -221,6 +299,7 @@ async def _monitor_job_lease(
     store: ContentStore,
     exec_task: asyncio.Future[Any],
     state: dict[str, str | None],
+    worker_id: str,
 ) -> None:
     """Heartbeat the lease and propagate cancellation into the running job.
 
@@ -238,7 +317,7 @@ async def _monitor_job_lease(
             state["reason"] = "cancelled"
             exec_task.cancel()
             return
-        if not store.extend_job_lease(job_id, _WORKER_ID, lease_duration):
+        if not store.extend_job_lease(job_id, worker_id, lease_duration):
             state["reason"] = "lease_lost"
             exec_task.cancel()
             return
@@ -248,7 +327,7 @@ async def _monitor_job_lease(
             level=logging.DEBUG,
             job_id=job_id,
             job_type=job_type,
-            worker_id=_WORKER_ID,
+            worker_id=worker_id,
         )
 
 
@@ -277,6 +356,8 @@ def _handle_job_error(
     max_retries: int,
     store: ContentStore,
     job_type: str = "unknown",
+    *,
+    worker_id: str | None = None,
 ) -> None:
     """Handle job errors with smart retry logic based on error classification."""
     error_message = str(exc).strip() or "Job failed unexpectedly"
@@ -289,14 +370,18 @@ def _handle_job_error(
         delay_seconds = _calculate_backoff_delay(current_attempt)
         next_retry_at = datetime.now() + timedelta(seconds=delay_seconds)
 
-        store.update_job(
+        updated = store.update_job(
             job_id,
+            expected_statuses={"running"} if worker_id else None,
+            expected_worker_id=worker_id,
             status="failed",  # Keep as failed but with next_retry_at set
             progress=100,
             error=error_message,
             error_type=error_type,
             next_retry_at=next_retry_at,
         )
+        if updated is None:
+            return
 
         # P2-01: Metrics and logging
         metrics.job_retry_attempts_total.labels(error_type=error_type, job_type=job_type).inc()
@@ -328,6 +413,15 @@ def _handle_job_error(
         try:
             requeue_job_with_delay(job_id, delay_seconds, store.database_url)
         except Exception as requeue_error:  # noqa: BLE001 -- queue boundary; logged and job marked failed
+            # Without a queued delivery this timestamp would promise a retry
+            # that never happens, leaving pollers waiting indefinitely.
+            store.update_job(
+                job_id,
+                expected_statuses={"failed"},
+                expected_worker_id=worker_id,
+                next_retry_at=None,
+                error=f"{error_message}; automatic retry could not be scheduled",
+            )
             log_event(
                 logger,
                 "job_requeue_failed",
@@ -337,14 +431,18 @@ def _handle_job_error(
             )
     else:
         # Permanent error or max retries exceeded - mark as permanently failed
-        store.update_job(
+        updated = store.update_job(
             job_id,
+            expected_statuses={"running"} if worker_id else None,
+            expected_worker_id=worker_id,
             status="failed",
             progress=100,
             error=error_message,
             error_type=error_type,
             next_retry_at=None,  # Clear any scheduled retry
         )
+        if updated is None:
+            return
 
         # P2-01: Metrics and logging
         if current_attempt >= max_retries:

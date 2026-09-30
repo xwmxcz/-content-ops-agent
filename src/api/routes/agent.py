@@ -29,6 +29,7 @@ from src.api.schemas.agent import (
 from src.api.services.agent_pipeline import PipelineExecutionError, run_agent_pipeline
 from src.api.services.chat_agent import ChatAgentExecutionError, ChatAgentService
 from src.api.services.dynamic_pipeline import DynamicPipeline
+from src.api.services.pipeline_engine import new_pipeline_request, stored_pipeline_engine
 from src.api.services.run_event_hub import get_run_event_hub
 from src.api.services.tool_policy import SIDE_EFFECT_TOOLS
 from src.jobs.queue import JobQueueError, enqueue_pipeline_run
@@ -94,6 +95,7 @@ async def create_pipeline_run(
 
     run_id = f"run_{uuid.uuid4().hex[:12]}"
     thread_id = request.thread_id or run_id
+    request_data = new_pipeline_request(request)
 
     # Pre-create so the SSE GET handler doesn't 404 between accept and pipeline boot.
     store.create_run(
@@ -104,13 +106,13 @@ async def create_pipeline_run(
         provider=provider,
         model=model,
         thread_id=thread_id,
-        request=request.model_dump(mode="json"),
+        request=request_data,
     )
 
     try:
         enqueue_pipeline_run(
             run_id,
-            request.model_dump(mode="json"),
+            request_data,
             store.database_url,
             background_tasks,
         )
@@ -147,6 +149,7 @@ async def resume_pipeline_run(
     caller pays only for what is missing. The run keeps its id and its event log;
     a client continues on /runs/{id}/stream from the sequence it already has.
     """
+    store.fail_expired_run(run_id)
     run = store.get_run(run_id)
     if not run:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Run {run_id} was not found")
@@ -163,6 +166,7 @@ async def resume_pipeline_run(
         )
     try:
         PipelineRunRequest(**request_data)
+        stored_pipeline_engine(request_data)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -205,6 +209,9 @@ async def resume_pipeline_run(
 
 @router.get("/runs/{run_id}", response_model=dict)
 def get_pipeline_run(run_id: str, store: ContentStore = Depends(get_store)) -> dict:
+    # Development background mode may not have a separate reaper process.
+    # Reads still turn abandoned runs into a durable, resumable failure.
+    store.fail_expired_run(run_id)
     run = store.get_run(run_id)
     if not run:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Run {run_id} was not found")
@@ -240,6 +247,7 @@ async def stream_pipeline_run(
                 # Cleared before the read, not after: a notification that lands
                 # while the query runs must still cut the next wait short.
                 woken.clear()
+                await asyncio.to_thread(store.fail_expired_run, run_id)
                 events = await asyncio.to_thread(store.list_run_events, run_id, after_seq=last_seq, limit=100)
                 for position, evt in enumerate(events):
                     last_seq = evt["seq"]
@@ -292,10 +300,9 @@ def cancel_pipeline_run(run_id: str, store: ContentStore = Depends(get_store)) -
     """Request cancellation of an in-flight pipeline run.
 
     Sets `status="cancelled"` on the run row and appends a `run_cancelled` event,
-    which terminates SSE streams immediately. The background task observes the
-    flipped status at step boundaries (see DynamicPipeline.run) and breaks out of
-    its loop — already-running sub-agents are allowed to finish, but no new step
-    is started. Returns 404 if the run does not exist; calling DELETE on an
+    which terminates SSE streams immediately and clears unused checkpoints in
+    the same transaction. The worker heartbeat cancels in-flight work, and its
+    write fence rejects late results. Returns 404 if the run does not exist; calling DELETE on an
     already-terminal run is a no-op (returns the current status).
     """
     run = store.get_run(run_id)

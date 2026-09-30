@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from langchain_core.messages import AIMessage
 
 from src.api.services.sub_agents import SUB_AGENTS, SubAgentRunner
+from src.storage.repositories.run_repository import RunLeaseLostError
 
 
 class EmptyToolThenNoTextModel:
@@ -34,6 +37,30 @@ class EmptyToolThenNoTextModel:
                 ],
             )
         return AIMessage(content="")
+
+
+@pytest.mark.parametrize("event", ["tool_call_start", "tool_call_result"])
+@pytest.mark.parametrize("error", [RunLeaseLostError, asyncio.CancelledError])
+async def test_tool_sink_ownership_loss_stops_tools_and_model_immediately(store, monkeypatch, event, error):
+    model = EmptyToolThenNoTextModel()
+    runner = SubAgentRunner(store=store, model_factory=lambda *args: model)
+    calls = []
+    monkeypatch.setattr(store, "search_contents", lambda *args: calls.append("search") or [])
+    monkeypatch.setattr(store, "list_contents", lambda **kwargs: calls.append("list") or [])
+    events = []
+
+    async def sink(kind, payload):
+        events.append(kind)
+        if kind == event:
+            raise error("ownership lost")
+
+    with pytest.raises(error):
+        await runner.run(
+            SUB_AGENTS["researcher"], user_prompt="research", provider="siliconflow", model="fake", tool_sink=sink
+        )
+    assert model.calls == 1
+    assert calls == ([] if event == "tool_call_start" else ["search"])
+    assert events == (["tool_call_start"] if event == "tool_call_start" else ["tool_call_start", "tool_call_result"])
 
 
 class EmptyToolThenSummaryModel(EmptyToolThenNoTextModel):

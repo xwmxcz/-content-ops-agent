@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { FakeEventSource, installFakeEventSource } from './support/fakeEventSource'
+import { clearWorkspaceSession } from '../src/workspaceSession'
 import {
   usePipelineStream,
   type PipelineStreamHandlers,
@@ -39,6 +40,24 @@ describe('usePipelineStream', () => {
   })
 
   describe('subscription and event dispatch', () => {
+    it('closes immediately on account changes and ignores a retired source after a new subscription', async () => {
+      const { handlers } = makeHandlers()
+      const stream = usePipelineStream(handlers)
+      await stream.subscribe('old-run')
+      const old = FakeEventSource.last
+      clearWorkspaceSession()
+      expect(old.closed).toBe(true)
+      await stream.subscribe('new-run')
+      // A callback already queued by a browser can still arrive after close().
+      old.closed = false
+      old.emit('step_token', { index: 1, delta: 'private old token' }, 9)
+      old.fail()
+      FakeEventSource.last.emit('step_token', { index: 1, delta: 'new token' }, 1)
+      expect(handlers.onStepToken).toHaveBeenCalledExactlyOnceWith(1, 'new token')
+      expect(stream.getStatus().lastSeq).toBe(1)
+      stream.close()
+    })
+
     it('refreshes liveness for pings that inherit the preceding run event id', async () => {
       const { handlers, states } = makeHandlers()
       const stream = usePipelineStream(handlers, { staleAfterMs: 1000 })

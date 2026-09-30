@@ -14,7 +14,7 @@
 
     <section class="section filter-section">
       <div class="filter-grid">
-        <el-input v-model="query" :prefix-icon="Search" placeholder="搜索标题或正文" />
+        <el-input v-model="query" :prefix-icon="Search" placeholder="搜索全部内容的标题或正文" clearable @keyup.enter="load" />
         <el-select v-model="filters.content_type" clearable placeholder="内容类型">
           <el-option v-for="item in CONTENT_TYPE_OPTIONS" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
@@ -34,7 +34,7 @@
       <div class="section list-section">
         <div class="section-head">
           <div>
-            <h2>全部内容 <span class="inline-count">{{ filteredItems.length }}</span></h2>
+            <h2>{{ query.trim() ? '搜索结果' : '全部内容' }} <span class="inline-count">{{ filteredItems.length }}{{ hasMore ? '+' : '' }}</span></h2>
           </div>
           <div class="list-actions">
             <el-button v-if="!selectionMode" text size="small" @click="enterSelectionMode">批量选择</el-button>
@@ -72,7 +72,8 @@
           </div>
         </div>
 
-        <el-empty v-if="!filteredItems.length && !loading" description="暂无匹配内容" />
+        <p v-if="listError" class="list-error" role="alert">{{ listError }}</p>
+        <el-empty v-if="!filteredItems.length && !loading && !listError" description="暂无匹配内容" />
         <div v-else class="library-grid">
           <div
             v-for="item in filteredItems"
@@ -93,6 +94,10 @@
             </button>
           </div>
         </div>
+        <div v-if="hasMore" class="list-pagination">
+          <span>已加载 {{ items.length }} 条</span>
+          <el-button :loading="loadingMore" :disabled="loading" @click="loadMore">加载更多</el-button>
+        </div>
       </div>
 
       <div class="section detail-section">
@@ -111,6 +116,7 @@
           </div>
         </div>
 
+        <p v-if="detail.error.value" class="list-error" role="alert">{{ detail.error.value.message }} <el-button text @click="detail.refetch()">重试</el-button></p>
         <div v-if="!selected" class="detail-empty">
           <div class="empty-paper" aria-hidden="true"><el-icon><Document /></el-icon><i></i><i></i><i></i></div>
           <h3>{{ selectionMode ? '批量整理，让内容井然有序' : '挑选一份内容，继续创作' }}</h3>
@@ -141,20 +147,21 @@
               </div>
               <div class="upload-actions">
                 <label class="upload-trigger">
-                  <input class="hidden-input" type="file" accept="image/*" multiple @change="onImageFilesSelected" />
+                  <input class="hidden-input" type="file" accept="image/*" multiple :disabled="uploadingImages" @change="onImageFilesSelected" />
                   <el-icon><UploadFilled /></el-icon>
                   <span>{{ uploadingImages ? '上传中...' : '上传图片' }}</span>
                 </label>
                 <label class="upload-trigger">
-                  <input class="hidden-input" type="file" accept="video/*" @change="onVideoFileSelected" />
+                  <input class="hidden-input" type="file" accept="video/*" :disabled="uploadingVideo" @change="onVideoFileSelected" />
                   <el-icon><VideoPlay /></el-icon>
                   <span>{{ uploadingVideo ? '上传中...' : '上传视频' }}</span>
                 </label>
               </div>
             </div>
 
+            <p v-if="media.error.value" class="list-error" role="alert">素材加载失败 <el-button text @click="media.refetch()">重试</el-button></p>
             <el-alert
-              v-if="!mediaAssets.length"
+              v-if="!mediaAssets.length && !media.error.value"
               type="info"
               :closable="false"
               title="可以先只保存文字。发布到小红书时，图文至少需要 1 张图片，视频发布需要 1 个视频。"
@@ -257,7 +264,8 @@
                 <small v-else>创建：{{ formatDate(publication.created_at) }}</small>
                 <small v-if="publication.error_message" class="error-copy">{{ publication.error_message }}</small>
               </article>
-              <el-empty v-if="!publications.length" description="暂无发布记录" />
+              <p v-if="publicationList.error.value" class="list-error" role="alert">发布记录加载失败 <el-button text @click="publicationList.refetch()">重试</el-button></p>
+              <el-empty v-else-if="!publications.length && !publicationList.isFetching.value" description="暂无发布记录" />
             </div>
           </details>
 
@@ -271,8 +279,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/vue-query'
+import { assertWorkspaceSession, readWorkspace, workspaceKeys } from '../query/client'
+import { workspaceSessionId, workspaceSessionReady } from '../workspaceSession'
 import { ElAlert } from 'element-plus/es/components/alert/index'
 import { ElCheckbox } from 'element-plus/es/components/checkbox/index'
 import { ElDatePicker } from 'element-plus/es/components/date-picker/index'
@@ -290,16 +301,14 @@ import { Clock, DataAnalysis, Delete, Document, DocumentCopy, Edit, FolderDelete
 import ContentCard from '../components/ContentCard.vue'
 import ContentMetricsPanel from '../components/ContentMetricsPanel.vue'
 import MetricsImportDialog from '../components/MetricsImportDialog.vue'
-import { archiveContent, deleteContentLocal, getContent, getContents, type ContentItem } from '../api/content'
-import { deleteMedia, getContentMedia, uploadMedia, type MediaAsset } from '../api/media'
+import { archiveContent, deleteContentLocal, getContent, getContents, type ContentListParams } from '../api/content'
+import { deleteMedia, getContentMedia, uploadMedia } from '../api/media'
 import { extractPublication, waitForJobResult } from '../api/jobs'
 import {
   getContentPublications,
   getXiaohongshuLoginStatus,
   publishToXiaohongshu,
-  scheduleXiaohongshuPublication,
-  type Publication,
-  type XiaohongshuLoginStatus
+  scheduleXiaohongshuPublication
 } from '../api/publish'
 import { CONTENT_TYPE_OPTIONS, getContentTypeLabel, getStatusLabel, getStyleLabel } from '../constants/content'
 
@@ -307,12 +316,50 @@ const router = useRouter()
 
 const filters = reactive({ content_type: '', status: '' })
 const query = ref('')
-const items = ref<ContentItem[]>([])
-const loading = ref(false)
-const selected = ref<ContentItem>()
-const mediaAssets = ref<MediaAsset[]>([])
-const publications = ref<Publication[]>([])
-const loginStatus = ref<XiaohongshuLoginStatus>()
+const PAGE_SIZE = 30
+const queryClient = useQueryClient()
+const activeListParams = ref<ContentListParams>({})
+const searchPending = ref(false)
+let searchTimer: ReturnType<typeof setTimeout> | undefined
+const listKey = computed(() => [...workspaceKeys.lists(), activeListParams.value] as const)
+const contentList = useInfiniteQuery({
+  queryKey: listKey,
+  enabled: computed(() => workspaceSessionReady.value && !searchPending.value),
+  initialPageParam: 0,
+  queryFn: ({ queryKey, pageParam, signal }) => readWorkspace(queryKey[1], signal, () => getContents({ ...queryKey[3], limit: PAGE_SIZE, offset: pageParam }, signal)),
+  getNextPageParam: (lastPage, _pages, lastOffset) => lastPage.length === PAGE_SIZE ? lastOffset + lastPage.length : undefined
+})
+const items = computed(() => {
+  if (searchPending.value) return []
+  const seen = new Set<number>()
+  return (contentList.data.value?.pages.flat() ?? []).filter(item => !seen.has(item.id) && !!seen.add(item.id))
+})
+const loading = computed(() => searchPending.value || (contentList.isFetching.value && !contentList.isFetchingNextPage.value))
+const loadingMore = contentList.isFetchingNextPage
+const hasMore = computed(() => !searchPending.value && contentList.hasNextPage.value)
+const listError = computed(() => searchPending.value ? '' : contentList.error.value?.message || '')
+const selectedId = ref<number>()
+const detailEnabled = computed(() => workspaceSessionReady.value && selectedId.value != null)
+const detail = useQuery({
+  queryKey: computed(() => workspaceKeys.content(selectedId.value ?? 0)), enabled: detailEnabled,
+  queryFn: ({ queryKey, signal }) => readWorkspace(queryKey[1], signal, () => getContent(queryKey[3], signal))
+})
+const media = useQuery({
+  queryKey: computed(() => workspaceKeys.media(selectedId.value ?? 0)), enabled: detailEnabled,
+  queryFn: ({ queryKey, signal }) => readWorkspace(queryKey[1], signal, () => getContentMedia(queryKey[3], signal))
+})
+const publicationList = useQuery({
+  queryKey: computed(() => workspaceKeys.publications(selectedId.value ?? 0)), enabled: detailEnabled,
+  queryFn: ({ queryKey, signal }) => readWorkspace(queryKey[1], signal, () => getContentPublications(queryKey[3], signal))
+})
+const login = useQuery({
+  queryKey: computed(() => [...workspaceKeys.root(), 'publish-login'] as const), enabled: workspaceSessionReady,
+  queryFn: ({ queryKey, signal }) => readWorkspace(queryKey[1], signal, () => getXiaohongshuLoginStatus(signal))
+})
+const selected = detail.data
+const mediaAssets = computed(() => media.data.value ?? [])
+const publications = computed(() => publicationList.data.value ?? [])
+const loginStatus = login.data
 const uploadingImages = ref(false)
 const uploadingVideo = ref(false)
 const publishingNow = ref(false)
@@ -331,11 +378,8 @@ const publishForm = reactive({
   scheduled_at: ''
 })
 
-const filteredItems = computed(() => {
-  const term = query.value.trim().toLowerCase()
-  if (!term) return items.value
-  return items.value.filter(item => [item.title ?? '', item.content].join(' ').toLowerCase().includes(term))
-})
+// The server searches full content; list entries contain only a short preview.
+const filteredItems = computed(() => items.value)
 
 const filteredItemIds = computed(() => filteredItems.value.map(item => item.id))
 const imageAssets = computed(() => mediaAssets.value.filter(asset => asset.media_type === 'image'))
@@ -367,35 +411,52 @@ watch(filteredItemIds, ids => {
   selectedIds.value = selectedIds.value.filter(id => allowed.has(id))
 })
 
+watch(() => query.value.trim(), () => {
+  clearTimeout(searchTimer)
+  void queryClient.cancelQueries({ queryKey: listKey.value, exact: true })
+  searchPending.value = true
+  searchTimer = setTimeout(() => { void load() }, 300)
+})
+watch(detail.error, error => { if (error) ElMessage.error(error.message) })
+watch(selected, (content, previous) => {
+  if (content && content.id !== previous?.id) publishForm.title = content.title || ''
+})
+watch(workspaceSessionId, () => {
+  clearTimeout(searchTimer)
+  query.value = ''
+  filters.content_type = ''
+  filters.status = ''
+  activeListParams.value = {}
+  searchPending.value = false
+  resetDetail()
+  exitSelectionMode()
+}, { flush: 'sync' })
+
 async function load() {
-  loading.value = true
-  try {
-    items.value = await getContents({
-      limit: 100,
-      content_type: filters.content_type || undefined,
-      status: filters.status || undefined
-    })
-    if (selected.value) {
-      const stillExists = items.value.find(item => item.id === selected.value?.id)
-      if (stillExists && filteredItems.value.some(item => item.id === selected.value?.id)) {
-        await open(stillExists.id)
-      } else {
-        resetDetail()
-      }
-    }
-  } catch (error) {
-    ElMessage.error((error as Error).message)
-  } finally {
-    loading.value = false
+  if (!workspaceSessionReady.value) return
+  clearTimeout(searchTimer)
+  const params: ContentListParams = {
+    q: query.value.trim() || undefined,
+    content_type: filters.content_type || undefined,
+    status: filters.status || undefined
+  }
+  const changed = JSON.stringify(params) !== JSON.stringify(activeListParams.value)
+  activeListParams.value = params
+  searchPending.value = false
+  if (!changed) {
+    await queryClient.cancelQueries({ queryKey: listKey.value, exact: true })
+    await contentList.refetch()
   }
 }
 
-async function open(id: number) {
-  selected.value = await getContent(id)
-  publishForm.title = selected.value.title || ''
-  publishForm.content = ''
-  publishForm.scheduled_at = ''
-  await Promise.all([loadMedia(id), loadPublications(id), loadLoginStatus()])
+async function loadMore() {
+  if (hasMore.value && !loading.value && !loadingMore.value) await contentList.fetchNextPage()
+}
+
+function open(id: number) {
+  if (selectedId.value === id) return
+  resetDetail()
+  selectedId.value = id
 }
 
 function onMetricsImported(contentIds: number[]) {
@@ -411,9 +472,7 @@ function handleCardClick(id: number) {
 }
 
 function resetDetail() {
-  selected.value = undefined
-  mediaAssets.value = []
-  publications.value = []
+  selectedId.value = undefined
   publishForm.title = ''
   publishForm.content = ''
   publishForm.scheduled_at = ''
@@ -459,22 +518,10 @@ function toggleSelectAllVisible() {
 }
 
 async function loadMedia(contentId: number) {
-  mediaAssets.value = await getContentMedia(contentId)
+  if (selectedId.value === contentId) await media.refetch()
 }
-
 async function loadPublications(contentId: number) {
-  publications.value = await getContentPublications(contentId)
-}
-
-async function loadLoginStatus() {
-  try {
-    loginStatus.value = await getXiaohongshuLoginStatus()
-  } catch (error) {
-    loginStatus.value = {
-      connected: false,
-      status_text: (error as Error).message
-    }
-  }
+  if (selectedId.value === contentId) await publicationList.refetch()
 }
 
 function goRefine() {
@@ -493,14 +540,18 @@ async function copyContent() {
 }
 
 async function onImageFilesSelected(event: Event) {
+  const session = workspaceSessionId.value
   const files = Array.from((event.target as HTMLInputElement).files || [])
-  if (!selected.value || !files.length) return
+  if (!selected.value || !files.length || uploadingImages.value) return
+  const contentId = selected.value.id
   uploadingImages.value = true
   try {
     for (const file of files) {
-      await uploadMedia(selected.value.id, 'image', file)
+      assertWorkspaceSession(session)
+      await uploadMedia(contentId, 'image', file)
     }
-    await loadMedia(selected.value.id)
+    assertWorkspaceSession(session)
+    await loadMedia(contentId)
     ElMessage.success('图片上传完成')
   } catch (error) {
     ElMessage.error((error as Error).message)
@@ -511,12 +562,15 @@ async function onImageFilesSelected(event: Event) {
 }
 
 async function onVideoFileSelected(event: Event) {
+  const session = workspaceSessionId.value
   const file = (event.target as HTMLInputElement).files?.[0]
-  if (!selected.value || !file) return
+  if (!selected.value || !file || uploadingVideo.value) return
+  const contentId = selected.value.id
   uploadingVideo.value = true
   try {
-    await uploadMedia(selected.value.id, 'video', file)
-    await loadMedia(selected.value.id)
+    await uploadMedia(contentId, 'video', file)
+    assertWorkspaceSession(session)
+    await loadMedia(contentId)
     ElMessage.success('视频上传完成')
   } catch (error) {
     ElMessage.error((error as Error).message)
@@ -527,10 +581,13 @@ async function onVideoFileSelected(event: Event) {
 }
 
 async function removeMedia(mediaId: number) {
+  const session = workspaceSessionId.value
   if (!selected.value) return
+  const contentId = selected.value.id
   try {
-    await deleteMedia(mediaId)
-    await loadMedia(selected.value.id)
+    await deleteMedia(mediaId, contentId)
+    assertWorkspaceSession(session)
+    await loadMedia(contentId)
     ElMessage.success('素材已删除')
   } catch (error) {
     ElMessage.error((error as Error).message)
@@ -538,43 +595,51 @@ async function removeMedia(mediaId: number) {
 }
 
 async function publishNow() {
-  if (!selected.value || !canPublishNow.value) return
+  const session = workspaceSessionId.value
+  if (!selected.value || !canPublishNow.value || publishingNow.value || schedulingPublish.value) return
+  const contentId = selected.value.id
   publishingNow.value = true
   try {
     const action = await publishToXiaohongshu({
-      content_id: selected.value.id,
+      content_id: contentId,
       publish_type: publishForm.publish_type,
       title: publishForm.title || undefined,
       content: publishForm.content || undefined
     })
+    assertWorkspaceSession(session)
     await waitForJobResult(action.job_id, extractPublication)
-    await refreshSelectedData(selected.value.id)
+    assertWorkspaceSession(session)
+    await load()
     ElMessage.success('发布任务已完成')
   } catch (error) {
     ElMessage.error((error as Error).message)
-    if (selected.value) await loadPublications(selected.value.id)
+    await loadPublications(contentId).catch(() => {})
   } finally {
     publishingNow.value = false
   }
 }
 
 async function schedulePublish() {
-  if (!selected.value || !canSchedulePublish.value) return
+  const session = workspaceSessionId.value
+  if (!selected.value || !canSchedulePublish.value || schedulingPublish.value || publishingNow.value) return
+  const contentId = selected.value.id
   schedulingPublish.value = true
   try {
     const action = await scheduleXiaohongshuPublication({
-      content_id: selected.value.id,
+      content_id: contentId,
       publish_type: publishForm.publish_type,
       title: publishForm.title || undefined,
       content: publishForm.content || undefined,
       scheduled_at: publishForm.scheduled_at
     })
+    assertWorkspaceSession(session)
     await waitForJobResult(action.job_id, extractPublication)
-    await refreshSelectedData(selected.value.id)
+    assertWorkspaceSession(session)
+    await load()
     ElMessage.success('定时发布已提交')
   } catch (error) {
     ElMessage.error((error as Error).message)
-    if (selected.value) await loadPublications(selected.value.id)
+    await loadPublications(contentId).catch(() => {})
   } finally {
     schedulingPublish.value = false
   }
@@ -601,6 +666,7 @@ async function deleteSelectedBatch() {
 }
 
 async function archiveItems(ids: number[], label: string, bulk = false) {
+  const session = workspaceSessionId.value
   try {
     await ElMessageBox.confirm(
       `${bulk ? '批量归档' : '归档'}后内容仍会保留在本地数据库中，只是状态会变成“已归档”。`,
@@ -617,9 +683,9 @@ async function archiveItems(ids: number[], label: string, bulk = false) {
   isBulkArchiving.value = bulk
   let success = 0
   let failed = 0
-  const currentSelectedId = selected.value?.id
   try {
     for (const id of ids) {
+      if (session !== workspaceSessionId.value) return
       try {
         await archiveContent(id)
         success += 1
@@ -627,13 +693,9 @@ async function archiveItems(ids: number[], label: string, bulk = false) {
         failed += 1
       }
     }
+    if (session !== workspaceSessionId.value) return
     exitSelectionMode()
     await load()
-    if (currentSelectedId && !ids.includes(currentSelectedId)) {
-      await refreshSelectedData(currentSelectedId)
-    } else if (currentSelectedId && !filteredItems.value.some(item => item.id === currentSelectedId)) {
-      resetDetail()
-    }
     if (failed) {
       ElMessage.warning(`已归档 ${success} 条，失败 ${failed} 条`)
     } else {
@@ -645,6 +707,7 @@ async function archiveItems(ids: number[], label: string, bulk = false) {
 }
 
 async function deleteItems(ids: number[], label: string, bulk = false) {
+  const session = workspaceSessionId.value
   const selectedCandidates = items.value.filter(item => ids.includes(item.id))
   const publishedLike = selectedCandidates.some(item => ['published', 'scheduled'].includes(item.status))
   const message = publishedLike
@@ -668,23 +731,20 @@ async function deleteItems(ids: number[], label: string, bulk = false) {
   isBulkDeleting.value = bulk
   let success = 0
   let failed = 0
-  const currentSelectedId = selected.value?.id
   try {
     for (const id of ids) {
+      if (session !== workspaceSessionId.value) return
       try {
         await deleteContentLocal(id)
+        if (selectedId.value === id) resetDetail()
         success += 1
       } catch {
         failed += 1
       }
     }
+    if (session !== workspaceSessionId.value) return
     exitSelectionMode()
     await load()
-    if (currentSelectedId && !ids.includes(currentSelectedId)) {
-      await refreshSelectedData(currentSelectedId)
-    } else {
-      resetDetail()
-    }
     if (failed) {
       ElMessage.warning(`已删除 ${success} 条，失败 ${failed} 条`)
     } else {
@@ -695,30 +755,19 @@ async function deleteItems(ids: number[], label: string, bulk = false) {
   }
 }
 
-async function refreshSelectedData(contentId: number) {
-  await load()
-  const stillExists = items.value.find(item => item.id === contentId)
-  if (!stillExists || !filteredItems.value.some(item => item.id === contentId)) {
-    resetDetail()
-    return
-  }
-  selected.value = await getContent(contentId)
-  await Promise.all([loadMedia(contentId), loadPublications(contentId), loadLoginStatus()])
-}
-
 function formatDate(value?: string) {
   if (!value) return '-'
   return value.replace('T', ' ').slice(0, 16)
 }
 
-onMounted(async () => {
-  await load()
-  await loadLoginStatus()
-})
+onBeforeUnmount(() => { clearTimeout(searchTimer) })
+
 </script>
 
 <style scoped>
 .history-page { display: grid; gap: 24px; }
+.list-error { margin: 0; padding: 12px 20px; color: var(--c-fail); background: var(--c-fail-soft); font-size: 13px; }
+.list-pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px; border-top: 1px solid var(--c-border-soft); color: var(--c-text-tertiary); font-size: 12px; }
 .history-hero { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
 .hero-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .create-link { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 9px 16px; border-radius: var(--r-control); color: var(--c-text-inverse); background: var(--c-accent); font-size: 13px; text-decoration: none; transition: background .15s; }

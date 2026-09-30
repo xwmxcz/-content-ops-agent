@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-![Python](https://img.shields.io/badge/Python-3.10%2B-2563eb)
+![Python](https://img.shields.io/badge/Python-3.11%2B-2563eb)
 ![FastAPI](https://img.shields.io/badge/FastAPI-API-0f766e)
 ![Vue](https://img.shields.io/badge/Vue_3-Frontend-42b883)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2563eb)
@@ -10,7 +10,7 @@
 
 AI Content Ops Agent is a full-stack content operations prototype built around
 LLM agents, durable content workflows, and a practical Vue workspace. It combines
-FastAPI, Vue 3, LiteLLM, LangChain tool calling, SQLAlchemy storage, Docker
+FastAPI, Vue 3, TanStack Vue Query, LangGraph orchestration, LiteLLM, LangChain tool calling, SQLAlchemy storage, Docker
 deployment, and PostgreSQL-backed registration/login with isolated user workspaces into a demo-ready product surface.
 
 The repository is designed as an AI full-stack engineering portfolio project. It
@@ -22,12 +22,12 @@ multi-tenant SaaS.
 
 | Area | Capability |
 | --- | --- |
-| Studio | Dynamic plan-then-execute content pipeline with researcher, strategist, writer, editor, reviewer, and fact-checker sub-agents. |
+| Studio | Versioned LangGraph plan-then-execute pipeline with durable application checkpoints and researcher, strategist, writer, editor, reviewer, and fact-checker sub-agents. |
 | Chat Agent | Persistent tool-calling assistant with thread history, content tools, planning tools, memory tools, and session search. |
 | Content Library | Saved drafts, refined variants, media assets, local publication records, and searchable history. |
 | Refinement | Rewrite or improve saved content while preserving source lineage. |
-| Calendar | 60-day publishing queue with day-level agenda and platform summaries. |
-| Stats | Polished analytics page for type/status distribution and content structure readouts. |
+| Calendar | Visible-month agenda, editable local plans, and a separate 60-day publishing summary. |
+| Stats | Content distribution plus platform readings, weighted engagement, data coverage, and creation-date cohort analysis. |
 | Memory | Hermes-style file memory using `MEMORY.md` and `USER.md`, plus context compression and curator support. |
 | Docker | One Compose stack for frontend, API, worker, PostgreSQL, and Redis. |
 
@@ -35,17 +35,21 @@ multi-tenant SaaS.
 
 ```mermaid
 graph LR
-  UI[Vue 3 + Vite + Element Plus] --> API[FastAPI REST API]
+  UI[Vue 3 + Vite + Element Plus] --> Query[TanStack Vue Query]
+  Query --> API[FastAPI REST API]
+  UI --> API
   API --> Content[Content Services]
   API --> Agent[Agent Services]
   API --> Jobs[Job API]
   Content --> LLM[LiteLLM Provider Router]
   Agent --> LLM
+  Agent --> Graph[LangGraph Studio orchestration]
+  Graph --> DB[(PostgreSQL)]
   Agent --> Tools[LangChain Tool Calling]
   Agent --> Memory[File Memory + Context Compressor]
   Memory --> Files[(MEMORY.md / USER.md)]
   Jobs --> Queue[BackgroundTasks or RQ]
-  Queue --> DB[(PostgreSQL)]
+  Queue --> DB
   Queue --> Redis[(Redis for RQ mode)]
 ```
 
@@ -56,6 +60,8 @@ Key implementation paths:
 | `frontend/` | Vue 3 app, Element Plus UI, model/content clients, polling and SSE flows. |
 | `src/api/` | FastAPI routes, schemas, services, dependencies, and auth middleware. |
 | `src/api/services/dynamic_pipeline.py` | Studio plan-then-execute pipeline with SSE event persistence. |
+| `src/api/services/pipeline_graph.py` | LangGraph nodes and conditional execution edges; durable state remains in the application database. |
+| `frontend/src/query/client.ts` | Workspace-scoped server-state cache, cancellation and mutation invalidation. |
 | `src/api/services/chat_agent.py` | Persistent tool-calling Chat Agent and long-term memory integration. |
 | `src/api/services/sub_agents.py` | Researcher, fact-checker, writer, editor, reviewer, and strategy sub-agents. |
 | `src/tools/web_search.py` | Multi-provider search: Serper, Tavily, Brave, SearXNG, DuckDuckGo, and Bing fallback. |
@@ -184,7 +190,7 @@ jobs, `rq` for a separate worker).
 
 Prerequisites:
 
-- Python 3.10+
+- Python 3.11+ (matches the cross-platform dependency lock and CI)
 - Node.js 20+ (including the Playwright browser tests)
 - Docker Desktop if you want PostgreSQL, Redis, or the full Compose stack
 

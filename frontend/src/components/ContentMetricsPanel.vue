@@ -41,7 +41,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import { getContentMetrics, recordContentMetrics, type ContentMetrics } from '../api/metrics'
 
@@ -61,6 +61,8 @@ const props = defineProps<{ contentId: number; defaultPlatform?: string; refresh
 
 const metrics = ref<ContentMetrics[]>([])
 const saving = ref(false)
+let loadRequest = 0
+let contentVersion = 0
 // A blank form is invalid by construction, so the message waits for a save
 // attempt instead of greeting every newly opened piece of content with an error.
 const attempted = ref(false)
@@ -88,17 +90,19 @@ const validationError = computed(() => {
 watch(
   () => [props.contentId, props.refreshKey] as const,
   async ([contentId], previous) => {
+    const request = ++loadRequest
     // A half-typed form survives a reload of the same content.
     if (contentId !== previous?.[0]) {
+      contentVersion += 1
       metrics.value = []
       reset()
     }
     try {
       const loaded = await getContentMetrics(contentId)
       // The user may have switched content while this was in flight.
-      if (contentId === props.contentId) metrics.value = loaded
+      if (request === loadRequest && contentId === props.contentId) metrics.value = loaded
     } catch (error) {
-      ElMessage.error((error as Error).message)
+      if (request === loadRequest) ElMessage.error((error as Error).message)
     }
   },
   { immediate: true }
@@ -119,17 +123,23 @@ function edit(row: ContentMetrics) {
 }
 
 async function save() {
+  if (saving.value) return
   attempted.value = true
   if (validationError.value) return
   saving.value = true
+  const contentId = props.contentId
+  const version = contentVersion
   try {
-    const saved = await recordContentMetrics(props.contentId, {
+    const saved = await recordContentMetrics(contentId, {
       platform: form.platform.trim().toLowerCase(),
       views: Number(form.views),
       likes: Number(form.likes),
       comments: Number(form.comments),
       shares: Number(form.shares)
     })
+    if (version !== contentVersion || contentId !== props.contentId) return
+    // A read started before this write must not restore the previous counts.
+    loadRequest += 1
     metrics.value = [...metrics.value.filter(row => row.platform !== saved.platform), saved].sort((a, b) =>
       (a.platform ?? '').localeCompare(b.platform ?? '')
     )
@@ -140,6 +150,11 @@ async function save() {
     saving.value = false
   }
 }
+
+onBeforeUnmount(() => {
+  loadRequest += 1
+  contentVersion += 1
+})
 
 function formatCount(value: number) {
   return value.toLocaleString('zh-CN')

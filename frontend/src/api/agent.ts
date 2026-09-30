@@ -1,5 +1,7 @@
 import { api, ApiError, fallbackApiMessage, getAuthToken, handleExpiredSession } from './index'
 import { readSseStream } from './sse'
+import { assertWorkspaceSession, contentChanged } from '../query/client'
+import { onWorkspaceSessionReset, workspaceSessionId } from '../workspaceSession'
 
 export interface AgentRunPayload {
   topic: string
@@ -167,8 +169,19 @@ export interface UpdateThreadPatch {
 }
 
 export async function chat(payload: ChatPayload) {
+  const session = workspaceSessionId.value
   const { data } = await api.post<ChatResponse>('/agent/chat', payload)
+  invalidateChatWrites(session, data.tool_events)
   return data
+}
+
+function invalidateChatWrites(session: string, events: ChatToolEvent[]) {
+  for (const event of events) {
+    if (event.status === 'completed' && ['create_content', 'refine_content'].includes(event.name)) {
+      const id = Number(event.args.content_id)
+      contentChanged(session, Number.isSafeInteger(id) && id > 0 ? id : undefined)
+    }
+  }
 }
 
 export interface ChatStreamHandlers {
@@ -213,10 +226,19 @@ function lostConnection(threadId: string | undefined) {
  */
 export async function chatStream(payload: ChatPayload, handlers: ChatStreamHandlers = {}): Promise<ChatResponse> {
   const token = getAuthToken()
+  const session = workspaceSessionId.value
+  const controller = new AbortController()
+  const stopWatching = onWorkspaceSessionReset(() => controller.abort())
+  function assertCurrent() {
+    if (getAuthToken() !== token) controller.abort()
+    assertWorkspaceSession(session, controller.signal)
+  }
+  try {
   let response: Response
   try {
     response = await fetch('/api/agent/chat/stream', {
       method: 'POST',
+      signal: controller.signal,
       headers: {
         'Content-Type': 'application/json',
         Accept: 'text/event-stream',
@@ -225,9 +247,11 @@ export async function chatStream(payload: ChatPayload, handlers: ChatStreamHandl
       body: JSON.stringify(payload)
     })
   } catch {
+    assertCurrent()
     throw new ApiError(fallbackApiMessage(undefined, 'Network Error'))
   }
 
+  assertCurrent()
   if (!response.ok) {
     if (response.status === 401) handleExpiredSession()
     // An API that predates the endpoint answers 404/405: nothing ran.
@@ -243,6 +267,7 @@ export async function chatStream(payload: ChatPayload, handlers: ChatStreamHandl
   let failure: ApiError | undefined
   try {
     await readSseStream(response.body, frame => {
+      assertCurrent()
       const data = JSON.parse(frame.data)
       switch (frame.event) {
         case 'turn_start':
@@ -265,6 +290,7 @@ export async function chatStream(payload: ChatPayload, handlers: ChatStreamHandl
           handlers.onToolStart?.(data)
           break
         case 'tool_end':
+          invalidateChatWrites(session, [data.event])
           handlers.onToolEnd?.(data.event)
           break
         case 'done':
@@ -276,17 +302,22 @@ export async function chatStream(payload: ChatPayload, handlers: ChatStreamHandl
       }
     })
   } catch {
+    assertCurrent()
     throw lostConnection(threadId)
   }
 
+  assertCurrent()
   if (failure) throw failure
-  if (result) return result
+  if (result) { invalidateChatWrites(session, result.tool_events); return result }
   // The body ended without a verdict: a proxy or the server closed it early.
   throw lostConnection(threadId)
+  } finally { stopWatching() }
 }
 
 export async function runAgentPipeline(payload: AgentRunPayload) {
+  const session = workspaceSessionId.value
   const { data } = await api.post<AgentRunResponse>('/agent/run', payload)
+  if (data.saved_content_id) contentChanged(session, data.saved_content_id)
   return data
 }
 
@@ -414,7 +445,9 @@ export interface PipelineRunSnapshot {
  * transport does not mean a dead run, so the UI must ask instead of assuming.
  */
 export async function getPipelineRun(runId: string) {
+  const session = workspaceSessionId.value
   const { data } = await api.get<PipelineRunSnapshot>(`/agent/runs/${runId}`)
+  if (data.status === 'completed' && data.saved_content_id) contentChanged(session, data.saved_content_id)
   return data
 }
 

@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timedelta
 
 from fastapi.testclient import TestClient
 
@@ -170,3 +171,92 @@ def test_start_job_does_not_revive_cancelled_job(store):
     assert started is None
     assert payload["status"] == "cancelled"
     assert payload["attempts"] == 0
+
+
+def test_waiting_retry_is_visible_and_can_be_cancelled(store):
+    job = store.create_job("job_retry_cancel", "titles", {"topic": "test"})
+    store.update_job(
+        job["id"],
+        status="failed",
+        attempts=1,
+        max_retries=3,
+        error_type="transient",
+        next_retry_at=datetime.now() + timedelta(minutes=1),
+    )
+    app.dependency_overrides[get_store] = lambda: store
+    try:
+        with TestClient(app) as client:
+            pending = client.get(f"/api/jobs/{job['id']}").json()
+            cancelled = client.delete(f"/api/jobs/{job['id']}").json()
+    finally:
+        app.dependency_overrides.clear()
+
+    assert pending["next_retry_at"] is not None
+    assert pending["max_retries"] == 3
+    assert pending["error_type"] == "transient"
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["next_retry_at"] is None
+    asyncio.run(run_job_async(job["id"], store))
+    assert store.get_job(job["id"])["attempts"] == 1
+
+
+def test_cancellation_leaves_permanent_failure_and_completed_jobs_unchanged(store):
+    for status in ("failed", "completed"):
+        job_id = f"job_terminal_{status}"
+        store.create_job(job_id, "titles", {"topic": "test"})
+        store.update_job(job_id, status=status, result={"text": "original"}, error="original")
+
+        result = store.cancel_job(job_id)
+
+        assert result["status"] == status
+        assert result["result"] == {"text": "original"}
+        assert result["error"] == "original"
+
+
+def test_guarded_worker_update_cannot_overwrite_cancellation_or_new_owner(store):
+    store.create_job("job_guard", "titles", {"topic": "test"})
+    store.update_job("job_guard", status="running", worker_id="original")
+    store.cancel_job("job_guard")
+
+    assert (
+        store.update_job(
+            "job_guard",
+            expected_statuses={"running"},
+            expected_worker_id="original",
+            status="completed",
+            result={"text": "late result"},
+        )
+        is None
+    )
+    assert store.get_job("job_guard")["status"] == "cancelled"
+
+    store.update_job("job_guard", status="running", worker_id="replacement")
+    assert (
+        store.update_job(
+            "job_guard",
+            expected_statuses={"running"},
+            expected_worker_id="original",
+            status="failed",
+            error="late error",
+        )
+        is None
+    )
+    assert store.get_job("job_guard")["status"] == "running"
+
+
+def test_starting_retry_clears_previous_attempt_failure_metadata(store):
+    store.create_job("job_retry_start", "titles", {"topic": "test"})
+    store.update_job(
+        "job_retry_start",
+        status="failed",
+        error="timeout",
+        error_type="transient",
+        next_retry_at=datetime.now() - timedelta(seconds=1),
+    )
+
+    started = store.start_job("job_retry_start", attempts=2)
+
+    assert started["status"] == "running"
+    assert started["error"] is None
+    assert started["error_type"] is None
+    assert started["next_retry_at"] is None

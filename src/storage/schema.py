@@ -58,6 +58,9 @@ REQUIRED_SCHEMA_INDEXES: dict[str, set[tuple[str, ...]]] = {
     "run_steps": {
         ("run_id", "status"),
     },
+    "agent_runs": {
+        ("status", "lease_expires_at"),
+    },
 }
 # Duplicate-write prevention must be enforced by PostgreSQL, not by application
 # check-then-write: without the unique constraint two racing claims both see no

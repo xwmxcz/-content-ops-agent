@@ -29,6 +29,7 @@ def mocked_store(monkeypatch):
     store = ContentStore.__new__(ContentStore)
     session = Mock(spec=Session)
     session.query.return_value.filter.return_value.scalar.return_value = 2
+    session.query.return_value.filter.return_value.count.return_value = 2
     monkeypatch.setattr(store, "_get_session", lambda: session)
 
     def refresh(asset):

@@ -1,4 +1,6 @@
 import { api } from './index'
+import { mediaChanged } from '../query/client'
+import { workspaceSessionId } from '../workspaceSession'
 
 export interface MediaAsset {
   id: number
@@ -15,12 +17,13 @@ export interface MediaAsset {
   created_at?: string
 }
 
-export async function getContentMedia(contentId: number) {
-  const { data } = await api.get<MediaAsset[]>(`/content/${contentId}/media`)
+export async function getContentMedia(contentId: number, signal?: AbortSignal) {
+  const { data } = await api.get<MediaAsset[]>(`/content/${contentId}/media`, { signal })
   return data
 }
 
 export async function uploadMedia(contentId: number, mediaType: 'image' | 'video', file: File) {
+  const session = workspaceSessionId.value
   const formData = new FormData()
   formData.append('content_id', String(contentId))
   formData.append('media_type', mediaType)
@@ -29,10 +32,13 @@ export async function uploadMedia(contentId: number, mediaType: 'image' | 'video
   const { data } = await api.post<MediaAsset>('/media/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' }
   })
+  mediaChanged(session, contentId)
   return data
 }
 
-export async function deleteMedia(mediaId: number) {
+export async function deleteMedia(mediaId: number, contentId?: number) {
+  const session = workspaceSessionId.value
   const { data } = await api.delete<{ deleted: boolean }>(`/media/${mediaId}`)
+  if (contentId != null) mediaChanged(session, contentId)
   return data
 }

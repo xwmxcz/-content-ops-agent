@@ -31,6 +31,8 @@ def save_step_checkpoint(
     step_name: str,
     result_data: dict[str, Any] | None = None,
     status: str = "completed",
+    *,
+    expected_worker_id: str | None = None,
 ) -> dict[str, Any]:
     """Record a step's outcome so a retry can skip it."""
     checkpoint = store.save_run_step_checkpoint(
@@ -39,6 +41,7 @@ def save_step_checkpoint(
         step_name=step_name,
         status=status,
         result_data=result_data,
+        expected_worker_id=expected_worker_id,
     )
     if status == "completed":
         metrics.job_checkpoints_saved_total.labels(step_name=step_name).inc()
@@ -88,13 +91,13 @@ def get_step_result(store: ContentStore, run_id: str, step_index: int) -> dict[s
     return checkpoint["result_data"]
 
 
-def clear_checkpoints(store: ContentStore, run_id: str) -> int:
+def clear_checkpoints(store: ContentStore, run_id: str, *, expected_worker_id: str | None = None) -> int:
     """Discard a run's checkpoints once its overall result is durable.
 
     Called after terminal success. Leaving them behind is harmless for
     correctness but grows the table without bound.
     """
-    deleted = store.clear_run_step_checkpoints(run_id)
+    deleted = store.clear_run_step_checkpoints(run_id, expected_worker_id=expected_worker_id)
     if deleted:
         log_event(logger, "run_step_checkpoints_cleared", run_id=run_id, deleted=deleted)
     return deleted

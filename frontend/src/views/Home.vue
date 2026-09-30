@@ -11,25 +11,30 @@
       </div>
     </section>
 
-    <section class="stats-row">
+    <div class="summary-actions">
+      <p v-if="statsError" class="load-error" role="alert">{{ statsError }}{{ stats ? '，当前显示上次加载的数据。' : '' }}</p>
+      <p v-else-if="statsLoading" role="status">统计加载中…</p>
+      <el-button :icon="Refresh" :loading="statsLoading" @click="loadStats">{{ statsError ? '重试统计' : '刷新统计' }}</el-button>
+    </div>
+    <section class="stats-row" :aria-busy="statsLoading">
       <article class="metric-card">
         <span>总内容</span>
-        <strong>{{ stats?.total_contents ?? 0 }}</strong>
+        <strong>{{ stats?.total_contents ?? '—' }}</strong>
         <small>已进入内容库的记录总数</small>
       </article>
       <article class="metric-card">
         <span>内容类型</span>
-        <strong>{{ Object.keys(stats?.by_type ?? {}).length }}</strong>
+        <strong>{{ stats ? Object.keys(stats.by_type).length : '—' }}</strong>
         <small>当前覆盖的平台和格式</small>
       </article>
       <article class="metric-card">
         <span>状态类型</span>
-        <strong>{{ Object.keys(stats?.by_status ?? {}).length }}</strong>
+        <strong>{{ stats ? Object.keys(stats.by_status).length : '—' }}</strong>
         <small>草稿、打磨和发布阶段分布</small>
       </article>
       <article class="metric-card">
         <span>最近更新</span>
-        <strong class="metric-date">{{ content.items[0]?.created_at?.slice(0, 10) || '-' }}</strong>
+        <strong class="metric-date">{{ recentItems[0]?.created_at?.slice(0, 10) || (recentLoaded && !recentError ? '暂无' : '—') }}</strong>
         <small>最近一次进入内容库的日期</small>
       </article>
     </section>
@@ -67,43 +72,77 @@
           <h2 class="page-title">最近内容</h2>
           <p class="page-subtitle">接着上次的灵感，继续创作。</p>
         </div>
-        <el-button :icon="Refresh" :loading="content.loading" @click="load">刷新</el-button>
+        <el-button :icon="Refresh" :loading="recentLoading" @click="loadRecent">{{ recentError ? '重试内容' : '刷新内容' }}</el-button>
       </div>
 
-      <el-empty v-if="!content.items.length" description="暂无内容" />
-      <div v-else class="recent-list">
-        <ContentCard v-for="item in content.items" :key="item.id" :item="item" />
+      <p v-if="recentError" class="load-error" role="alert">{{ recentError }}{{ recentLoaded ? '，当前显示上次加载的数据。' : '' }}</p>
+      <p v-if="recentLoading && !recentLoaded" role="status">内容加载中…</p>
+      <el-empty v-else-if="recentLoaded && !recentError && !recentItems.length" description="暂无内容" />
+      <div v-else-if="recentItems.length" class="recent-list" :aria-busy="recentLoading">
+        <ContentCard v-for="item in recentItems" :key="item.id" :item="item" />
       </div>
     </section>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElEmpty } from 'element-plus/es/components/empty/index'
 import 'element-plus/es/components/empty/style/css'
 import { ArrowRight, ChatDotRound, EditPen, MagicStick, Refresh, Tickets } from '@element-plus/icons-vue'
 import ContentCard from '../components/ContentCard.vue'
 import { getStats, type StatsPayload } from '../api/stats'
-import { useContentStore } from '../stores/content'
+import { getContents, type ContentItem } from '../api/content'
 
-const content = useContentStore()
 const stats = ref<StatsPayload>()
+const statsLoading = ref(false)
+const statsError = ref('')
+const recentItems = ref<ContentItem[]>([])
+const recentLoaded = ref(false)
+const recentLoading = ref(false)
+const recentError = ref('')
+let statsRequest = 0
+let recentRequest = 0
 
-async function load() {
-  await Promise.all([
-    content.refresh(6),
-    getStats().then(result => {
-      stats.value = result
-    })
-  ])
+async function loadStats() {
+  const request = ++statsRequest
+  statsLoading.value = true
+  statsError.value = ''
+  try {
+    const loaded = await getStats()
+    if (request === statsRequest) stats.value = loaded
+  } catch (error) {
+    if (request === statsRequest) statsError.value = `统计加载失败：${error instanceof Error ? error.message : '请稍后重试'}`
+  } finally {
+    if (request === statsRequest) statsLoading.value = false
+  }
 }
 
-onMounted(load)
+async function loadRecent() {
+  const request = ++recentRequest
+  recentLoading.value = true
+  recentError.value = ''
+  try {
+    const loaded = await getContents({ limit: 6 })
+    if (request !== recentRequest) return
+    recentItems.value = loaded
+    recentLoaded.value = true
+  } catch (error) {
+    if (request === recentRequest) recentError.value = `内容加载失败：${error instanceof Error ? error.message : '请稍后重试'}`
+  } finally {
+    if (request === recentRequest) recentLoading.value = false
+  }
+}
+
+onMounted(() => { void Promise.all([loadStats(), loadRecent()]) })
+onBeforeUnmount(() => { statsRequest += 1; recentRequest += 1 })
 </script>
 
 <style scoped>
 .dashboard-page { display: grid; gap: 24px; }
+.summary-actions { display: flex; align-items: center; justify-content: flex-end; gap: 16px; color: var(--c-text-secondary); font-size: 13px; }
+.summary-actions p { margin: 0 auto 0 0; }
+.load-error { color: var(--c-fail); font-size: 13px; }
 .dashboard-hero { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 4px; }
 .dashboard-hero .page-title { font-family: var(--font-display); letter-spacing: -0.035em; }
 .hero-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

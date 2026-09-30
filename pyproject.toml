@@ -3,7 +3,7 @@ name = "content-ops-agent"
 version = "0.1.0"
 description = "AI Content Ops Agent: FastAPI + Vue 3 content operations workspace built around LLM agents."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 # Runtime dependencies are pinned in requirements.txt (Docker + local installs).
 # Reproducible builds come from requirements.lock (see `make lock`).

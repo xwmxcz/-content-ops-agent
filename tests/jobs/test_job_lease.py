@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import uuid
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
@@ -268,7 +270,15 @@ class TestReaperService:
         store.update_job(job_id, status="running")
 
         result = reaper.reap_expired_leases(store, dry_run=False)
-        assert result == {"found": 0, "reclaimed": 0, "requeued": 0, "job_ids": []}
+        assert result == {
+            "found": 0,
+            "reclaimed": 0,
+            "requeued": 0,
+            "job_ids": [],
+            "pipeline_found": 0,
+            "pipeline_failed": 0,
+            "run_ids": [],
+        }
         assert store.get_job(job_id)["status"] == "running"
 
     def test_sweep_recovers_several_jobs(self, store: ContentStore):
@@ -282,6 +292,81 @@ class TestReaperService:
         result = reaper.reap_expired_leases(store, dry_run=False)
         assert result["reclaimed"] == 3
         assert all(store.get_job(jid)["status"] == "queued" for jid in job_ids)
+
+    def test_queue_outage_is_retried_on_next_sweep_without_reclaiming_again(self, store, monkeypatch):
+        monkeypatch.setattr(config, "JOB_QUEUE_MODE", "rq")
+        job_id = _make_job(store)
+        store.acquire_job_lease(job_id, "worker-dead", 300)
+        _expire_lease(store, job_id)
+        store.update_job(job_id, attempts=2)
+
+        with patch(
+            "src.jobs.queue.requeue_job_with_delay", side_effect=[ConnectionError("Redis down"), None]
+        ) as enqueue:
+            first = reaper.reap_expired_leases(store, dry_run=False)
+            pending = store.get_job(job_id)
+            second = reaper.reap_expired_leases(store, dry_run=False)
+            third = reaper.reap_expired_leases(store, dry_run=False)
+
+        assert (first["reclaimed"], first["requeued"]) == (1, 0)
+        assert pending["status"] == "queued"
+        assert pending["worker_id"] is None
+        assert pending["next_retry_at"] is not None
+        assert (second["found"], second["reclaimed"], second["requeued"]) == (1, 0, 1)
+        assert third["found"] == 0
+        assert enqueue.call_count == 2
+        final = store.get_job(job_id)
+        assert final["next_retry_at"] is None
+        assert final["attempts"] == 2
+
+    def test_reaper_restart_recovers_delivery_committed_before_a_crash(self, store, monkeypatch):
+        monkeypatch.setattr(config, "JOB_QUEUE_MODE", "rq")
+        job_id = _make_job(store)
+        store.acquire_job_lease(job_id, "worker-dead", 300)
+        _expire_lease(store, job_id)
+        # The reaper died after reclaim committed but before calling Redis.
+        assert store.reclaim_job_lease(job_id, "worker-dead") is not None
+
+        preview = reaper.reap_expired_leases(store, dry_run=True)
+        assert preview["job_ids"] == [job_id]
+        assert store.get_job(job_id)["next_retry_at"] is not None
+        with patch("src.jobs.queue.requeue_job_with_delay") as enqueue:
+            result = reaper.reap_expired_leases(store, dry_run=False)
+
+        assert result["reclaimed"] == 0
+        assert result["requeued"] == 1
+        enqueue.assert_called_once_with(job_id, 0, store.database_url)
+
+    def test_cancelled_recovery_and_ordinary_queue_items_are_not_redelivered(self, store, monkeypatch):
+        monkeypatch.setattr(config, "JOB_QUEUE_MODE", "rq")
+        _make_job(store)  # Normal queued work has already been dispatched.
+        cancelled = _make_job(store)
+        store.acquire_job_lease(cancelled, "worker-dead", 300)
+        _expire_lease(store, cancelled)
+        store.reclaim_job_lease(cancelled, "worker-dead")
+        store.cancel_job(cancelled)
+
+        with patch("src.jobs.queue.requeue_job_with_delay") as enqueue:
+            result = reaper.reap_expired_leases(store, dry_run=False)
+
+        enqueue.assert_not_called()
+        assert result["found"] == 0
+        assert store.get_job(cancelled)["status"] == "cancelled"
+
+    def test_pending_deliveries_respect_sweep_limit(self, store, monkeypatch):
+        monkeypatch.setattr(config, "JOB_QUEUE_MODE", "rq")
+        for _ in range(3):
+            job_id = _make_job(store)
+            store.acquire_job_lease(job_id, "worker-dead", 300)
+            _expire_lease(store, job_id)
+            store.reclaim_job_lease(job_id, "worker-dead")
+
+        with patch("src.jobs.queue.requeue_job_with_delay") as enqueue:
+            result = reaper.reap_expired_leases(store, dry_run=False, limit=2)
+
+        assert result["found"] == 2
+        assert enqueue.call_count == 2
+        assert len(store.find_pending_lease_requeues()) == 1
 
     @pytest.mark.asyncio
     async def test_reaper_loop_stops_on_event(self, store: ContentStore):
@@ -428,7 +513,7 @@ class TestRunnerLeaseIntegration:
             mock_execute.side_effect = capture
             await run_job_async(job_id, store)
 
-        assert observed["worker_id"] == current_worker_id()
+        assert observed["worker_id"].startswith(current_worker_id() + ":")
         assert observed["lease_expires_at"] is not None
 
     @pytest.mark.asyncio
@@ -446,8 +531,9 @@ class TestRunnerLeaseIntegration:
         assert job["worker_id"] == "worker-elsewhere"
 
     @pytest.mark.asyncio
-    async def test_failed_run_releases_the_lease(self, store: ContentStore):
+    async def test_failed_run_releases_the_lease(self, store: ContentStore, monkeypatch):
         """A stuck lease after failure would block every future retry."""
+        monkeypatch.setattr("src.jobs.queue.requeue_job_with_delay", lambda *args: None)
         job_id = _make_job(store)
 
         with patch("src.jobs.runner._execute_job", new_callable=AsyncMock) as mock_execute:
@@ -555,22 +641,90 @@ class TestRetryInteraction:
         assert job["status"] == "failed"
         assert job["worker_id"] is None
 
-    @pytest.mark.asyncio
-    async def test_due_retry_acquires_lease_and_runs(self, store: ContentStore):
-        job_id = _make_job(store)
-        store.update_job(
-            job_id,
-            status="failed",
-            next_retry_at=datetime.now() - timedelta(seconds=1),
-            error_type="transient",
-            attempts=1,
-        )
 
-        with patch("src.jobs.runner._execute_job", new_callable=AsyncMock) as mock_execute:
-            mock_execute.return_value = {"content": "retried"}
-            await run_job_async(job_id, store)
+def test_same_process_concurrent_deliveries_cannot_release_the_winners_lease(store, monkeypatch):
+    job_id = _make_job(store)
+    original_get = store.get_job
+    first_reads = threading.Barrier(2)
+    thread_state = threading.local()
+    loser_finished = threading.Event()
+    executions = []
 
-        job = store.get_job(job_id)
-        assert job["status"] == "completed"
-        assert job["attempts"] == 2
-        assert job["worker_id"] is None
+    def synchronized_get(key):
+        snapshot = original_get(key)
+        if not getattr(thread_state, "read_once", False):
+            thread_state.read_once = True
+            first_reads.wait(timeout=5)
+        return snapshot
+
+    async def execute(job, llm, job_store):
+        executions.append(job["worker_id"])
+        assert await asyncio.to_thread(loser_finished.wait, 5)
+        assert original_get(job_id)["worker_id"] == job["worker_id"], "duplicate delivery cleared the live lease"
+        return {"content": "done"}
+
+    monkeypatch.setattr(store, "get_job", synchronized_get)
+    monkeypatch.setattr("src.jobs.runner._execute_job", execute)
+    monkeypatch.setattr("src.jobs.queue.requeue_job_with_delay", lambda *args: None)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(asyncio.run, run_job_async(job_id, store)) for _ in range(2)]
+        done, _ = wait(futures, timeout=5, return_when=FIRST_COMPLETED)
+        assert done, "duplicate delivery did not yield its lease"
+        loser_finished.set()
+        for future in futures:
+            future.result(timeout=5)
+
+    assert len(executions) == 1
+    assert original_get(job_id)["status"] == "completed"
+    assert original_get(job_id)["attempts"] == 1
+
+
+def test_late_job_starter_cannot_start_another_deliverys_lease(store):
+    job_id = _make_job(store)
+    assert store.acquire_job_lease(job_id, "old_delivery", 60)
+    store.update_job(job_id, lease_expires_at=datetime.now() - timedelta(seconds=1))
+    assert store.start_job(job_id, attempts=1, expected_worker_id="old_delivery") is None
+    assert store.acquire_job_lease(job_id, "new_delivery", 60)
+    assert store.start_job(job_id, attempts=1, expected_worker_id="old_delivery") is None
+    assert store.release_job_lease(job_id, "old_delivery") is False
+    assert store.start_job(job_id, attempts=1, expected_worker_id="new_delivery")["status"] == "running"
+
+
+async def test_rejected_expired_completion_keeps_the_job_recoverable(store, monkeypatch):
+    job_id = _make_job(store)
+
+    async def finish_after_expiry(job, llm, job_store):
+        _expire_lease(job_store, job_id)
+        return {"content": "too late"}
+
+    monkeypatch.setattr("src.jobs.runner._execute_job", finish_after_expiry)
+    await run_job_async(job_id, store)
+
+    pending = store.get_job(job_id)
+    assert pending["status"] == "running"
+    assert pending["result"] is None
+    assert pending["lease_expires_at"] is not None
+    assert store.extend_job_lease(job_id, pending["worker_id"], 60) is False
+    assert reaper.reap_expired_leases(store, dry_run=False)["reclaimed"] == 1
+    assert store.get_job(job_id)["status"] == "queued"
+
+
+@pytest.mark.asyncio
+async def test_due_retry_acquires_lease_and_runs(store: ContentStore):
+    job_id = _make_job(store)
+    store.update_job(
+        job_id,
+        status="failed",
+        next_retry_at=datetime.now() - timedelta(seconds=1),
+        error_type="transient",
+        attempts=1,
+    )
+
+    with patch("src.jobs.runner._execute_job", new_callable=AsyncMock) as mock_execute:
+        mock_execute.return_value = {"content": "retried"}
+        await run_job_async(job_id, store)
+
+    job = store.get_job(job_id)
+    assert job["status"] == "completed"
+    assert job["attempts"] == 2
+    assert job["worker_id"] is None

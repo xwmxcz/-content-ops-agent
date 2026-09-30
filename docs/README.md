@@ -29,6 +29,8 @@ it may describe code that has since changed, and it is not a source of truth.
 | --- | --- |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | Local setup, the gates CI enforces, and how to run them. |
 | [IMPROVEMENT_LOG.md](IMPROVEMENT_LOG.md) | Engineering log: defects found during verification and how they were fixed. |
+| [REVIEW_2026-09-29.md](REVIEW_2026-09-29.md) | 全面功能审查、本轮修复、验证范围及后续优先级。 |
+| [FRAMEWORK_UPGRADE_2026-09-29.md](FRAMEWORK_UPGRADE_2026-09-29.md) | LangGraph 试点、TanStack Vue Query、兼容恢复与升级说明。 |
 | [SKILLS_GUIDE.md](SKILLS_GUIDE.md) | Notes on the agent skill surfaces used during development. |
 | [evidence/](evidence/) | Machine-readable validation artifacts. |
 

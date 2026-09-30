@@ -1,6 +1,6 @@
 // Owns API transport and bearer storage; account changes and BFCache restores discard stale workspace state.
-import axios from 'axios'
-import { clearWorkspaceSession } from '../workspaceSession'
+import axios, { type InternalAxiosRequestConfig } from 'axios'
+import { activateWorkspaceSession, clearWorkspaceSession, workspaceSessionId } from '../workspaceSession'
 
 const AUTH_TOKEN_STORAGE_KEY = 'content_ops_agent_auth_token'
 
@@ -28,6 +28,7 @@ export function getAuthToken() {
 export function setAuthToken(token: string) {
   clearWorkspaceSession()
   window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token)
+  activateWorkspaceSession()
 }
 
 export function clearAuthToken() {
@@ -37,7 +38,7 @@ export function clearAuthToken() {
 
 export function watchAccountChanges() {
   window.addEventListener('storage', event => {
-    if (event.storageArea === window.localStorage && event.key === AUTH_TOKEN_STORAGE_KEY && event.oldValue !== event.newValue) {
+    if (event.storageArea === window.localStorage && (event.key === null || (event.key === AUTH_TOKEN_STORAGE_KEY && event.oldValue !== event.newValue))) {
       clearWorkspaceSession()
       // A full navigation also disposes in-memory content, chat, and running task state.
       window.location.replace('/login')
@@ -45,21 +46,36 @@ export function watchAccountChanges() {
   })
   window.addEventListener('pageshow', event => {
     // BFCache restores Vue memory without mounting again; re-run routing and server authentication.
-    if (event.persisted) window.location.reload()
+    if (event.persisted) { clearWorkspaceSession(); window.location.reload() }
   })
 }
 
+type WorkspaceRequest = InternalAxiosRequestConfig & { workspaceSession?: string }
+
+function isRetiredRequest(config?: WorkspaceRequest) {
+  if (!config?.workspaceSession) return false
+  // Reading storage also closes the small gap before another tab's storage event is delivered.
+  const expectedAuthorization = getAuthToken() ? `Bearer ${getAuthToken()}` : undefined
+  return config.workspaceSession !== workspaceSessionId.value || config.headers.Authorization !== expectedAuthorization
+}
+
 api.interceptors.request.use(config => {
+  ;(config as WorkspaceRequest).workspaceSession = workspaceSessionId.value
   const token = getAuthToken()
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
   return config
-})
+}, undefined, { synchronous: true })
 
 api.interceptors.response.use(
-  response => response,
+  response => {
+    if (isRetiredRequest(response.config)) throw new axios.CanceledError('登录会话已更换')
+    return response
+  },
   error => {
+    if (axios.isCancel(error)) return Promise.reject(error)
+    if (isRetiredRequest(error.config)) return Promise.reject(new axios.CanceledError('登录会话已更换'))
     const detail = error.response?.data?.detail
     const status = error.response?.status
     const requestUrl = error.config?.url ?? ''

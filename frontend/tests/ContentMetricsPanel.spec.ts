@@ -186,4 +186,48 @@ describe('ContentMetricsPanel', () => {
     expect(wrapper.text()).toContain('blog')
     expect(wrapper.text()).not.toContain('stale-platform')
   })
+
+  it('does not insert a saved row into another content after the user switches', async () => {
+    let finishSave!: (value: ContentMetrics) => void
+    api.recordContentMetrics.mockImplementationOnce(() => new Promise(resolve => { finishSave = resolve }))
+    const wrapper = mountPanel()
+    await flushPromises()
+    await fill(wrapper, ['xiaohongshu', '123'])
+    await wrapper.find('form').trigger('submit')
+    api.getContentMetrics.mockResolvedValue([row({ content_id: 8, platform: 'blog', views: 5 })])
+    await wrapper.setProps({ contentId: 8, defaultPlatform: 'blog' })
+    await flushPromises()
+
+    finishSave(row({ views: 123 }))
+    await flushPromises()
+
+    expect(wrapper.findAll('.metrics-row')).toHaveLength(1)
+    expect(wrapper.find('.metrics-row').text()).toContain('blog')
+    expect(wrapper.find('.metrics-row').text()).not.toContain('xiaohongshu')
+  })
+
+  it('does not overwrite a successful save with an older in-flight read', async () => {
+    let finishRead!: (value: ContentMetrics[]) => void
+    api.getContentMetrics.mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve }))
+    const wrapper = mountPanel()
+    await fill(wrapper, ['xiaohongshu', '250'])
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+    finishRead([row({ views: 100 })])
+    await flushPromises()
+
+    expect(wrapper.find('.metrics-row').text()).toContain('250')
+    expect(wrapper.find('.metrics-row').text()).not.toContain('100')
+  })
+
+  it('prevents repeated submissions while a save is pending', async () => {
+    api.recordContentMetrics.mockImplementationOnce(() => new Promise(() => {}))
+    const wrapper = mountPanel()
+    await flushPromises()
+    await fill(wrapper, ['xiaohongshu', '250'])
+    await wrapper.find('form').trigger('submit')
+    await wrapper.find('form').trigger('submit')
+
+    expect(api.recordContentMetrics).toHaveBeenCalledTimes(1)
+  })
 })

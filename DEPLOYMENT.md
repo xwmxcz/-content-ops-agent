@@ -26,7 +26,16 @@ JOB_QUEUE_MODE=rq
 REDIS_URL=redis://:content_ops@localhost:6379/0
 JOB_QUEUE_NAME=content_ops
 MAX_PROVIDER_INFLIGHT_JOBS=8
+PIPELINE_ENGINE=langgraph_v1
 ```
+
+## Framework Upgrade and Pipeline Engine
+
+Use Python 3.11+ and install the pinned dependencies with `python -m pip install -r requirements.lock`; rebuild the frontend with `npm ci` and `npm run build` in `frontend`. Deploy the same revision and dependency lock to API and worker processes. Stop or drain the old API, workers, and reaper before migrating and restarting the new version.
+
+New Studio runs use `PIPELINE_ENGINE=langgraph_v1` by default. Set `PIPELINE_ENGINE=legacy` to create subsequent runs with the original executor. Every new run stores its engine version; resuming always uses that stored version, while older unmarked runs use the legacy executor. Keep graph-capable workers available for graph-marked runs: changing the setting does not make those runs compatible with old application code.
+
+This framework upgrade adds no database migration. The preceding lease-recovery changes still require `alembic upgrade head` through `0011_pipeline_run_leases`. PostgreSQL run/step records remain the durable checkpoint store; there is no second LangGraph checkpoint database. See [framework design and validation](docs/FRAMEWORK_UPGRADE_2026-09-29.md).
 
 ## Account Migration for Existing Installations
 
@@ -147,6 +156,32 @@ python3 -m src.jobs.reaper --healthcheck      # exit 0 if the service swept rece
 Tuning: `JOB_LEASE_DURATION_SECONDS` (default 300), `JOB_HEARTBEAT_INTERVAL_SECONDS`
 (30), `JOB_REAPER_INTERVAL_SECONDS` (60), `JOB_REAPER_BATCH_SIZE` (50). Keep the lease
 several heartbeats long, or one slow database round-trip looks like a dead worker.
+All values must be positive, and the lease duration must exceed the heartbeat
+interval; startup rejects invalid combinations.
+
+Studio pipelines now use the same worker lease and heartbeat. A pipeline that has
+not been claimed by a worker expires after `PIPELINE_DISPATCH_TIMEOUT_SECONDS`
+(default 300). A claimed pipeline expires 300 seconds after its last successful
+heartbeat by default. The reaper records a `run_failed` event and retains completed
+step checkpoints; use **Resume** in Studio to continue. It does not automatically
+repeat a failed pipeline. Each delivery has a unique lease identity, and expired
+workers cannot append events, change checkpoints, or save final content after a
+new attempt takes over.
+
+With the default 60-second reaper interval, an idle system detects an abandoned
+pipeline within about 300–360 seconds of its last heartbeat (or acceptance if it
+was never claimed). Batch backlogs and database outages can extend this window.
+Opening a run, subscribing to its stream, or requesting a resume also checks its
+expiry, so development `background` mode can recover after an API restart without
+a separate reaper. Background retry timers are local to their process; use RQ for
+durable delayed retries.
+
+For the pipeline lease upgrade, stop API, workers, and reaper, run
+`alembic upgrade head`, then restart all three with the same settings. Revision
+`0011_pipeline_run_leases` gives existing running pipelines a five-minute grace
+period; their stored requests and checkpoints remain available. Do not leave
+  workers from the previous release running during the upgrade because they do not
+enforce the new lease checks.
 
 ### Monitoring (Phase 2)
 

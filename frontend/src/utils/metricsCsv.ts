@@ -30,8 +30,8 @@ export function parseMetricsCsv(text: string): MetricsCsvResult {
   const lines = text
     .replace(/^﻿/, '')
     .split(/\r?\n/)
-    .map((content, index) => ({ content: content.trim(), number: index + 1 }))
-    .filter(line => line.content)
+    .map((content, index) => ({ content, number: index + 1 }))
+    .filter(line => line.content.trim())
 
   if (!lines.length) return { rows: [], errors: ['没有可导入的数据。'] }
 
@@ -42,16 +42,27 @@ export function parseMetricsCsv(text: string): MetricsCsvResult {
   if (missing.length) {
     return { rows: [], errors: [`首行必须是表头，缺少列：${missing.join('、')}。`] }
   }
+  if (new Set(header).size !== header.length) {
+    return { rows: [], errors: ['表头包含重复列，请为每一列保留唯一名称。'] }
+  }
 
   const rows: MetricsImportRow[] = []
   const errors: string[] = []
   for (const line of lines.slice(1)) {
     const cells = splitLine(line.content, delimiter)
+    if (cells.length !== header.length) {
+      errors.push(`第 ${line.number} 行：数据列数与表头不一致，请检查缺失单元格或多余的分隔符。`)
+      continue
+    }
     const cell = (name: string) => cells[header.indexOf(name)]
 
     const contentId = Number(cell('content_id'))
-    if (!Number.isInteger(contentId) || contentId <= 0) {
+    if (!/^\d+$/.test(cell('content_id')) || !Number.isSafeInteger(contentId) || contentId <= 0) {
       errors.push(`第 ${line.number} 行：content_id 必须是正整数。`)
+      continue
+    }
+    if (!cell('views')) {
+      errors.push(`第 ${line.number} 行：views 必须是不带分隔符的非负整数。`)
       continue
     }
     const platform = (cell('platform') ?? '').toLowerCase()

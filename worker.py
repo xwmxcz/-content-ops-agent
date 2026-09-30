@@ -24,4 +24,6 @@ if __name__ == "__main__":
     connection = Redis.from_url(config.REDIS_URL)
     worker_cls = SimpleWorker if os.name == "nt" else Worker
     worker = worker_cls([config.JOB_QUEUE_NAME], connection=connection)
-    worker.work()
+    # enqueue_in stores delayed retries in the scheduled registry. A scheduler
+    # must promote them back to the queue when their delay elapses.
+    worker.work(with_scheduler=True)

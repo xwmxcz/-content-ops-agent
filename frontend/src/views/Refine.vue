@@ -20,8 +20,8 @@
         </div>
 
         <div class="manual-loader">
-          <el-input-number v-model="contentId" :min="1" aria-label="内容编号" />
-          <el-button :icon="Search" @click="loadContent">加载</el-button>
+          <el-input-number v-model="contentId" :min="1" :disabled="loading" aria-label="内容编号" />
+          <el-button :icon="Search" :disabled="loading" :loading="loadingSource" @click="loadContent">加载</el-button>
         </div>
         <span class="list-caption">最近的内容，也可以输入编号加载</span>
 
@@ -33,6 +33,7 @@
             class="recent-card"
             :class="{ active: source?.id === item.id }"
             :aria-pressed="source?.id === item.id"
+            :disabled="loading"
             @click="selectContent(item.id)"
           >
             <strong>{{ item.title || '未命名内容' }}</strong>
@@ -122,7 +123,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElInputNumber } from 'element-plus/es/components/input-number/index'
 import { ElMessage } from 'element-plus/es/components/message/index'
@@ -155,10 +156,13 @@ const titleCount = ref(5)
 const resultText = ref('')
 const loading = ref(false)
 const loadingList = ref(false)
+const loadingSource = ref(false)
+let sourceRequest = 0
 const currentJob = ref<JobResponse>()
 
 const jobState = computed(() => {
   if (!currentJob.value) return ''
+  if (currentJob.value.status === 'failed' && currentJob.value.next_retry_at) return '等待自动重试'
   const labels: Record<string, string> = {
     queued: '排队中',
     running: '运行中',
@@ -172,25 +176,44 @@ async function loadRecent() {
   loadingList.value = true
   try {
     recentItems.value = await getContents({ limit: 8 })
+  } catch (error) {
+    ElMessage.error((error as Error).message)
   } finally {
     loadingList.value = false
   }
 }
 
 async function loadContent() {
+  if (loading.value) return
+  const request = ++sourceRequest
+  const id = contentId.value
+  source.value = undefined
+  loadingSource.value = false
+  resultText.value = ''
+  currentJob.value = undefined
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    ElMessage.warning('请输入有效的内容编号')
+    return
+  }
+  loadingSource.value = true
   try {
-    source.value = await getContent(contentId.value)
+    const content = await getContent(id)
+    if (request === sourceRequest) source.value = content
   } catch (error) {
-    ElMessage.error((error as Error).message)
+    if (request === sourceRequest) ElMessage.error((error as Error).message)
+  } finally {
+    if (request === sourceRequest) loadingSource.value = false
   }
 }
 
 async function selectContent(id: number) {
+  if (loading.value) return
   contentId.value = id
   await loadContent()
 }
 
-async function run(task: () => Promise<string>) {
+async function run(task: (sourceId: number) => Promise<string>) {
+  if (loading.value) return
   if (!source.value) {
     ElMessage.warning('请先选择内容')
     return
@@ -198,7 +221,7 @@ async function run(task: () => Promise<string>) {
   loading.value = true
   currentJob.value = undefined
   try {
-    resultText.value = await task()
+    resultText.value = await task(source.value.id)
   } catch (error) {
     ElMessage.error((error as Error).message)
   } finally {
@@ -207,9 +230,9 @@ async function run(task: () => Promise<string>) {
 }
 
 function rewrite() {
-  run(async () => {
+  run(async sourceId => {
     const job = await createRefineJob({
-      content_id: contentId.value,
+      content_id: sourceId,
       instruction: instruction.value,
       provider: modelConfig.provider,
       model: modelConfig.model,
@@ -226,9 +249,9 @@ function rewrite() {
 }
 
 function switchStyle() {
-  run(async () => {
+  run(async sourceId => {
     const job = await createRefineJob({
-      content_id: contentId.value,
+      content_id: sourceId,
       new_style: newStyle.value,
       provider: modelConfig.provider,
       model: modelConfig.model,
@@ -245,9 +268,9 @@ function switchStyle() {
 }
 
 function titles() {
-  run(async () => {
+  run(async sourceId => {
     const job = await createTitlesJob({
-      content_id: contentId.value,
+      content_id: sourceId,
       count: titleCount.value,
       provider: modelConfig.provider,
       model: modelConfig.model
@@ -260,9 +283,9 @@ function titles() {
 }
 
 function seo() {
-  run(async () => {
+  run(async sourceId => {
     const job = await createSeoJob({
-      content_id: contentId.value,
+      content_id: sourceId,
       provider: modelConfig.provider,
       model: modelConfig.model
     })
@@ -286,11 +309,13 @@ async function copyResult() {
 onMounted(async () => {
   await loadRecent()
   const routeId = Number(route.query.id)
-  if (Number.isFinite(routeId) && routeId > 0) {
+  if (Number.isSafeInteger(routeId) && routeId > 0) {
     contentId.value = routeId
     await loadContent()
   }
 })
+
+onBeforeUnmount(() => { sourceRequest += 1 })
 </script>
 
 <style scoped>

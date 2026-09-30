@@ -81,4 +81,23 @@ describe('parseMetricsCsv', () => {
     expect(parseMetricsCsv('  \n ').errors).toHaveLength(1)
     expect(parseMetricsCsv('content_id,platform,views\n').errors).toHaveLength(1)
   })
+
+  it.each([
+    'content_id,platform,views\n5,blog',
+    'content_id,platform,views\n5,blog,',
+    'content_id,platform,views\n5,blog,18,400',
+    'content_id,platform,views,views\n5,blog,100,200',
+    'content_id,platform,views\n9007199254740993,blog,10',
+    'content_id,platform,views\n0x10,blog,10'
+  ])('rejects ambiguous or missing values instead of overwriting saved metrics: %s', csv => {
+    const result = parseMetricsCsv(csv)
+    expect(result.rows).toEqual([])
+    expect(result.errors).toHaveLength(1)
+  })
+
+  it('keeps an empty optional trailing spreadsheet cell distinct from a missing column', () => {
+    const result = parseMetricsCsv('content_id\tplatform\tviews\tlikes\n5\tblog\t100\t')
+    expect(result.errors).toEqual([])
+    expect(result.rows[0]).toMatchObject({ views: 100, likes: 0 })
+  })
 })

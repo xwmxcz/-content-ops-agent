@@ -29,6 +29,12 @@ class _Store:
             raise ConnectionError("database unreachable")
         return []
 
+    def find_pending_lease_requeues(self, limit: int):
+        return []
+
+    def find_expired_run_leases(self, limit: int):
+        return []
+
 
 async def _run_one_iteration(store: _Store, heartbeat_path) -> None:
     stop = asyncio.Event()

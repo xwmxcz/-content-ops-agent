@@ -20,10 +20,6 @@ from src.utils.structured_logging import log_event
 logger = logging.getLogger(__name__)
 
 
-# Sentinel to indicate HTTP route was called without an Idempotency-Key header
-_NO_IDEMPOTENCY_KEY = object()
-
-
 class PublicationValidationError(ValueError):
     """Raised when a publication request is invalid."""
 
@@ -37,11 +33,24 @@ class PublishService:
 
     async def get_login_status(self) -> dict[str, Any]:
         result = await self.mcp_client.check_login_status()
-        status_text = result.get("text", "")
+        status_text = result.get("text") or ""
+        data = result.get("data")
+        connected = None
+        if isinstance(data, dict):
+            for key in ("is_logged_in", "logged_in"):
+                if isinstance(data.get(key), bool):
+                    connected = data[key]
+                    break
+        if connected is None:
+            # MCP text responses and REST boolean responses are both supported.
+            # Unknown/empty output cannot establish that the account is logged in.
+            negative = re.search(r"not\s+logged\s*in|logged\s*out|未登录|未登陆|登录失效|登录过期", status_text, re.I)
+            positive = re.search(r"\blogged\s+in\b|\blogin\s+successful\b|已登录|已登陆|登录成功", status_text, re.I)
+            connected = bool(positive and not negative)
         return {
-            "connected": "not logged" not in status_text.lower(),
+            "connected": connected,
             "status_text": status_text,
-            "details": result.get("data") or result.get("raw"),
+            "details": data or result.get("raw"),
         }
 
     def create_publication_request(
@@ -56,7 +65,7 @@ class PublishService:
         visibility: str = "public",
         is_original: bool = False,
         status: str = "queued",
-        idempotency_key: str | None | object = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         content = self.store.get_content(content_id)
         if not content:
@@ -64,8 +73,10 @@ class PublishService:
 
         media_assets = self._select_media_assets(content_id, publish_type, media_ids)
         resolved_title = self._normalize_title(title or content.get("title") or content["content"][:30])
-        resolved_body = (body or content["content"]).strip()
-        resolved_tags = tags or content.get("tags") or []
+        resolved_body = (content["content"] if body is None else body).strip()
+        if not resolved_body:
+            raise PublicationValidationError("Publication content must not be empty")
+        resolved_tags = (content.get("tags") or []) if tags is None else tags
 
         request_payload = {
             "title": resolved_title,
@@ -76,13 +87,7 @@ class PublishService:
             "is_original": is_original,
             "media_ids": [asset["id"] for asset in media_assets],
         }
-        # Store the HTTP-level idempotency key if provided.
-        # Use a sentinel to distinguish "no key header" from "not called via HTTP".
-        if idempotency_key is _NO_IDEMPOTENCY_KEY:
-            # HTTP route without Idempotency-Key header: skip execute idempotency
-            request_payload["_skip_execute_idempotency"] = True
-        elif idempotency_key is not None:
-            # HTTP route with Idempotency-Key header: store it
+        if idempotency_key is not None:
             request_payload["_http_idempotency_key"] = idempotency_key
         if publish_type == "image_post":
             request_payload["images"] = [asset["file_path"] for asset in media_assets]
@@ -105,19 +110,20 @@ class PublishService:
         if not publication:
             raise LookupError(f"Publication {publication_id} was not found")
 
-        request_payload = publication.get("request_payload") or {}
-        # Only skip idempotency if explicitly marked (HTTP route without header)
-        skip_idempotency = request_payload.get("_skip_execute_idempotency", False)
+        # Legacy publications may have completed without an execution ledger.
+        # Their terminal state still proves that the platform accepted the post.
+        if publication["status"] in {"completed", "scheduled"}:
+            return publication
 
         # The key is the publication row, not the job attempt: a requeued job, a
         # worker restart, and a manual retry are all the same logical publication,
         # and publishing twice to a real platform is not reversible.
-        # However, if the original HTTP request had no Idempotency-Key header,
-        # we skip idempotency tracking at the execute layer as well.
+        # An absent HTTP key permits a new publication row for each POST; it
+        # never permits executing the same row more than once.
         return await idempotent_write_async(
             self.store,
             scope=SCOPE_PUBLICATION_EXECUTE,
-            key=None if skip_idempotency else publication_request_id(publication_id),
+            key=publication_request_id(publication_id),
             args={"publication_id": int(publication_id)},
             external_request_id=publication_request_id(publication_id),
             write=lambda: self._execute_publication_once(publication_id, publication),
@@ -201,11 +207,20 @@ class PublishService:
     def _select_media_assets(
         self, content_id: int, publish_type: str, media_ids: list[int] | None
     ) -> list[dict[str, Any]]:
+        if publish_type not in {"image_post", "video_post"}:
+            raise PublicationValidationError(f"Unsupported publish type: {publish_type}")
         expected_type = "image" if publish_type == "image_post" else "video"
         assets = self.store.list_media_assets(content_id, media_type=expected_type)
-        if media_ids:
-            allowed_ids = set(media_ids)
-            assets = [asset for asset in assets if asset["id"] in allowed_ids]
+        if media_ids is not None:
+            if len(set(media_ids)) != len(media_ids):
+                raise PublicationValidationError("Media selection must not contain duplicate IDs")
+            available = {asset["id"]: asset for asset in assets}
+            if any(media_id not in available for media_id in media_ids):
+                raise PublicationValidationError(
+                    "Selected media must belong to this content and match the publish type"
+                )
+            # The first image is the cover; preserve the caller's chosen order.
+            assets = [available[media_id] for media_id in media_ids]
         if publish_type == "image_post":
             if not assets:
                 raise PublicationValidationError("Image posts require at least one uploaded image")
@@ -271,7 +286,7 @@ class PublishService:
     def _normalize_title(cls, raw_title: str) -> str:
         title = raw_title.strip()
         title = re.sub(r"^[#\s]+", "", title)
-        title = title.splitlines()[0].strip()
+        title = title.splitlines()[0].strip() if title else ""
         title = re.sub(r"\s+", " ", title)
         return title[: cls.XIAOHONGSHU_TITLE_MAX_LENGTH] or "Post"
 

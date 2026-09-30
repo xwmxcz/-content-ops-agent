@@ -313,11 +313,15 @@ class AgentRun(OwnedMixin, Base):
     status: Mapped[str | None] = mapped_column(String(20), default="running")
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     next_event_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    worker_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime | None] = mapped_column(DateTime, default=datetime.now)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 Index("ix_agent_runs_thread_created", AgentRun.thread_id, AgentRun.created_at)
+Index("ix_agent_runs_status_lease", AgentRun.status, AgentRun.lease_expires_at)
 
 
 class AgentRunEvent(OwnedMixin, Base):

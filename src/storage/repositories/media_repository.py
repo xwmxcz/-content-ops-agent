@@ -7,11 +7,21 @@ from typing import Any
 from sqlalchemy import func
 
 from src.storage.models import (
+    Content,
     MediaAsset,
 )
 from src.storage.repositories.base import RepositoryMixin
+from src.utils import config
 
 logger = logging.getLogger(__name__)
+
+
+class MediaLimitExceeded(ValueError):
+    """Saving the asset would exceed this content item's media limit."""
+
+
+class MediaContentNotFound(LookupError):
+    """The owning content was removed or is outside the current workspace."""
 
 
 class MediaRepositoryMixin(RepositoryMixin):
@@ -34,6 +44,20 @@ class MediaRepositoryMixin(RepositoryMixin):
     ) -> dict[str, Any]:
         session = self._get_session()
         try:
+            # Lock the parent before checking capacity, assigning order, or
+            # inserting. Concurrent uploads and content/media deletion use the
+            # same lock so a successful check remains true until commit.
+            if session.query(Content.id).filter(Content.id == content_id).with_for_update().first() is None:
+                raise MediaContentNotFound("Content not found")
+            existing_count = (
+                session.query(MediaAsset)
+                .filter(MediaAsset.content_id == content_id, MediaAsset.media_type == media_type)
+                .count()
+            )
+            if media_type == "image" and existing_count >= config.MEDIA_MAX_IMAGE_COUNT:
+                raise MediaLimitExceeded(f"Only {config.MEDIA_MAX_IMAGE_COUNT} images are allowed per content item")
+            if media_type == "video" and existing_count >= 1:
+                raise MediaLimitExceeded("Only one video is allowed per content item in v1")
             current_order = (
                 session.query(func.max(MediaAsset.sort_order))
                 .filter(MediaAsset.content_id == content_id, MediaAsset.media_type == media_type)
@@ -88,6 +112,13 @@ class MediaRepositoryMixin(RepositoryMixin):
     def delete_media_asset(self, media_id: int) -> dict[str, Any] | None:
         session = self._get_session()
         try:
+            content_id = session.query(MediaAsset.content_id).filter(MediaAsset.id == media_id).scalar()
+            if content_id is None:
+                return None
+            if session.query(Content.id).filter(Content.id == content_id).with_for_update().first() is None:
+                return None
+            # Re-read after the parent lock: a competing delete may have removed
+            # the asset while this request was waiting for the content row.
             asset = session.query(MediaAsset).filter(MediaAsset.id == media_id).first()
             if not asset:
                 return None

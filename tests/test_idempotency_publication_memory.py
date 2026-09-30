@@ -231,7 +231,10 @@ def test_publish_route_without_a_key_keeps_current_behavior(client, store, tmp_p
 
     assert first.json()["publication"]["id"] != second.json()["publication"]["id"]
     assert _count(store, "platform_publications") == 2
-    assert _count(store) == 0
+    # Separate POSTs still create distinct publications; execution retries for
+    # each durable row must remain protected even without an HTTP key.
+    assert _count(store, where="scope = 'publication.create'") == 0
+    assert _count(store, where="scope = 'publication.execute'") == 2
 
 
 def test_publish_route_rejects_one_key_reused_with_different_arguments(client, store, tmp_path):
@@ -255,6 +258,38 @@ def test_publish_route_rejects_one_key_reused_with_different_arguments(client, s
     assert conflict.status_code == 422
     assert "different arguments" in conflict.json()["detail"]
     assert _count(store, "platform_publications") == 1
+
+
+def test_publish_route_rejects_changed_visibility_for_the_same_content(client, store, tmp_path, publish_mcp):
+    content_id = _seed_publication(store, tmp_path)
+    headers = {"Idempotency-Key": "same-content-different-visibility"}
+    payload = {"content_id": content_id, "publish_type": "image_post", "visibility": "self-only"}
+
+    first = client.post("/api/publish/xiaohongshu", json=payload, headers=headers)
+    payload["visibility"] = "public"
+    second = client.post("/api/publish/xiaohongshu", json=payload, headers=headers)
+
+    assert first.status_code == 202
+    assert second.status_code == 422
+    assert _count(store, "platform_publications") == 1
+    assert len(publish_mcp.calls) == 1
+    assert publish_mcp.calls[0][1]["visibility"] == "self-only"
+
+
+@pytest.mark.asyncio
+async def test_job_retry_of_an_unkeyed_http_publication_does_not_republish(client, store, tmp_path, publish_mcp):
+    content_id = _seed_publication(store, tmp_path)
+    response = client.post("/api/publish/xiaohongshu", json={"content_id": content_id, "publish_type": "image_post"})
+    assert response.status_code == 202
+    publication_id = response.json()["publication"]["id"]
+    service = PublishService(store=store, mcp_client=publish_mcp)
+
+    await service.execute_publication(publication_id)
+    await service.execute_publication(publication_id)
+
+    assert len(publish_mcp.calls) == 1
+    assert _count(store, "platform_publications") == 1
+    assert store.get_publication(publication_id)["status"] == "completed"
 
 
 # ─── Memory mutation ───────────────────────────────────────────────────────

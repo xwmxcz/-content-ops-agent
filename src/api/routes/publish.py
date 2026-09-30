@@ -11,7 +11,7 @@ from src.api.schemas.publish import (
     XiaohongshuLoginStatusResponse,
     XiaohongshuPublishRequest,
 )
-from src.api.services.publish_service import _NO_IDEMPOTENCY_KEY, PublicationValidationError, PublishService
+from src.api.services.publish_service import PublicationValidationError, PublishService
 from src.jobs.queue import JobCapacityError, JobQueueError, create_and_enqueue_job
 from src.storage import ContentStore
 from src.utils.idempotency import (
@@ -111,14 +111,20 @@ def _enqueue_publication(
             visibility=request.visibility,
             is_original=request.is_original,
             status="queued",
-            idempotency_key=idempotency_key if idempotency_key is not None else _NO_IDEMPOTENCY_KEY,
+            idempotency_key=idempotency_key,
         )
-        job = create_and_enqueue_job(
-            "publish_xiaohongshu",
-            {"publication_id": publication["id"]},
-            store,
-            background_tasks,
-        )
+        try:
+            job = create_and_enqueue_job(
+                "publish_xiaohongshu",
+                {"publication_id": publication["id"]},
+                store,
+                background_tasks,
+            )
+        except Exception as exc:
+            # The publication was already persisted. Reflect queue failures in
+            # its status so the UI does not show a job that will never start.
+            store.update_publication(publication["id"], status="failed", error_message=str(exc))
+            raise
         return {"publication": publication, "job_id": job["id"]}
 
     try:
@@ -129,11 +135,7 @@ def _enqueue_publication(
             store,
             scope=SCOPE_PUBLICATION_CREATE,
             key=idempotency_key,
-            args={
-                "content_id": request.content_id,
-                "publish_type": request.publish_type,
-                "scheduled_at": request.scheduled_at.isoformat() if request.scheduled_at else None,
-            },
+            args=request.model_dump(mode="json"),
             write=create_and_enqueue,
         )
     except LookupError as exc:

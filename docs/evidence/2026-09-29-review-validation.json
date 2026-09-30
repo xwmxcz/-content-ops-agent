@@ -1,0 +1,25 @@
+{
+  "date": "2026-09-29",
+  "environment": "Windows; Python 3.12; isolated local PostgreSQL 16; locked project dependencies",
+  "backend": {
+    "status": "passed",
+    "passed": 725,
+    "failed": 0,
+    "skipped": 20,
+    "duration_seconds": 114.47,
+    "skip_reasons": { "standalone_config_checks_run_separately": 19, "gunicorn_posix_only_on_windows": 1 },
+    "command": "python -m pytest -q -rs --junitxml=venv/audit-pytest-final.xml",
+    "requires_disposable_postgres": true
+  },
+  "production_config": { "passed": 19, "failed": 0 },
+  "frontend": { "suites": 22, "passed": 277, "failed": 0, "typecheck": "passed", "production_build": "passed" },
+  "static_checks": { "ruff_check": "passed", "ruff_format": "passed", "mypy_source_files": 87, "mypy": "passed", "git_diff_check": "passed" },
+  "browser_smoke": [
+    "Sign in to a disposable test workspace",
+    "Edit a plan into May 2030 and observe navigation to that month with the saved plan",
+    "Delete a disposable local plan and observe the updated agenda",
+    "Search a full-body keyword beyond the preview in the oldest of 120 drafts"
+  ],
+  "not_executed": ["Docker/TLS full deployment", "Real Redis/RQ worker integration", "Live LLM providers", "Live Xiaohongshu publishing", "Concurrent load testing"],
+  "schema_migration_required": false
+}

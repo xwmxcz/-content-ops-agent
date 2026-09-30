@@ -41,6 +41,8 @@ from src.api.schemas.agent import (
     SubAgentToolEvent,
 )
 from src.api.services.content_service import resolve_provider
+from src.api.services.pipeline_engine import new_pipeline_request, stored_pipeline_engine
+from src.api.services.pipeline_execution import PipelineExecution
 from src.api.services.plan_schema import (
     MAX_REVISIONS,
     MAX_STEPS,
@@ -59,6 +61,7 @@ from src.api.services.sub_agents import (
 from src.jobs.checkpoint import clear_checkpoints, load_completed_steps, save_step_checkpoint
 from src.llm.litellm_client import LiteLLMClient, LLMConfigurationError
 from src.storage import ContentStore
+from src.storage.repositories.run_repository import RunLeaseLostError
 from src.utils import config, metrics
 from src.utils.structured_logging import log_event
 
@@ -162,12 +165,14 @@ class DynamicPipeline:
         llm: LiteLLMClient | None = None,
         runner: SubAgentRunner | None = None,
         emit_async: bool = False,
+        worker_id: str | None = None,
     ):
         self.store = store
         self.llm = llm or LiteLLMClient()
         self.runner = runner or SubAgentRunner(store=store, llm=self.llm)
         # When False (test mode) we await DB writes inline so events are visible immediately.
         self.emit_async = emit_async
+        self.worker_id = worker_id
 
     async def run(self, request: PipelineRunRequest, run_id: str | None = None) -> PipelineRunResponse:
         self._validate_research_sources(request)
@@ -175,9 +180,10 @@ class DynamicPipeline:
         litellm_model = config.get_litellm_model(provider, request.model)
         run_id = run_id or f"run_{uuid.uuid4().hex[:12]}"
         thread_id = request.thread_id or run_id
-        research_tools = self._allowed_research_tools(request)
-
-        if not self.store.get_run(run_id):
+        existing = self.store.get_run(run_id)
+        request_data: dict[str, Any] | None
+        if existing is None:
+            request_data = new_pipeline_request(request)
             self.store.create_run(
                 run_id=run_id,
                 topic=request.topic,
@@ -186,9 +192,34 @@ class DynamicPipeline:
                 provider=provider,
                 model=litellm_model,
                 thread_id=thread_id,
-                request=request.model_dump(mode="json"),
+                request=request_data,
             )
+        else:
+            request_data = existing.get("request")
+        # A resume is pinned to the engine chosen at creation, independent of
+        # deployment configuration. Unmarked historical runs keep legacy behavior.
+        engine = stored_pipeline_engine(request_data)
+        execution = PipelineExecution(
+            request=request,
+            run_id=run_id,
+            thread_id=thread_id,
+            provider=provider,
+            litellm_model=litellm_model,
+            research_tools=self._allowed_research_tools(request),
+        )
+        if engine == "langgraph_v1":
+            from src.api.services.pipeline_graph import run_pipeline_graph
 
+            return await run_pipeline_graph(self, execution)
+        await self._prepare_execution(execution)
+        while self._select_next_step(execution):
+            await self._execute_step(execution)
+            await self._revise_after_step(execution)
+        return await self._finish_execution(execution)
+
+    async def _prepare_execution(self, execution: PipelineExecution) -> None:
+        request, run_id = execution.request, execution.run_id
+        provider, litellm_model = execution.provider, execution.litellm_model
         restored = await asyncio.to_thread(self._restore_progress, run_id)
         if restored is not None:
             plan, revisions = restored
@@ -202,198 +233,217 @@ class DynamicPipeline:
         else:
             plan = await self._plan_run(request, run_id=run_id, provider=provider, litellm_model=litellm_model)
             revisions = 0
-            await asyncio.to_thread(self.store.update_run, run_id, plan=[s.model_dump() for s in plan])
+            await asyncio.to_thread(
+                self.store.update_run, run_id, expected_worker_id=self.worker_id, plan=[s.model_dump() for s in plan]
+            )
         # On a resume this carries the completed steps with their outputs, so a
         # client that never saw the first attempt can still draw the whole run.
         await self._emit(run_id, "plan_ready", {"plan": [s.model_dump() for s in plan]})
 
         done = [s for s in plan if s.status == "completed"]
-        outputs: dict[int, str] = {s.index: s.output for s in done}
-        i = 0
-        total_prompt = sum(s.prompt_tokens for s in done)
-        total_completion = sum(s.completion_tokens for s in done)
-        total_cost = sum(s.cost_estimate for s in done)
+        execution.plan = plan
+        execution.revisions = revisions
+        execution.outputs = {s.index: s.output for s in done}
+        execution.total_prompt = sum(s.prompt_tokens for s in done)
+        execution.total_completion = sum(s.completion_tokens for s in done)
+        execution.total_cost = sum(s.cost_estimate for s in done)
 
-        cancelled = False
+    def _select_next_step(self, execution: PipelineExecution) -> bool:
+        while execution.index < min(len(execution.plan), MAX_STEPS):
+            if execution.plan[execution.index].status == "pending":
+                current = self.store.get_run(execution.run_id)
+                execution.cancelled = bool(current and current.get("status") == "cancelled")
+                return not execution.cancelled
+            execution.index += 1
+        return False
 
-        while i < len(plan) and i < MAX_STEPS:
-            step = plan[i]
-            if step.status != "pending":
-                i += 1
-                continue
+    async def _execute_step(self, execution: PipelineExecution) -> None:
+        request, run_id = execution.request, execution.run_id
+        provider, litellm_model = execution.provider, execution.litellm_model
+        plan, outputs, research_tools = execution.plan, execution.outputs, execution.research_tools
+        step = plan[execution.index]
+        step.status = "running"
+        await self._emit(
+            run_id,
+            "step_start",
+            {
+                "index": step.index,
+                "agent_id": step.agent_id,
+                "description": step.description,
+            },
+        )
 
-            # Cancellation is requested via DELETE /api/agent/runs/{id}, which flips the
-            # row status to "cancelled" and writes a run_cancelled event. We poll the row
-            # at step boundaries — running sub-agents are allowed to finish, but no new
-            # step starts. Avoiding inline cancellation keeps streaming/tool calls safe.
-            current = self.store.get_run(run_id)
-            if current and current.get("status") == "cancelled":
-                cancelled = True
-                break
+        spec = SUB_AGENTS.get(step.agent_id)
+        user_prompt = self._build_step_prompt(step, plan, outputs, request, research_tools)
+        started = time.perf_counter()
+        success = True
+        step_tool_events: list[dict[str, Any]] = []
 
-            step.status = "running"
+        async def emit_tokens(delta: str, _idx=step.index):
+            await self._emit(run_id, "step_token", {"index": _idx, "delta": delta})
+
+        tokens = _TokenBatcher(emit_tokens)
+        try:
+            if spec is None:
+                raise ValueError(f"Unknown agent_id: {step.agent_id}")
+
+            async def tool_sink(
+                event_type: str,
+                payload: dict[str, Any],
+                _idx=step.index,
+                _events=step_tool_events,
+                _tokens=tokens,
+            ):
+                # Text streamed before a tool call must reach clients before it.
+                await _tokens.flush()
+                enriched = {"index": _idx, **payload}
+                if event_type == "tool_call_result":
+                    _events.append(
+                        {
+                            "name": payload.get("name", ""),
+                            "args": payload.get("args") or {},
+                            "status": payload.get("status", "completed"),
+                            "preview": payload.get("preview", ""),
+                            "error": payload.get("error"),
+                            "duration_ms": payload.get("duration_ms", 0),
+                        }
+                    )
+                await self._emit(run_id, event_type, enriched)
+
+            text, p_tok, c_tok, _, _ = await self.runner.run(
+                spec=spec,
+                user_prompt=user_prompt,
+                provider=provider,
+                model=request.model or config.get_model(provider),
+                max_tokens=request.max_tokens,
+                token_sink=tokens.add,
+                tool_sink=tool_sink,
+                allowed_tools=research_tools if step.agent_id in ("researcher", "fact_checker") else None,
+            )
+            await tokens.flush()
+            duration = int((time.perf_counter() - started) * 1000)
+            cost = estimate_cost(litellm_model, p_tok, c_tok)
+
+            step.output = text
+            step.status = "completed"
+            step.duration_ms = duration
+            step.prompt_tokens = p_tok
+            step.completion_tokens = c_tok
+            step.cost_estimate = cost
+            step.tool_events = [SubAgentToolEvent(**e) for e in step_tool_events]
+            outputs[step.index] = text
+            execution.total_prompt += p_tok
+            execution.total_completion += c_tok
+            execution.total_cost += cost
+
+            # Before the event, not after: if the process dies between the two,
+            # a resume replays nothing and the restored plan still shows the
+            # step. The other order would run, and bill, the step twice.
+            await asyncio.to_thread(
+                save_step_checkpoint,
+                self.store,
+                run_id,
+                step.index,
+                step.agent_id,
+                {
+                    "output": text,
+                    "duration_ms": duration,
+                    "prompt_tokens": p_tok,
+                    "completion_tokens": c_tok,
+                    "cost_estimate": cost,
+                    "tool_events": step_tool_events,
+                },
+                expected_worker_id=self.worker_id,
+            )
             await self._emit(
                 run_id,
-                "step_start",
+                "step_complete",
                 {
                     "index": step.index,
                     "agent_id": step.agent_id,
-                    "description": step.description,
+                    "output": text,
+                    "duration_ms": duration,
+                    "prompt_tokens": p_tok,
+                    "completion_tokens": c_tok,
+                    "cost_estimate": cost,
+                    "tool_events": step_tool_events,
+                },
+            )
+        except (LLMConfigurationError, RunLeaseLostError):
+            raise
+        except Exception as exc:  # noqa: BLE001 -- sub-agent boundary; surfaced as step_failed event
+            success = False
+            duration = int((time.perf_counter() - started) * 1000)
+            step.status = "failed"
+            step.duration_ms = duration
+            # Whatever was streamed before the failure is still part of the
+            # record, and must precede the event that ends the step.
+            await tokens.flush()
+            await self._emit(
+                run_id,
+                "step_failed",
+                {
+                    "index": step.index,
+                    "agent_id": step.agent_id,
+                    "error": str(exc) or exc.__class__.__name__,
                 },
             )
 
-            spec = SUB_AGENTS.get(step.agent_id)
-            user_prompt = self._build_step_prompt(step, plan, outputs, request, research_tools)
-            started = time.perf_counter()
-            success = True
-            step_tool_events: list[dict[str, Any]] = []
+        execution.step_succeeded = success
 
-            async def emit_tokens(delta: str, _idx=step.index):
-                await self._emit(run_id, "step_token", {"index": _idx, "delta": delta})
-
-            tokens = _TokenBatcher(emit_tokens)
+    async def _revise_after_step(self, execution: PipelineExecution) -> None:
+        request, run_id, provider = execution.request, execution.run_id, execution.provider
+        plan, outputs, revisions = execution.plan, execution.outputs, execution.revisions
+        step, success = plan[execution.index], execution.step_succeeded
+        should_revise = revisions < MAX_REVISIONS and (step.agent_id == "reviewer" or not success)
+        if should_revise:
             try:
-                if spec is None:
-                    raise ValueError(f"Unknown agent_id: {step.agent_id}")
-
-                async def tool_sink(
-                    event_type: str,
-                    payload: dict[str, Any],
-                    _idx=step.index,
-                    _events=step_tool_events,
-                    _tokens=tokens,
-                ):
-                    # Text streamed before a tool call must reach clients before it.
-                    await _tokens.flush()
-                    enriched = {"index": _idx, **payload}
-                    if event_type == "tool_call_result":
-                        _events.append(
-                            {
-                                "name": payload.get("name", ""),
-                                "args": payload.get("args") or {},
-                                "status": payload.get("status", "completed"),
-                                "preview": payload.get("preview", ""),
-                                "error": payload.get("error"),
-                                "duration_ms": payload.get("duration_ms", 0),
-                            }
-                        )
-                    await self._emit(run_id, event_type, enriched)
-
-                text, p_tok, c_tok, _, _ = await self.runner.run(
-                    spec=spec,
-                    user_prompt=user_prompt,
-                    provider=provider,
-                    model=request.model or config.get_model(provider),
-                    max_tokens=request.max_tokens,
-                    token_sink=tokens.add,
-                    tool_sink=tool_sink,
-                    allowed_tools=research_tools if step.agent_id in ("researcher", "fact_checker") else None,
-                )
-                await tokens.flush()
-                duration = int((time.perf_counter() - started) * 1000)
-                cost = estimate_cost(litellm_model, p_tok, c_tok)
-
-                step.output = text
-                step.status = "completed"
-                step.duration_ms = duration
-                step.prompt_tokens = p_tok
-                step.completion_tokens = c_tok
-                step.cost_estimate = cost
-                step.tool_events = [SubAgentToolEvent(**e) for e in step_tool_events]
-                outputs[step.index] = text
-                total_prompt += p_tok
-                total_completion += c_tok
-                total_cost += cost
-
-                # Before the event, not after: if the process dies between the two,
-                # a resume replays nothing and the restored plan still shows the
-                # step. The other order would run, and bill, the step twice.
-                await asyncio.to_thread(
-                    save_step_checkpoint,
-                    self.store,
-                    run_id,
-                    step.index,
-                    step.agent_id,
-                    {
-                        "output": text,
-                        "duration_ms": duration,
-                        "prompt_tokens": p_tok,
-                        "completion_tokens": c_tok,
-                        "cost_estimate": cost,
-                        "tool_events": step_tool_events,
-                    },
-                )
-                await self._emit(
-                    run_id,
-                    "step_complete",
-                    {
-                        "index": step.index,
-                        "agent_id": step.agent_id,
-                        "output": text,
-                        "duration_ms": duration,
-                        "prompt_tokens": p_tok,
-                        "completion_tokens": c_tok,
-                        "cost_estimate": cost,
-                        "tool_events": step_tool_events,
-                    },
-                )
-            except LLMConfigurationError:
+                revised = await self._maybe_revise_plan(plan, outputs, request, provider, request.model)
+            except RunLeaseLostError:
                 raise
-            except Exception as exc:  # noqa: BLE001 -- sub-agent boundary; surfaced as step_failed event
-                success = False
-                duration = int((time.perf_counter() - started) * 1000)
-                step.status = "failed"
-                step.duration_ms = duration
-                # Whatever was streamed before the failure is still part of the
-                # record, and must precede the event that ends the step.
-                await tokens.flush()
+            except Exception as exc:  # noqa: BLE001 -- revision is optional; keep the known-good plan
+                log_event(
+                    logger,
+                    "plan_revision_failed",
+                    level=logging.WARNING,
+                    run_id=run_id,
+                    error_class=exc.__class__.__name__,
+                )
+                revised = None
+            if revised is not None:
+                plan = revised
+                revisions += 1
+                await asyncio.to_thread(
+                    self.store.update_run,
+                    run_id,
+                    expected_worker_id=self.worker_id,
+                    plan=[s.model_dump() for s in plan],
+                    revision_count=revisions,
+                )
                 await self._emit(
                     run_id,
-                    "step_failed",
+                    "plan_revised",
                     {
-                        "index": step.index,
-                        "agent_id": step.agent_id,
-                        "error": str(exc) or exc.__class__.__name__,
+                        "plan": [s.model_dump() for s in plan],
+                        "revision": revisions,
                     },
                 )
+                i = next(
+                    (idx for idx, s in enumerate(plan) if s.status == "pending"),
+                    len(plan),
+                )
+                execution.plan = plan
+                execution.revisions = revisions
+                execution.index = i
+                return
+        execution.index += 1
 
-            should_revise = revisions < MAX_REVISIONS and (step.agent_id == "reviewer" or not success)
-            if should_revise:
-                try:
-                    revised = await self._maybe_revise_plan(plan, outputs, request, provider, request.model)
-                except Exception as exc:  # noqa: BLE001 -- revision is optional; keep the known-good plan
-                    log_event(
-                        logger,
-                        "plan_revision_failed",
-                        level=logging.WARNING,
-                        run_id=run_id,
-                        error_class=exc.__class__.__name__,
-                    )
-                    revised = None
-                if revised is not None:
-                    plan = revised
-                    revisions += 1
-                    await asyncio.to_thread(
-                        self.store.update_run,
-                        run_id,
-                        plan=[s.model_dump() for s in plan],
-                        revision_count=revisions,
-                    )
-                    await self._emit(
-                        run_id,
-                        "plan_revised",
-                        {
-                            "plan": [s.model_dump() for s in plan],
-                            "revision": revisions,
-                        },
-                    )
-                    i = next(
-                        (idx for idx, s in enumerate(plan) if s.status == "pending"),
-                        len(plan),
-                    )
-                    continue
-            i += 1
-
+    async def _finish_execution(self, execution: PipelineExecution) -> PipelineRunResponse:
+        request, run_id, thread_id = execution.request, execution.run_id, execution.thread_id
+        provider, litellm_model = execution.provider, execution.litellm_model
+        plan, outputs, revisions = execution.plan, execution.outputs, execution.revisions
+        total_prompt, total_completion = execution.total_prompt, execution.total_completion
+        total_cost, cancelled = execution.total_cost, execution.cancelled
         # Reconcile once more after the final sub-agent returns. Cancellation may
         # arrive while that call is in flight; do not start the final content
         # save when the terminal cancel transition has already won.
@@ -402,16 +452,21 @@ class DynamicPipeline:
             cancelled = bool(current and current.get("status") == "cancelled")
 
         if cancelled:
-            self.store.update_run(
-                run_id,
-                plan=[s.model_dump() for s in plan],
-                revision_count=revisions,
-                total_prompt_tokens=total_prompt,
-                total_completion_tokens=total_completion,
-                total_cost=total_cost,
-            )
+            # Queue workers are fenced as soon as cancellation commits. The
+            # cancellation transaction owns cleanup, so they need no late write
+            # permission on the terminal run. Direct in-process callers retain
+            # their existing summary behavior.
+            if self.worker_id is None:
+                self.store.update_run(
+                    run_id,
+                    plan=[s.model_dump() for s in plan],
+                    revision_count=revisions,
+                    total_prompt_tokens=total_prompt,
+                    total_completion_tokens=total_completion,
+                    total_cost=total_cost,
+                )
             # A cancelled run is not resumable, so its checkpoints have no reader.
-            await asyncio.to_thread(clear_checkpoints, self.store, run_id)
+            await asyncio.to_thread(clear_checkpoints, self.store, run_id, expected_worker_id=self.worker_id)
             # The DELETE endpoint already emitted run_cancelled, so we do NOT emit
             # again here — duplicate terminal events would only confuse SSE clients.
             return PipelineRunResponse(
@@ -444,6 +499,7 @@ class DynamicPipeline:
             error = "No writer or editor step completed, so the run produced no content"
             failed = self.store.transition_run_and_append_event(
                 run_id,
+                expected_worker_id=self.worker_id,
                 expected_statuses={"running"},
                 new_status="failed",
                 event_type="run_failed",
@@ -529,6 +585,7 @@ class DynamicPipeline:
         )
         transitioned = self.store.complete_run_with_content(
             run_id,
+            expected_worker_id=self.worker_id,
             payload=response.model_dump(),
             content_fields=content_fields,
             plan=[s.model_dump() for s in plan],
@@ -552,7 +609,7 @@ class DynamicPipeline:
         else:
             response.saved_content_id = transitioned.get("saved_content_id")
             # The result is durable; nothing will read these again.
-            await asyncio.to_thread(clear_checkpoints, self.store, run_id)
+            await asyncio.to_thread(clear_checkpoints, self.store, run_id, expected_worker_id=self.worker_id)
         log_event(
             logger,
             "pipeline_run_finished",
@@ -1042,4 +1099,6 @@ class DynamicPipeline:
         # write is a blocking transaction that takes the run-row lock; in
         # `background` mode this coroutine shares the API's event loop, so running
         # it inline stalled every other request and stream for its duration.
-        await asyncio.to_thread(self.store.append_run_event, run_id, event_type, payload)
+        await asyncio.to_thread(
+            self.store.append_run_event, run_id, event_type, payload, expected_worker_id=self.worker_id
+        )

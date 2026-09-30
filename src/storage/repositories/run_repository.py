@@ -6,7 +6,7 @@ transitioning run status must happen in one transaction -- see
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func, select
@@ -16,13 +16,31 @@ from src.storage.models import (
     AgentRun,
     AgentRunEvent,
     Content,
+    RunStep,
 )
 from src.storage.repositories.base import RepositoryMixin
+from src.utils import config
 
 logger = logging.getLogger(__name__)
 
 # The SSE hub (src/api/services/run_event_hub.py) listens on this channel.
 RUN_EVENTS_CHANNEL = "run_events"
+
+
+class RunLeaseLostError(RuntimeError):
+    """An expired or superseded pipeline attempt may no longer write anything."""
+
+
+def assert_run_lease(run: AgentRun | None, worker_id: str | None, *, allow_finished: bool = False) -> None:
+    """Validate a worker fence while the caller holds the parent run row lock."""
+    if worker_id is None:
+        return
+    if run is None or run.worker_id != worker_id:
+        raise RunLeaseLostError("Pipeline worker no longer owns this run")
+    if allow_finished and run.status in {"completed", "cancelled"}:
+        return
+    if run.status != "running" or run.lease_expires_at is None or run.lease_expires_at <= datetime.now(timezone.utc):
+        raise RunLeaseLostError("Pipeline execution lease expired or the run stopped")
 
 
 def _notify_run_event(session: Session, run_id: str) -> None:
@@ -74,6 +92,8 @@ class RunRepositoryMixin(RepositoryMixin):
                 model=model,
                 request_json=json.dumps(request, ensure_ascii=False) if request is not None else None,
                 status="running",
+                lease_expires_at=datetime.now(timezone.utc)
+                + timedelta(seconds=config.PIPELINE_DISPATCH_TIMEOUT_SECONDS),
             )
             session.add(run)
             session.commit()
@@ -84,12 +104,13 @@ class RunRepositoryMixin(RepositoryMixin):
         finally:
             session.close()
 
-    def update_run(self, run_id: str, **fields) -> dict[str, Any] | None:
+    def update_run(self, run_id: str, *, expected_worker_id: str | None = None, **fields) -> dict[str, Any] | None:
         if fields.get("status") in {"completed", "failed", "cancelled"}:
             raise ValueError("Terminal run states must use transition_run_and_append_event()")
         session = self._get_session()
         try:
-            run = session.query(AgentRun).filter(AgentRun.id == run_id).first()
+            run = session.query(AgentRun).filter(AgentRun.id == run_id).with_for_update().first()
+            assert_run_lease(run, expected_worker_id)
             if not run:
                 return None
             if "plan" in fields:
@@ -130,7 +151,9 @@ class RunRepositoryMixin(RepositoryMixin):
         finally:
             session.close()
 
-    def append_run_event(self, run_id: str, event_type: str, payload: dict[str, Any]) -> int | None:
+    def append_run_event(
+        self, run_id: str, event_type: str, payload: dict[str, Any], *, expected_worker_id: str | None = None
+    ) -> int | None:
         """Append a non-terminal event while the run is still active.
 
         The run-row lock serializes this check with terminal CAS transitions. If
@@ -140,6 +163,7 @@ class RunRepositoryMixin(RepositoryMixin):
         session = self._get_session()
         try:
             run = session.query(AgentRun).filter(AgentRun.id == run_id).with_for_update().first()
+            assert_run_lease(run, expected_worker_id)
             if not run:
                 raise LookupError(f"Run {run_id} was not found")
             if run.status != "running":
@@ -149,6 +173,7 @@ class RunRepositoryMixin(RepositoryMixin):
             run.next_event_seq = seq + 1
             session.add(
                 AgentRunEvent(
+                    user_id=run.user_id,
                     run_id=run_id,
                     seq=seq,
                     event_type=event_type,
@@ -175,6 +200,7 @@ class RunRepositoryMixin(RepositoryMixin):
         total_prompt_tokens: int,
         total_completion_tokens: int,
         total_cost: float,
+        expected_worker_id: str | None = None,
     ) -> dict[str, Any] | None:
         """Atomically persist final content, complete the run, and append its event.
 
@@ -189,6 +215,7 @@ class RunRepositoryMixin(RepositoryMixin):
                 .with_for_update()
                 .first()
             )
+            assert_run_lease(run, expected_worker_id)
             if not run:
                 return None
 
@@ -208,11 +235,13 @@ class RunRepositoryMixin(RepositoryMixin):
             run.total_cost = total_cost
             run.saved_content_id = saved_content_id
             run.status = "completed"
+            run.lease_expires_at = None
             run.completed_at = run.completed_at or datetime.now()
             seq = int(run.next_event_seq or 1)
             run.next_event_seq = seq + 1
             session.add(
                 AgentRunEvent(
+                    user_id=run.user_id,
                     run_id=run_id,
                     seq=seq,
                     event_type="run_complete",
@@ -238,6 +267,8 @@ class RunRepositoryMixin(RepositoryMixin):
         new_status: str,
         event_type: str,
         payload: dict[str, Any],
+        expected_worker_id: str | None = None,
+        require_expired_lease: bool = False,
         **fields: Any,
     ) -> dict[str, Any] | None:
         """Compare-and-set a run state and append its event in one transaction.
@@ -248,13 +279,16 @@ class RunRepositoryMixin(RepositoryMixin):
         """
         session = self._get_session()
         try:
-            run = (
-                session.query(AgentRun)
-                .filter(AgentRun.id == run_id, AgentRun.status.in_(tuple(expected_statuses)))
-                .with_for_update()
-                .first()
-            )
+            query = session.query(AgentRun).filter(AgentRun.id == run_id, AgentRun.status.in_(tuple(expected_statuses)))
+            if require_expired_lease:
+                query = query.filter(AgentRun.lease_expires_at <= datetime.now(timezone.utc))
+            run = query.with_for_update().first()
+            assert_run_lease(run, expected_worker_id)
             if not run:
+                return None
+            if require_expired_lease and (
+                run.lease_expires_at is None or run.lease_expires_at > datetime.now(timezone.utc)
+            ):
                 return None
             if "plan" in fields:
                 run.plan_json = json.dumps(fields.pop("plan"), ensure_ascii=False)
@@ -264,13 +298,24 @@ class RunRepositoryMixin(RepositoryMixin):
             run.status = new_status
             if new_status in {"completed", "failed", "cancelled"}:
                 run.completed_at = run.completed_at or datetime.now()
+                run.lease_expires_at = None
+                if new_status == "cancelled":
+                    # A worker may already be stopped or fenced from further
+                    # writes, so cancellation owns checkpoint cleanup itself.
+                    session.query(RunStep).filter(RunStep.run_id == run_id).delete(synchronize_session=False)
             else:
                 # Leaving a terminal state (a resume): the old end time is no longer true.
                 run.completed_at = None
+                run.worker_id = None
+                run.heartbeat_at = None
+                run.lease_expires_at = datetime.now(timezone.utc) + timedelta(
+                    seconds=config.PIPELINE_DISPATCH_TIMEOUT_SECONDS
+                )
             seq = int(run.next_event_seq or 1)
             run.next_event_seq = seq + 1
             session.add(
                 AgentRunEvent(
+                    user_id=run.user_id,
                     run_id=run_id,
                     seq=seq,
                     event_type=event_type,
@@ -287,6 +332,91 @@ class RunRepositoryMixin(RepositoryMixin):
             raise
         finally:
             session.close()
+
+    def acquire_run_lease(self, run_id: str, worker_id: str, duration_seconds: int) -> bool:
+        """Claim one delivery once; expired attempts must first fail and resume."""
+        session = self._get_session()
+        try:
+            now = datetime.now(timezone.utc)
+            claimed = (
+                session.query(AgentRun)
+                .filter(
+                    AgentRun.id == run_id,
+                    AgentRun.status == "running",
+                    AgentRun.worker_id.is_(None),
+                    AgentRun.lease_expires_at > now,
+                )
+                .update(
+                    {
+                        AgentRun.worker_id: worker_id,
+                        AgentRun.heartbeat_at: now,
+                        AgentRun.lease_expires_at: now + timedelta(seconds=duration_seconds),
+                    },
+                    synchronize_session=False,
+                )
+            )
+            session.commit()
+            return claimed == 1
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def extend_run_lease(self, run_id: str, worker_id: str, duration_seconds: int) -> bool:
+        """An expired lease cannot be revived, even before the reaper finds it."""
+        session = self._get_session()
+        try:
+            now = datetime.now(timezone.utc)
+            changed = (
+                session.query(AgentRun)
+                .filter(
+                    AgentRun.id == run_id,
+                    AgentRun.status == "running",
+                    AgentRun.worker_id == worker_id,
+                    AgentRun.lease_expires_at > now,
+                )
+                .update(
+                    {
+                        AgentRun.heartbeat_at: now,
+                        AgentRun.lease_expires_at: now + timedelta(seconds=duration_seconds),
+                    },
+                    synchronize_session=False,
+                )
+            )
+            session.commit()
+            return changed == 1
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def find_expired_run_leases(self, limit: int = 50) -> list[dict[str, Any]]:
+        session = self._get_session()
+        try:
+            runs = (
+                session.query(AgentRun)
+                .filter(AgentRun.status == "running", AgentRun.lease_expires_at <= datetime.now(timezone.utc))
+                .order_by(AgentRun.lease_expires_at)
+                .limit(limit)
+                .all()
+            )
+            return [self._agent_run_to_dict(run) for run in runs]
+        finally:
+            session.close()
+
+    def fail_expired_run(self, run_id: str) -> dict[str, Any] | None:
+        error = "Pipeline execution lease expired; resume the run to continue from its checkpoints"
+        return self.transition_run_and_append_event(
+            run_id,
+            expected_statuses={"running"},
+            require_expired_lease=True,
+            new_status="failed",
+            event_type="run_failed",
+            payload={"error": error, "code": "worker_lost"},
+            error=error,
+        )
 
     def list_run_events(
         self,
@@ -336,6 +466,9 @@ class RunRepositoryMixin(RepositoryMixin):
             "status": run.status,
             "error": run.error,
             "next_event_seq": run.next_event_seq or 1,
+            "worker_id": run.worker_id,
+            "lease_expires_at": run.lease_expires_at.isoformat() if run.lease_expires_at else None,
+            "heartbeat_at": run.heartbeat_at.isoformat() if run.heartbeat_at else None,
             "created_at": run.created_at.isoformat() if run.created_at else None,
             "completed_at": run.completed_at.isoformat() if run.completed_at else None,
         }

@@ -7,7 +7,7 @@
       </div>
       <div class="hero-actions">
         <el-button :icon="Refresh" :loading="chat.threadsLoading" @click="refreshThreads">刷新</el-button>
-        <el-button type="primary" :icon="Plus" @click="chat.startNewThread()">新建会话</el-button>
+        <el-button type="primary" :icon="Plus" @click="startNewThread">新建会话</el-button>
       </div>
     </section>
 
@@ -16,12 +16,15 @@
         v-model:search-input="searchInput"
         :threads="chat.threads"
         :threads-loading="chat.threadsLoading"
+        :threads-error="chat.threadsError"
         :include-archived="chat.includeArchived"
         :has-more-threads="chat.hasMoreThreads"
         :active-thread-id="chat.activeThreadId"
         :search-active="isSearchActive"
         :searching="chat.searching"
         :search-results="chat.searchResults"
+        :search-error="chat.searchError"
+        :mutating-thread-ids="chat.mutatingThreadIds"
         :thread-label="threadLabel"
         @search-input="onSearchInput"
         @search-clear="onSearchClear"
@@ -33,6 +36,8 @@
         @toggle-archive="toggleArchive"
         @remove="removeThread"
         @load-more="chat.loadMoreThreads()"
+        @retry-threads="refreshThreads"
+        @retry-search="retrySearch"
       />
 
       <main class="dialog-panel">
@@ -42,8 +47,8 @@
             <strong>{{ currentThreadLabel }}</strong>
           </div>
           <div v-if="chat.activeThreadId" class="dialog-head-actions">
-            <el-button text :icon="Edit" aria-label="重命名当前会话" @click="renameActive" />
-            <el-button text type="danger" :icon="Delete" aria-label="删除当前会话" @click="removeActive" />
+            <el-button text :icon="Edit" :disabled="chat.mutatingThreadIds.includes(chat.activeThreadId)" aria-label="重命名当前会话" @click="renameActive" />
+            <el-button text type="danger" :icon="Delete" :disabled="chat.mutatingThreadIds.includes(chat.activeThreadId)" aria-label="删除当前会话" @click="removeActive" />
           </div>
         </div>
 
@@ -202,7 +207,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import { ElMessageBox } from 'element-plus/es/components/message-box/index'
@@ -220,6 +225,7 @@ import {
 } from '@element-plus/icons-vue'
 import ChatThreadPanel from '../components/ChatThreadPanel.vue'
 import ModelSelector from '../components/ModelSelector.vue'
+import { ApiError } from '../api'
 import { useChatStore } from '../stores/chat'
 import {
   eventStatusLabel,
@@ -253,7 +259,7 @@ const route = useRoute()
 const router = useRouter()
 const logRef = ref<HTMLElement>()
 const modelConfig = reactive({ provider: '', model: '', temperature: 0.7, max_tokens: 2048 })
-const searchInput = ref('')
+const searchInput = ref(chat.searchQuery)
 
 const isSearchActive = computed(() => Boolean(chat.searchQuery))
 const currentThreadLabel = computed(() => {
@@ -262,9 +268,12 @@ const currentThreadLabel = computed(() => {
 })
 
 let searchDebounce: ReturnType<typeof setTimeout> | undefined
+let disposed = false
 
 function onSearchInput(value: string) {
   if (searchDebounce) clearTimeout(searchDebounce)
+  chat.prepareSearch(value)
+  if (!value.trim()) return
   searchDebounce = setTimeout(() => {
     void chat.runSearch(value)
   }, 250)
@@ -272,7 +281,18 @@ function onSearchInput(value: string) {
 
 function onSearchClear() {
   if (searchDebounce) clearTimeout(searchDebounce)
+  searchInput.value = ''
   chat.clearSearch()
+}
+
+function retrySearch() {
+  if (searchDebounce) clearTimeout(searchDebounce)
+  void chat.runSearch(searchInput.value)
+}
+
+function startNewThread() {
+  onSearchClear()
+  chat.startNewThread()
 }
 
 async function onIncludeArchivedChange(event: Event) {
@@ -304,8 +324,7 @@ async function selectThread(threadId: string) {
 async function jumpToThread(threadId: string) {
   // Clearing the search exits the search-results view; the regular thread
   // list re-renders with the target selected.
-  searchInput.value = ''
-  chat.clearSearch()
+  onSearchClear()
   await selectThread(threadId)
 }
 
@@ -463,19 +482,25 @@ function formatTime(iso?: string) {
 }
 
 onMounted(async () => {
+  const initialContext = chat.messageContextVersion
+  const initialThread = chat.activeThreadId
   try {
-    await chat.loadThreads({ reset: true })
-    // Restore the previously-active thread (sessionStorage) if it still exists.
-    if (chat.activeThreadId && chat.threads.some(t => t.id === chat.activeThreadId)) {
-      await chat.selectThread(chat.activeThreadId)
+    const loaded = await chat.loadThreads({ reset: true })
+    // The saved thread can be outside the first page or archived. Fetching its
+    // messages is authoritative; absence from the sidebar does not mean deleted.
+    if (!disposed && loaded && initialContext === chat.messageContextVersion && initialThread) {
+      await chat.selectThread(initialThread)
       await scrollToBottom()
-    } else if (chat.activeThreadId) {
-      // Stale session id (deleted in another tab); clear it.
-      chat.startNewThread()
     }
   } catch (error) {
-    ElMessage.error((error as Error).message)
+    if (!disposed && error instanceof ApiError && error.status === 404 &&
+        chat.activeThreadId === initialThread && chat.messageContextVersion === initialContext + 1) {
+      chat.startNewThread()
+    } else if (!disposed) {
+      ElMessage.error((error as Error).message)
+    }
   }
+  if (disposed) return
   const seed = route.query.seed
   if (typeof seed === 'string' && seed.trim()) {
     input.value = seed.trim()
@@ -483,6 +508,12 @@ onMounted(async () => {
     await nextTick()
     ElMessage.info('已带入待优化提示，确认后点击发送')
   }
+})
+
+onBeforeUnmount(() => {
+  disposed = true
+  if (searchDebounce) clearTimeout(searchDebounce)
+  chat.clearSearch()
 })
 </script>
 

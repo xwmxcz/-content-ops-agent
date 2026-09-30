@@ -24,6 +24,7 @@ from langchain_core.tools import StructuredTool
 from src.api.schemas.agent import SubAgentId
 from src.llm.litellm_client import LiteLLMClient
 from src.storage import ContentStore
+from src.storage.repositories.run_repository import RunLeaseLostError
 from src.tools.web_search import web_search as run_web_search
 from src.utils import config
 
@@ -157,11 +158,15 @@ ToolSink = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 
 async def _safe_sink(sink: ToolSink | None, event: str, payload: dict[str, Any]) -> None:
-    """Deliver a tool telemetry event; observers must never break the agent loop."""
+    """Deliver best-effort telemetry while preserving cancellation/lease fencing."""
     if sink is None:
         return
     try:
         await sink(event, payload)
+    except RunLeaseLostError:
+        # A pipeline sink also fences execution. Losing ownership must stop
+        # tool/LLM work rather than being treated as missing telemetry.
+        raise
     except Exception as exc:  # noqa: BLE001 -- telemetry sink is best-effort
         logger.debug("tool sink rejected %s event: %s", event, exc.__class__.__name__)
 
@@ -346,6 +351,8 @@ class SubAgentRunner:
                                 "duration_ms": duration_ms,
                             },
                         )
+                    except RunLeaseLostError:
+                        raise
                     except Exception as exc:  # noqa: BLE001 -- tool boundary: any tool error becomes a failed result
                         output = f"Tool failed: {exc}"
                         duration_ms = int((time.perf_counter() - started) * 1000)

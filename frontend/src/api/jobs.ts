@@ -1,4 +1,6 @@
 import { api } from './index'
+import { assertWorkspaceSession, contentChanged, publicationChanged } from '../query/client'
+import { workspaceSessionId } from '../workspaceSession'
 import type { AgentRunPayload, AgentRunResponse } from './agent'
 import type { ContentItem, GeneratePayload, RefinePayload } from './content'
 import type { Publication } from './publish'
@@ -16,6 +18,9 @@ export interface JobResponse {
   provider?: string
   model?: string
   attempts: number
+  max_retries?: number
+  next_retry_at?: string | null
+  error_type?: string | null
   created_at?: string
   updated_at?: string
   started_at?: string
@@ -48,7 +53,15 @@ export async function createSeoJob(payload: Record<string, unknown>) {
 }
 
 export async function getJob(jobId: string) {
+  const session = workspaceSessionId.value
   const { data } = await api.get<JobResponse>(`/jobs/${jobId}`)
+  if (data.status === 'completed') {
+    const publication = extractPublication(data)
+    const content = extractContent(data)
+    const agent = extractAgentRun(data)
+    if (publication) publicationChanged(session, publication.content_id)
+    else if (content || agent?.saved_content_id) contentChanged(session, content?.id ?? agent?.saved_content_id)
+  }
   return data
 }
 
@@ -63,16 +76,19 @@ export async function waitForJobResult<T>(
   onUpdate?: (job: JobResponse) => void,
   timeoutMs = 360000
 ) {
+  const session = workspaceSessionId.value
   const started = Date.now()
   while (Date.now() - started < timeoutMs) {
+    assertWorkspaceSession(session)
     const job = await getJob(jobId)
+    assertWorkspaceSession(session)
     onUpdate?.(job)
     if (job.status === 'completed') {
       const result = extract(job)
       if (result === undefined) throw new Error('任务已完成，但结果为空')
       return result
     }
-    if (job.status === 'failed') {
+    if (job.status === 'failed' && !job.next_retry_at) {
       throw new Error(job.error || '任务执行失败')
     }
     if (job.status === 'cancelled') {

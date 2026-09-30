@@ -11,13 +11,15 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 
 from src.storage.models import (
+    AgentRun,
     Job,
     RunStep,
 )
 from src.storage.repositories.base import RepositoryMixin
+from src.storage.repositories.run_repository import assert_run_lease
 
 logger = logging.getLogger(__name__)
 
@@ -71,10 +73,24 @@ class JobRepositoryMixin(RepositoryMixin):
         finally:
             session.close()
 
-    def update_job(self, job_id: str, **fields) -> dict[str, Any] | None:
+    def update_job(
+        self,
+        job_id: str,
+        *,
+        expected_statuses: set[str] | None = None,
+        expected_worker_id: str | None = None,
+        **fields,
+    ) -> dict[str, Any] | None:
         session = self._get_session()
         try:
-            job = session.query(Job).filter(Job.id == job_id).first()
+            query = session.query(Job).filter(Job.id == job_id)
+            if expected_statuses is not None:
+                query = query.filter(Job.status.in_(expected_statuses))
+            if expected_worker_id is not None:
+                query = query.filter(Job.worker_id == expected_worker_id, Job.lease_expires_at > datetime.now())
+            # The predicates must be checked while holding the row lock: a
+            # cancellation or lease transfer may win after the worker's read.
+            job = query.with_for_update().first()
             if not job:
                 return None
 
@@ -107,11 +123,50 @@ class JobRepositoryMixin(RepositoryMixin):
         finally:
             session.close()
 
-    def start_job(self, job_id: str, attempts: int, progress: int = 5) -> dict[str, Any] | None:
+    def cancel_job(self, job_id: str) -> dict[str, Any] | None:
+        """Cancel active work, including a failed attempt waiting for retry."""
+        session = self._get_session()
+        try:
+            now = datetime.now()
+            (
+                session.query(Job)
+                .filter(
+                    Job.id == job_id,
+                    or_(
+                        Job.status.in_(["queued", "running"]),
+                        and_(Job.status == "failed", Job.next_retry_at.isnot(None)),
+                    ),
+                )
+                .update(
+                    {
+                        Job.status: "cancelled",
+                        Job.progress: 100,
+                        Job.error: "Cancelled by user",
+                        Job.next_retry_at: None,
+                        Job.completed_at: now,
+                        Job.updated_at: now,
+                    },
+                    synchronize_session=False,
+                )
+            )
+            session.commit()
+            return self.get_job(job_id)
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def start_job(
+        self, job_id: str, attempts: int, progress: int = 5, *, expected_worker_id: str | None = None
+    ) -> dict[str, Any] | None:
         """Mark a queued/failed job as running without reviving a cancelled job."""
         session = self._get_session()
         try:
-            job = session.query(Job).filter(Job.id == job_id, Job.status.in_(["queued", "failed"])).first()
+            query = session.query(Job).filter(Job.id == job_id, Job.status.in_(["queued", "failed"]))
+            if expected_worker_id is not None:
+                query = query.filter(Job.worker_id == expected_worker_id, Job.lease_expires_at > datetime.now())
+            job = query.with_for_update().first()
             if not job:
                 return None
             now = datetime.now()
@@ -120,6 +175,9 @@ class JobRepositoryMixin(RepositoryMixin):
             job.attempts = attempts
             job.started_at = job.started_at or now
             job.completed_at = None
+            job.next_retry_at = None
+            job.error = None
+            job.error_type = None
             job.updated_at = now
             session.commit()
             return self._job_to_dict(job)
@@ -200,7 +258,7 @@ class JobRepositoryMixin(RepositoryMixin):
             expires_at = now + timedelta(seconds=lease_duration_seconds)
             extended = (
                 session.query(Job)
-                .filter(Job.id == job_id, Job.worker_id == worker_id)
+                .filter(Job.id == job_id, Job.worker_id == worker_id, Job.lease_expires_at > now)
                 .update(
                     {
                         Job.lease_expires_at: expires_at,
@@ -223,13 +281,16 @@ class JobRepositoryMixin(RepositoryMixin):
 
         Scoped to ``worker_id`` so a slow worker whose lease was already reaped
         cannot clear the new owner's claim on its way out.
+
+        A still-running row retains its expiry so an interrupted worker or a
+        rejected late completion remains discoverable by the reaper.
         """
         session = self._get_session()
         try:
             now = datetime.now()
             released = (
                 session.query(Job)
-                .filter(Job.id == job_id, Job.worker_id == worker_id)
+                .filter(Job.id == job_id, Job.worker_id == worker_id, Job.status != "running")
                 .update(
                     {
                         Job.worker_id: None,
@@ -276,6 +337,10 @@ class JobRepositoryMixin(RepositoryMixin):
         heartbeated, and in that case the job must not be yanked out from under it.
         Attempts are left untouched — this is not an error, and reclaiming should
         not consume a retry budget that P1-03 owns.
+
+        ``queued`` plus ``next_retry_at`` records that queue delivery is still
+        owed. It is committed with the reclaim so a process crash or Redis
+        outage between this transaction and enqueue cannot strand the job.
         """
         session = self._get_session()
         try:
@@ -296,6 +361,7 @@ class JobRepositoryMixin(RepositoryMixin):
                         Job.lease_expires_at: None,
                         Job.heartbeat_at: None,
                         Job.completed_at: None,
+                        Job.next_retry_at: now,
                         Job.updated_at: now,
                     },
                     synchronize_session=False,
@@ -311,6 +377,25 @@ class JobRepositoryMixin(RepositoryMixin):
         finally:
             session.close()
 
+    def find_pending_lease_requeues(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Reclaimed jobs whose queue delivery has not been acknowledged yet."""
+        session = self._get_session()
+        try:
+            jobs = (
+                session.query(Job)
+                .filter(
+                    Job.status == "queued",
+                    Job.next_retry_at.isnot(None),
+                    Job.next_retry_at <= datetime.now(),
+                )
+                .order_by(Job.next_retry_at)
+                .limit(limit)
+                .all()
+            )
+            return [self._job_to_dict(job) for job in jobs]
+        finally:
+            session.close()
+
     # ------------------------------------------------------------------
     # P1-04 run-step checkpoints
     def save_run_step_checkpoint(
@@ -320,6 +405,7 @@ class JobRepositoryMixin(RepositoryMixin):
         step_name: str,
         status: str = "completed",
         result_data: dict[str, Any] | None = None,
+        expected_worker_id: str | None = None,
     ) -> dict[str, Any]:
         """Upsert one step's checkpoint.
 
@@ -329,6 +415,9 @@ class JobRepositoryMixin(RepositoryMixin):
         """
         session = self._get_session()
         try:
+            if expected_worker_id is not None:
+                run = session.query(AgentRun).filter(AgentRun.id == run_id).with_for_update().first()
+                assert_run_lease(run, expected_worker_id)
             now = datetime.now()
             step = session.query(RunStep).filter(RunStep.run_id == run_id, RunStep.step_index == step_index).first()
             if step is None:
@@ -397,10 +486,13 @@ class JobRepositoryMixin(RepositoryMixin):
         finally:
             session.close()
 
-    def clear_run_step_checkpoints(self, run_id: str) -> int:
+    def clear_run_step_checkpoints(self, run_id: str, *, expected_worker_id: str | None = None) -> int:
         """Drop a run's checkpoints once its result is durable."""
         session = self._get_session()
         try:
+            if expected_worker_id is not None:
+                run = session.query(AgentRun).filter(AgentRun.id == run_id).with_for_update().first()
+                assert_run_lease(run, expected_worker_id, allow_finished=True)
             deleted = session.query(RunStep).filter(RunStep.run_id == run_id).delete(synchronize_session=False)
             session.commit()
             return int(deleted)

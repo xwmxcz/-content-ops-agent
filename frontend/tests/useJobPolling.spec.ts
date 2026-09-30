@@ -57,6 +57,21 @@ describe('useJobPolling', () => {
     await assertion
   })
 
+  it('keeps polling at the normal interval while a failed attempt awaits retry', async () => {
+    getJob
+      .mockResolvedValueOnce(job({ status: 'failed', next_retry_at: '2026-09-29T10:00:00', error: 'temporary' }))
+      .mockResolvedValueOnce(job({ status: 'completed', result: { value: 42 } }))
+    const promise = useJobPolling().poll('job-1', {
+      extract: j => j.result?.value,
+      intervalMs: 100
+    })
+    await vi.advanceTimersByTimeAsync(99)
+    expect(getJob).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    await expect(promise).resolves.toBe(42)
+    expect(getJob).toHaveBeenCalledTimes(2)
+  })
+
   it('rejects when the job is cancelled', async () => {
     getJob.mockResolvedValue(job({ status: 'cancelled' }))
     const polling = useJobPolling()
@@ -101,6 +116,29 @@ describe('useJobPolling', () => {
     polling.reset()
 
     expect(polling.isAborted()).toBe(false)
+  })
+
+  it.each(['resolve', 'reject'])('ignores an old in-flight request that %s after abort and reset', async outcome => {
+    let finishOld!: (value: JobResponse) => void
+    let rejectOld!: (error: Error) => void
+    getJob.mockImplementationOnce(() => new Promise<JobResponse>((resolve, reject) => { finishOld = resolve; rejectOld = reject }))
+      .mockResolvedValueOnce(job({ status: 'completed', result: { value: 'new result' } }))
+    const polling = useJobPolling()
+    const oldAttempt = polling.reset()
+    const oldUpdate = vi.fn()
+    const old = polling.poll('old-job', { extract: value => value.result?.value, onUpdate: oldUpdate }).catch(error => error)
+    polling.abort()
+    const newAttempt = polling.reset()
+    const freshUpdate = vi.fn()
+    const fresh = polling.poll('new-job', { extract: value => value.result?.value, onUpdate: freshUpdate })
+    if (outcome === 'resolve') finishOld(job({ status: 'completed', result: { value: 'old result' } }))
+    else rejectOld(new Error('old request failed'))
+    expect((await old).message).toBe('已停止')
+    await expect(fresh).resolves.toBe('new result')
+    expect(oldUpdate).not.toHaveBeenCalled()
+    expect(freshUpdate).toHaveBeenCalledOnce()
+    expect(polling.isAborted(oldAttempt)).toBe(true)
+    expect(polling.isAborted(newAttempt)).toBe(false)
   })
 
   it('rejects once the timeout budget is spent', async () => {

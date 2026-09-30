@@ -1,0 +1,80 @@
+{
+  "date": "2026-09-29",
+  "phase": "follow-up",
+  "environment": "Windows; Python 3.12; isolated local PostgreSQL 16; locked project dependencies",
+  "backend": {
+    "status": "passed",
+    "passed": 783,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 20,
+    "duration_seconds": 108.72,
+    "skip_reasons": {
+      "standalone_config_checks_run_separately": 19,
+      "gunicorn_posix_only_on_windows": 1
+    },
+    "command": "python -m pytest -q -rs --basetemp=venv/pytest-followup-verified-20260929 --junitxml=venv/audit-followup-verified.xml",
+    "requires_disposable_postgres": true,
+    "execution": "Normal local permissions after confirming Windows sandbox ACL incompatibility with pytest temporary directories"
+  },
+  "production_config": {
+    "passed": 19,
+    "failed": 0
+  },
+  "frontend": {
+    "suites": 25,
+    "passed": 317,
+    "failed": 0,
+    "typecheck": "passed",
+    "production_build": "passed"
+  },
+  "static_checks": {
+    "ruff_check": "passed",
+    "ruff_format": "passed",
+    "ruff_checked_files": 144,
+    "mypy_source_files": 87,
+    "mypy": "passed",
+    "git_diff_check": "passed"
+  },
+  "regression_coverage": [
+    "Pipeline delivery lease acquisition, heartbeat, expiry fencing, manual checkpoint resume and cancellation",
+    "System reaper expiry events remain scoped to the owner across two workspaces",
+    "Background-mode run read, stream and resume detect expired leases without a separate reaper",
+    "Same-process duplicate jobs cannot release another delivery's lease; expired completion stays recoverable",
+    "Migration upgrade/downgrade/schema drift and backfill of existing running rows",
+    "Concurrent media uploads enforce per-content limits and coordinate with content deletion",
+    "Concurrent performance writes cannot mix metric numerator and content denominator across snapshots",
+    "Chat search/pagination/restoration stale responses and Home/Stats loading failures"
+  ],
+  "negative_control": {
+    "media_lock_disabled": "Six concurrent uploads succeeded when the limit was one; regression detects the missing lock"
+  },
+  "browser_smoke": [
+    "30-day cohort: views 8000, interactions 750, engagement 9.4%, content coverage 67%",
+    "7-day cohort: views 6000, interactions 500, engagement 8.3%, coverage 100%",
+    "7-day blog filter: views 1000, interactions 150, engagement 15.0%",
+    "375px viewport: 50-character platform and 2000000000 views remain within page width; tables scroll independently"
+  ],
+  "earlier_validation_issues_resolved": [
+    "SSE test double updated to include expiry checking; dedicated expiry stream regression added",
+    "Windows pytest temporary-directory ACL setup failures resolved by normal local execution"
+  ],
+  "not_executed": [
+    "Docker/TLS full deployment",
+    "Real Redis/RQ worker fault injection",
+    "Live LLM providers",
+    "Live Xiaohongshu publishing",
+    "OS-level worker termination fault injection",
+    "Load testing at production scale"
+  ],
+  "schema_migration_required": true,
+  "migration_revision": "0011_pipeline_run_leases",
+  "business_database_changed": false,
+  "deployed": false,
+  "cleanup": {
+    "temporary_browser_tab": "closed",
+    "viewport_override": "reset",
+    "local_api_and_vite": "stopped",
+    "disposable_postgresql": "stopped"
+  }
+}

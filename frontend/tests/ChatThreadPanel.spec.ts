@@ -64,6 +64,14 @@ describe('ChatThreadPanel thread list', () => {
     expect(mountPanel({ threadsLoading: true }).text()).not.toContain('暂无会话')
   })
 
+  it('shows a retryable failure instead of claiming there are no threads', async () => {
+    const wrapper = mountPanel({ threadsError: '服务离线' })
+    expect(wrapper.text()).not.toContain('暂无会话')
+    expect(wrapper.find('[role="alert"]').text()).toContain('服务离线')
+    await wrapper.find('[role="alert"] button').trigger('click')
+    expect(wrapper.emitted('retry-threads')).toEqual([[]])
+  })
+
   it('renders a title and message count per thread', () => {
     const wrapper = mountPanel({ threads: [thread({ message_count: 7 })] })
     expect(wrapper.text()).toContain('First thread')
@@ -108,6 +116,10 @@ describe('ChatThreadPanel thread list', () => {
 })
 
 describe('ChatThreadPanel thread actions', () => {
+  it('disables conflicting edits while a thread mutation is pending', () => {
+    const wrapper = mountPanel({ threads: [thread()], mutatingThreadIds: ['thread-1'] })
+    expect(wrapper.findAll('.thread-actions button').every(button => button.attributes('disabled') !== undefined)).toBe(true)
+  })
   it.each([
     ['rename', '重命名', 'rename'],
     ['toggle-pin', '置顶', 'toggle-pin'],
@@ -155,6 +167,20 @@ describe('ChatThreadPanel search mode', () => {
 
   it('shows an empty state when a search matched nothing', () => {
     expect(mountPanel({ searchActive: true, searchResults: [] }).text()).toContain('无匹配结果')
+  })
+
+  it('distinguishes search failure from no results and offers retry', async () => {
+    const wrapper = mountPanel({ searchActive: true, searchError: '查询失败' })
+    expect(wrapper.text()).not.toContain('无匹配结果')
+    expect(wrapper.find('[role="alert"]').text()).toContain('查询失败')
+    await wrapper.find('[role="alert"] button').trigger('click')
+    expect(wrapper.emitted('retry-search')).toEqual([[]])
+  })
+
+  it('explains that searching includes archived threads and disables the list-only filter', () => {
+    const wrapper = mountPanel({ searchActive: true })
+    expect(wrapper.text()).toContain('包含已归档会话')
+    expect(wrapper.find('.thread-toggle input').attributes('disabled')).toBeDefined()
   })
 
   it('emits jump with the hit thread id', async () => {

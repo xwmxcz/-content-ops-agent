@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from threading import Timer
 from typing import Any
 
 from fastapi import BackgroundTasks
@@ -134,9 +135,14 @@ def requeue_job_with_delay(job_id: str, delay_seconds: int, database_url: str) -
     native delayed execution support.
     """
     if config.JOB_QUEUE_MODE == "background":
-        # Background mode doesn't support true delayed execution.
-        # The job will be picked up on next run_job call when next_retry_at is checked.
-        # This is acceptable for development/test environments.
+        # run_job owns an asyncio.run loop which closes after each attempt, so a
+        # task created on that loop would disappear before its delay elapsed.
+        # A daemon timer survives that loop and re-enters the normal dispatcher;
+        # its status check also makes a cancelled retry a no-op. This dev-mode
+        # timer is process-local; durable retries use RQ and its scheduler.
+        timer = Timer(delay_seconds, run_job, args=(job_id, database_url))
+        timer.daemon = True
+        timer.start()
         return
 
     if config.JOB_QUEUE_MODE == "rq":

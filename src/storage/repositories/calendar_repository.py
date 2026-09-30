@@ -57,6 +57,30 @@ class CalendarRepositoryMixin(RepositoryMixin):
         finally:
             session.close()
 
+    def update_calendar_event(self, event_id: int, content_id: int, platform: str, scheduled_date: date) -> bool:
+        with self._get_session() as session:
+            event = session.query(CalendarEvent).filter(CalendarEvent.id == event_id).with_for_update().first()
+            if event is None:
+                return False
+            if event.status != "planned":
+                raise ValueError("Only local planned events can be edited; manage platform schedules on the platform")
+            event.content_id = content_id
+            event.platform = platform
+            event.scheduled_date = scheduled_date
+            session.commit()
+            return True
+
+    def delete_calendar_event(self, event_id: int) -> bool:
+        with self._get_session() as session:
+            event = session.query(CalendarEvent).filter(CalendarEvent.id == event_id).with_for_update().first()
+            if event is None:
+                return False
+            if event.status != "planned":
+                raise ValueError("Only local planned events can be deleted; manage platform schedules on the platform")
+            session.delete(event)
+            session.commit()
+            return True
+
     def get_calendar_conflicts(self, start_date: date, end_date: date) -> list[dict[str, Any]]:
         """Return calendar events between [start_date, end_date], minimal shape used
         by the schedule planner to avoid double-booking a date+platform pair."""

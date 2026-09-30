@@ -205,6 +205,38 @@ def test_llm_timeout_is_positive():
     assert config.LLM_TIMEOUT_SECONDS > 0
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "JOB_LEASE_DURATION_SECONDS",
+        "JOB_HEARTBEAT_INTERVAL_SECONDS",
+        "PIPELINE_DISPATCH_TIMEOUT_SECONDS",
+        "JOB_REAPER_INTERVAL_SECONDS",
+        "JOB_REAPER_BATCH_SIZE",
+    ],
+)
+@pytest.mark.parametrize("value", [0, -1])
+def test_worker_timing_settings_must_be_positive(monkeypatch, name, value):
+    monkeypatch.setattr(Config, "APP_ENV", "test")
+    monkeypatch.setattr(Config, name, value)
+    with pytest.raises(ValueError, match=name):
+        Config.validate_runtime()
+
+
+@pytest.mark.parametrize("duration", [29, 30])
+def test_lease_must_outlive_heartbeat(monkeypatch, duration):
+    monkeypatch.setattr(Config, "JOB_LEASE_DURATION_SECONDS", duration)
+    monkeypatch.setattr(Config, "JOB_HEARTBEAT_INTERVAL_SECONDS", 30)
+    with pytest.raises(ValueError, match="must exceed"):
+        Config.validate_runtime()
+
+
+def test_pipeline_engine_rejects_unsupported_versions(monkeypatch):
+    monkeypatch.setattr(Config, "PIPELINE_ENGINE", "future_v9")
+    with pytest.raises(ValueError, match="PIPELINE_ENGINE"):
+        Config.validate_runtime()
+
+
 def test_format_provider_error_extracts_upstream_json_body():
     raw = (
         "litellm.ServiceUnavailableError: ServiceUnavailableError: OpenAIException - "

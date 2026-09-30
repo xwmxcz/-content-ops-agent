@@ -4,6 +4,8 @@ import {
   type PipelinePlanStep,
   type SubAgentToolEvent
 } from '../api/agent'
+import { contentChanged } from '../query/client'
+import { onWorkspaceSessionReset, workspaceSessionId } from '../workspaceSession'
 
 export interface ToolCallStartEvent {
   index: number
@@ -124,6 +126,8 @@ export function usePipelineStream(
   // replayed prefix is never re-applied and tokens are not double-counted.
   let lastSeq = 0
   let terminal = false
+  let session = workspaceSessionId.value
+  let stopWatching: (() => void) | undefined
 
   function status(exhausted?: boolean): StreamStatus {
     return exhausted ? { state, lastSeq, attempt, exhausted } : { state, lastSeq, attempt }
@@ -159,6 +163,8 @@ export function usePipelineStream(
   }
 
   function close() {
+    stopWatching?.()
+    stopWatching = undefined
     clearTimers()
     if (eventSource) {
       eventSource.close()
@@ -209,7 +215,8 @@ export function usePipelineStream(
   }
 
   function open() {
-    if (terminal || !currentRunId) return
+    if (terminal || !currentRunId || session !== workspaceSessionId.value) return
+    stopWatching ??= onWorkspaceSessionReset(finish)
     const url = pipelineStreamUrl(currentRunId, lastSeq > 0 ? lastSeq : undefined)
     setState('connecting')
     const source = new EventSource(url, { withCredentials: true })
@@ -225,14 +232,15 @@ export function usePipelineStream(
    * every resume whose cursor the server rounds down, and on any duplicate
    * delivery. Callers must not mutate run state for a rejected event.
    */
-  function accept(event: Event): boolean {
+  function accept(event: Event, source: EventSource): boolean {
+    if (terminal || source !== eventSource || session !== workspaceSessionId.value) return false
     if (isAlreadyApplied(event)) return false
     receiveActivity()
     return true
   }
 
   function receiveActivity() {
-    if (terminal) return
+    if (terminal || session !== workspaceSessionId.value) return
     if (state !== 'open') {
       attempt = 0
       setState('open')
@@ -254,91 +262,95 @@ export function usePipelineStream(
     // EventSource inherits the preceding lastEventId when a frame omits `id:`.
     // Heartbeats therefore bypass run-event dedupe entirely: they refresh
     // liveness without reading or advancing the persisted replay cursor.
-    source.addEventListener('hello', receiveActivity)
-    source.addEventListener('ping', receiveActivity)
+    source.addEventListener('hello', () => { if (source === eventSource) receiveActivity() })
+    source.addEventListener('ping', () => { if (source === eventSource) receiveActivity() })
 
     source.addEventListener('plan_ready', event => {
-      if (!accept(event)) return
+      if (!accept(event, source)) return
       const data = parseEvent<{ plan: PipelinePlanStep[] }>(event)
       if (data) handlers.onPlanReady(data.plan)
     })
 
     source.addEventListener('step_start', event => {
-      if (!accept(event)) return
+      if (!accept(event, source)) return
       const data = parseEvent<{ index: number }>(event)
       if (data) handlers.onStepStart(data.index)
     })
 
     source.addEventListener('step_token', event => {
-      if (!accept(event)) return
+      if (!accept(event, source)) return
       const data = parseEvent<{ index: number; delta: string }>(event)
       if (data) handlers.onStepToken(data.index, data.delta)
     })
 
     source.addEventListener('tool_call_start', event => {
-      if (!accept(event)) return
+      if (!accept(event, source)) return
       const data = parseEvent<ToolCallStartEvent>(event)
       if (data) handlers.onToolCallStart(data)
     })
 
     source.addEventListener('tool_call_result', event => {
-      if (!accept(event)) return
+      if (!accept(event, source)) return
       const data = parseEvent<ToolCallResultEvent>(event)
       if (data) handlers.onToolCallResult(data)
     })
 
     source.addEventListener('step_complete', event => {
-      if (!accept(event)) return
+      if (!accept(event, source)) return
       const data = parseEvent<StepCompleteEvent>(event)
       if (data) handlers.onStepComplete(data)
     })
 
     source.addEventListener('step_failed', event => {
-      if (!accept(event)) return
+      if (!accept(event, source)) return
       const data = parseEvent<{ index: number; error: string }>(event)
       if (data) handlers.onStepFailed(data.index, data.error)
     })
 
     source.addEventListener('plan_revised', event => {
-      if (!accept(event)) return
+      if (!accept(event, source)) return
       const data = parseEvent<{ plan: PipelinePlanStep[]; revision: number }>(event)
       if (data) handlers.onPlanRevised(data.plan, data.revision)
     })
 
     source.addEventListener('run_resumed', event => {
-      if (!accept(event)) return
+      if (!accept(event, source)) return
       handlers.onRunResumed?.()
     })
 
     source.addEventListener('run_complete', event => {
-      if (!accept(event)) return
+      if (!accept(event, source)) return
       const data = parseEvent<PipelineRunCompleteEvent>(event)
       finish()
-      if (data) handlers.onRunComplete(data)
+      if (data) {
+        if (data.saved_content_id) contentChanged(session, data.saved_content_id)
+        handlers.onRunComplete(data)
+      }
     })
 
     source.addEventListener('run_failed', event => {
-      if (!accept(event)) return
+      if (!accept(event, source)) return
       const data = parseEvent<{ error?: string; code?: string }>(event)
       finish()
       handlers.onRunFailed(data?.error, data?.code)
     })
 
     source.addEventListener('run_cancelled', event => {
-      if (!accept(event)) return
+      if (!accept(event, source)) return
       finish()
       handlers.onRunCancelled?.()
     })
 
     source.onerror = () => {
       // A terminal run event already closed us; a trailing error is noise.
-      if (terminal) return
+      if (terminal || source !== eventSource) return
       scheduleReconnect()
     }
   }
 
   async function subscribe(runId: string) {
     close()
+    session = workspaceSessionId.value
     currentRunId = runId
     terminal = false
     attempt = 0

@@ -2,14 +2,14 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-![Python](https://img.shields.io/badge/Python-3.10%2B-2563eb)
+![Python](https://img.shields.io/badge/Python-3.11%2B-2563eb)
 ![FastAPI](https://img.shields.io/badge/FastAPI-API-0f766e)
 ![Vue](https://img.shields.io/badge/Vue_3-Frontend-42b883)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2563eb)
 ![Tests](https://img.shields.io/badge/tests-PostgreSQL%20integration-0f7a4f)
 
 AI Content Ops Agent 是一个围绕内容运营工作流构建的 AI 全栈原型。它把
-FastAPI、Vue 3、LiteLLM、LangChain 工具调用、SQLAlchemy 存储、Docker
+FastAPI、Vue 3、TanStack Vue Query、LangGraph 编排、LiteLLM、LangChain 工具调用、SQLAlchemy 存储、Docker
 部署与 PostgreSQL 注册登录、用户工作区隔离组合成一个可以演示、可以运行、也方便审查的产品表面。
 
 这个仓库更适合作为 AI 全栈工程作品集项目：它展示的是产品思考、API 契约、
@@ -20,12 +20,12 @@ Agent 编排、后台任务、前端工作流和部署工程，而不是声称�
 
 | 模块 | 能力 |
 | --- | --- |
-| 内容工作台 | 动态 plan-then-execute 内容流水线，包含 researcher、strategy、writer、editor、reviewer、fact-checker 等子 Agent。 |
+| 内容工作台 | 带引擎版本与持久断点的 LangGraph 动态内容流水线，包含 researcher、strategy、writer、editor、reviewer、fact-checker 等子 Agent。 |
 | Chat Agent | 持久化工具型对话助手，支持线程历史、内容工具、规划工具、记忆工具和会话搜索。 |
 | 内容库 | 保存草稿、打磨版本、媒体素材、本地发布记录和可搜索历史。 |
 | 内容打磨 | 对已保存内容进行改写或优化，并保留来源关系。 |
-| 发布日历 | 未来 60 天发布队列、单日议程和平台分布汇总。 |
-| 统计分析 | 更专业的内容类型/状态分布分析页和结构判断。 |
+| 发布日历 | 可见月份议程、可编辑本地计划，以及独立的未来 60 天发布汇总。 |
+| 统计分析 | 内容类型/状态分布、平台累计读数、加权互动率、覆盖率和按创建日期分组的效果分析。 |
 | 长期记忆 | Hermes 风格文件记忆：`MEMORY.md`、`USER.md`、上下文压缩和 curator。 |
 | Docker | 一套 Compose 启动前端、API、worker、PostgreSQL 和 Redis。 |
 
@@ -33,17 +33,21 @@ Agent 编排、后台任务、前端工作流和部署工程，而不是声称�
 
 ```mermaid
 graph LR
-  UI[Vue 3 + Vite + Element Plus] --> API[FastAPI REST API]
+  UI[Vue 3 + Vite + Element Plus] --> Query[TanStack Vue Query]
+  Query --> API[FastAPI REST API]
+  UI --> API
   API --> Content[Content Services]
   API --> Agent[Agent Services]
   API --> Jobs[Job API]
   Content --> LLM[LiteLLM Provider Router]
   Agent --> LLM
+  Agent --> Graph[LangGraph Studio 编排]
+  Graph --> DB[(PostgreSQL)]
   Agent --> Tools[LangChain Tool Calling]
   Agent --> Memory[File Memory + Context Compressor]
   Memory --> Files[(MEMORY.md / USER.md)]
   Jobs --> Queue[BackgroundTasks or RQ]
-  Queue --> DB[(PostgreSQL)]
+  Queue --> DB
   Queue --> Redis[(Redis for RQ mode)]
 ```
 
@@ -54,6 +58,8 @@ graph LR
 | `frontend/` | Vue 3 前端、Element Plus 界面、模型/内容 API client、轮询和 SSE 流。 |
 | `src/api/` | FastAPI 路由、schema、服务层、依赖注入和鉴权中间件。 |
 | `src/api/services/dynamic_pipeline.py` | 工作台的动态计划和执行流水线，事件通过数据库持久化并用 SSE 推送。 |
+| `src/api/services/pipeline_graph.py` | LangGraph 节点与条件分支；持久进度仍统一保存在业务数据库中。 |
+| `frontend/src/query/client.ts` | 按工作区会话隔离的请求缓存、取消和写入后刷新。 |
 | `src/api/services/chat_agent.py` | 持久化工具型 Chat Agent，以及长期记忆集成。 |
 | `src/api/services/sub_agents.py` | Researcher、Fact Checker、Writer、Editor、Reviewer 和 Strategy 子 Agent。 |
 | `src/tools/web_search.py` | 多来源网页搜索：Serper、Tavily、Brave、SearXNG、DuckDuckGo 和 Bing fallback。 |
@@ -167,7 +173,7 @@ Docker 会自动读取根目录 `.env`。如果是宿主机开发，复制 `.env
 
 环境要求：
 
-- Python 3.10+
+- Python 3.11+（与跨平台依赖锁及 CI 保持一致）
 - Node.js 20+（包含 Playwright 浏览器测试）
 - 如果要启动 PostgreSQL、Redis 或完整 Compose 栈，需要 Docker Desktop
 

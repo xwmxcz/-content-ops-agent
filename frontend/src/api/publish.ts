@@ -1,4 +1,6 @@
 import { api } from './index'
+import { publicationChanged } from '../query/client'
+import { workspaceSessionId } from '../workspaceSession'
 
 export interface Publication {
   id: number
@@ -41,22 +43,26 @@ export interface XiaohongshuLoginStatus {
   details?: Record<string, unknown> | null
 }
 
-export async function getXiaohongshuLoginStatus() {
-  const { data } = await api.get<XiaohongshuLoginStatus>('/publish/xiaohongshu/login-status')
+export async function getXiaohongshuLoginStatus(signal?: AbortSignal) {
+  const { data } = await api.get<XiaohongshuLoginStatus>('/publish/xiaohongshu/login-status', { signal })
   return data
 }
 
 export async function publishToXiaohongshu(payload: PublishPayload) {
+  const session = workspaceSessionId.value
   const { data } = await api.post<PublishActionResponse>('/publish/xiaohongshu', payload)
+  publicationChanged(session, payload.content_id)
   return data
 }
 
 export async function scheduleXiaohongshuPublication(payload: PublishPayload) {
+  const session = workspaceSessionId.value
   const { data } = await api.post<PublishActionResponse>('/publish/xiaohongshu/schedule', payload)
+  publicationChanged(session, payload.content_id)
   return data
 }
 
-export async function getContentPublications(contentId: number) {
-  const { data } = await api.get<Publication[]>(`/publish/content/${contentId}`)
+export async function getContentPublications(contentId: number, signal?: AbortSignal) {
+  const { data } = await api.get<Publication[]>(`/publish/content/${contentId}`, { signal })
   return data
 }

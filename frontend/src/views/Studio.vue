@@ -488,6 +488,8 @@ const pipelineStream = usePipelineStream({
     errorMessage.value =
       code === 'no_content'
         ? '写作步骤全部失败，没有生成内容。通常是模型服务暂时不可用，可稍后从断点继续。'
+        : code === 'worker_lost'
+          ? '执行进程已中断或排队超时，已完成的步骤已保留。可点击“从断点继续”恢复运行。'
         : error || '运行失败'
     closeStream()
   },
@@ -838,7 +840,7 @@ async function subscribe(id: string) {
 }
 
 async function runWorkflow() {
-  workflowPolling.reset()
+  const attempt = workflowPolling.reset()
   plan.value = ['strategy', 'writer', 'editor', 'review'].map((id, idx) => ({
     index: idx + 1,
     agent_id: id as SubAgentId,
@@ -869,13 +871,14 @@ async function runWorkflow() {
 
   try {
     const job = await createAgentRunJob(payload)
+    if (workflowPolling.isAborted(attempt)) return
     workflowJobId = job.id
     runId.value = job.id
     const result = await pollWorkflowJob(job.id)
-    if (workflowPolling.isAborted()) return
+    if (workflowPolling.isAborted(attempt)) return
     applyWorkflowResult(result)
   } catch (error) {
-    if (workflowPolling.isAborted()) return
+    if (workflowPolling.isAborted(attempt)) return
     running.value = false
     status.value = 'failed'
     errorMessage.value = (error as Error).message
@@ -958,6 +961,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  workflowPolling.abort()
   closeStream()
 })
 </script>

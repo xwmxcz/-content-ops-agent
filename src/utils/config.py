@@ -69,6 +69,8 @@ class Config:
     # because a gateway can advertise JSON mode and still reject the parameter,
     # which would otherwise fail every planner call behind that gateway.
     PLANNER_STRUCTURED_OUTPUT_ENABLED = os.getenv("PLANNER_STRUCTURED_OUTPUT_ENABLED", "true").lower() == "true"
+    # Only new runs use this default; each stored request pins its own engine.
+    PIPELINE_ENGINE = os.getenv("PIPELINE_ENGINE", "langgraph_v1").lower()
 
     # PostgreSQL accounts own credentials; this key signs every user session.
     AUTH_SECRET_KEY = os.getenv("AUTH_SECRET_KEY", "")
@@ -109,6 +111,9 @@ class Config:
     # it is still running.
     JOB_LEASE_DURATION_SECONDS = int(os.getenv("JOB_LEASE_DURATION_SECONDS", "300"))
     JOB_HEARTBEAT_INTERVAL_SECONDS = int(os.getenv("JOB_HEARTBEAT_INTERVAL_SECONDS", "30"))
+    # Pipeline queue acceptance has its own deadline before a worker claims it.
+    # Once claimed, the ordinary job lease and heartbeat intervals apply.
+    PIPELINE_DISPATCH_TIMEOUT_SECONDS = int(os.getenv("PIPELINE_DISPATCH_TIMEOUT_SECONDS", "300"))
     JOB_REAPER_INTERVAL_SECONDS = int(os.getenv("JOB_REAPER_INTERVAL_SECONDS", "60"))
     JOB_REAPER_BATCH_SIZE = int(os.getenv("JOB_REAPER_BATCH_SIZE", "50"))
     # Touched after every sweep of the reaper daemon; its container healthcheck
@@ -214,6 +219,19 @@ class Config:
             raise ValueError("APP_ENV must be development, test, or production")
         if cls.SCHEMA_MANAGEMENT not in {"create", "validate"}:
             raise ValueError("SCHEMA_MANAGEMENT must be create or validate")
+        if cls.PIPELINE_ENGINE not in {"legacy", "langgraph_v1"}:
+            raise ValueError("PIPELINE_ENGINE must be legacy or langgraph_v1")
+        for name in (
+            "JOB_LEASE_DURATION_SECONDS",
+            "JOB_HEARTBEAT_INTERVAL_SECONDS",
+            "PIPELINE_DISPATCH_TIMEOUT_SECONDS",
+            "JOB_REAPER_INTERVAL_SECONDS",
+            "JOB_REAPER_BATCH_SIZE",
+        ):
+            if getattr(cls, name) <= 0:
+                raise ValueError(f"{name} must be positive")
+        if cls.JOB_LEASE_DURATION_SECONDS <= cls.JOB_HEARTBEAT_INTERVAL_SECONDS:
+            raise ValueError("JOB_LEASE_DURATION_SECONDS must exceed JOB_HEARTBEAT_INTERVAL_SECONDS")
 
         if cls.APP_ENV != "production":
             if not cls.AUTH_SECRET_KEY.strip():

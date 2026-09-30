@@ -19,6 +19,9 @@ class JobResponse(BaseModel):
     provider: str | None = None
     model: str | None = None
     attempts: int = 0
+    max_retries: int = 5
+    next_retry_at: str | None = None
+    error_type: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
     started_at: str | None = None

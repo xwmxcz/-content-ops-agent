@@ -7,7 +7,7 @@ metrics only decorate it."""
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 from sqlalchemy import func, or_
@@ -99,7 +99,9 @@ class ContentRepositoryMixin(MediaRepositoryMixin, RepositoryMixin):
         finally:
             session.close()
 
-    def list_contents(self, status=None, content_type=None, limit=50, offset=0) -> list[dict[str, Any]]:
+    def list_contents(
+        self, status=None, content_type=None, limit=50, offset=0, q: str | None = None
+    ) -> list[dict[str, Any]]:
         session = self._get_session()
         try:
             query = session.query(Content)
@@ -107,7 +109,15 @@ class ContentRepositoryMixin(MediaRepositoryMixin, RepositoryMixin):
                 query = query.filter(Content.status == status)
             if content_type:
                 query = query.filter(Content.content_type == content_type)
-            query = query.order_by(Content.created_at.desc()).limit(limit).offset(offset)
+            if q and q.strip():
+                # Match literal text in the complete article before pagination
+                # and preview truncation; '%' and '_' are not user wildcards.
+                escaped = q.strip().replace("/", "//").replace("%", "/%").replace("_", "/_")
+                pattern = f"%{escaped}%"
+                query = query.filter(
+                    or_(Content.title.ilike(pattern, escape="/"), Content.content.ilike(pattern, escape="/"))
+                )
+            query = query.order_by(Content.created_at.desc(), Content.id.desc()).limit(limit).offset(offset)
             contents = query.all()
             return [
                 {
@@ -168,6 +178,114 @@ class ContentRepositoryMixin(MediaRepositoryMixin, RepositoryMixin):
             return {"total_contents": total, "by_type": by_type, "by_status": by_status}
         finally:
             session.close()
+
+    def get_performance_stats(self, days: int = 30, platform: str | None = None) -> dict[str, Any]:
+        """Current platform totals for a cohort defined by content creation date.
+
+        Readings are cumulative and overwritten, so grouping by their upload
+        date would invent a daily-growth series. The daily breakdown instead
+        groups the latest readings by each content's creation date. Missing
+        readings and recorded zero views remain distinguishable.
+        """
+        end = date.today()
+        start = end - timedelta(days=days - 1)
+        cutoff = datetime.combine(start, time.min)
+        ceiling = datetime.combine(end + timedelta(days=1), time.min)
+        platform = platform.strip().lower() if platform and platform.strip() else None
+
+        def bucket() -> dict[str, Any]:
+            return {"metric_rows": 0, "views": 0, "likes": 0, "comments": 0, "shares": 0}
+
+        def finish(value: dict[str, Any]) -> dict[str, Any]:
+            value["interactions"] = value["likes"] + value["comments"] + value["shares"]
+            value["engagement_rate"] = round(value["interactions"] / value["views"], 4) if value["views"] else None
+            return value
+
+        with self._get_session() as session:
+            # One statement gives the cohort and readings the same PostgreSQL
+            # snapshot. DISTINCT ON keeps the latest reading per platform while
+            # the outer join retains each content that has no recorded metrics.
+            records = (
+                session.query(Content.id, ContentMetrics, Content.title, Content.created_at)
+                .select_from(Content)
+                .outerjoin(ContentMetrics, ContentMetrics.content_id == Content.id)
+                .filter(Content.created_at >= cutoff, Content.created_at < ceiling)
+                .distinct(Content.id, ContentMetrics.platform)
+                .order_by(
+                    Content.id,
+                    ContentMetrics.platform,
+                    ContentMetrics.recorded_at.desc().nulls_last(),
+                    ContentMetrics.id.desc(),
+                )
+                .all()
+            )
+            contents = {content_id: created_at for content_id, _, _, created_at in records}
+            rows = [(metric, title, created_at) for _, metric, title, created_at in records if metric is not None]
+            available_platforms = sorted({metric.platform or "unknown" for metric, _, _ in rows})
+            totals = bucket()
+            platforms: dict[str, dict[str, Any]] = {}
+            cohorts: dict[str, dict[str, Any]] = {}
+            measured: set[int] = set()
+            measured_by_day: dict[str, set[int]] = {}
+            performers = []
+            latest_reading: datetime | None = None
+            for index in range(days):
+                day = (start + timedelta(days=index)).isoformat()
+                cohorts[day] = {"date": day, "total_contents": 0, "measured_contents": 0, **bucket()}
+                measured_by_day[day] = set()
+            for created_at in contents.values():
+                cohorts[created_at.date().isoformat()]["total_contents"] += 1
+            for metric, title, created_at in rows:
+                name = metric.platform or "unknown"
+                if platform and name != platform:
+                    continue
+                day = created_at.date().isoformat()
+                measured.add(metric.content_id)
+                measured_by_day[day].add(metric.content_id)
+                per_platform = platforms.setdefault(name, {"platform": name, **bucket()})
+                for target in (totals, per_platform, cohorts[day]):
+                    target["metric_rows"] += 1
+                    for field in ("views", "likes", "comments", "shares"):
+                        target[field] += getattr(metric, field) or 0
+                if metric.recorded_at and (latest_reading is None or metric.recorded_at > latest_reading):
+                    latest_reading = metric.recorded_at
+                performers.append(
+                    {
+                        "content_id": metric.content_id,
+                        "title": title,
+                        "platform": name,
+                        **finish(
+                            {
+                                "metric_rows": 1,
+                                **{
+                                    field: getattr(metric, field) or 0
+                                    for field in ("views", "likes", "comments", "shares")
+                                },
+                            }
+                        ),
+                    }
+                )
+            for day, cohort in cohorts.items():
+                cohort["measured_contents"] = len(measured_by_day[day])
+                finish(cohort)
+            return {
+                "window_days": days,
+                "window_start": start.isoformat(),
+                "window_end": end.isoformat(),
+                "platform": platform,
+                "available_platforms": available_platforms,
+                "total_contents": len(contents),
+                "measured_contents": len(measured),
+                "missing_contents": len(contents) - len(measured),
+                "last_recorded_at": latest_reading.isoformat() if latest_reading else None,
+                "totals": finish(totals),
+                "by_platform": [finish(value) for _, value in sorted(platforms.items())],
+                "by_creation_date": list(cohorts.values()),
+                "top_contents": sorted(
+                    performers,
+                    key=lambda row: (-row["views"], -row["interactions"], row["content_id"], row["platform"]),
+                )[:10],
+            }
 
     def aggregate_performance(self, days: int = 30) -> dict[str, Any]:
         """Group contents from the last `days` days by content_type + style and aggregate
@@ -505,7 +623,10 @@ class ContentRepositoryMixin(MediaRepositoryMixin, RepositoryMixin):
     def delete_content(self, content_id: int) -> dict[str, Any] | None:
         session = self._get_session()
         try:
-            content = session.query(Content).filter(Content.id == content_id).first()
+            # Uploads lock the same parent before checking limits and inserting.
+            # Enumerate children only after acquiring it so deletion cannot miss
+            # an upload that commits while the parent is being removed.
+            content = session.query(Content).filter(Content.id == content_id).with_for_update().first()
             if not content:
                 return None
 

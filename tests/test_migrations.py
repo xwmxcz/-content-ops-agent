@@ -17,6 +17,12 @@ def test_alembic_upgrades_empty_postgres_to_current_schema(pg_engine):
         inspector = inspect(pg_engine)
         assert set(Base.metadata.tables) <= set(inspector.get_table_names())
         assert "next_event_seq" in {column["name"] for column in inspector.get_columns("agent_runs")}
+        assert {"worker_id", "lease_expires_at", "heartbeat_at"} <= {
+            column["name"] for column in inspector.get_columns("agent_runs")
+        }
+        assert ("status", "lease_expires_at") in {
+            tuple(index["column_names"]) for index in inspector.get_indexes("agent_runs")
+        }
         constraints = inspector.get_unique_constraints("agent_run_events")
         assert any(item.get("name") == "uq_agent_run_events_run_seq" for item in constraints)
         action_indexes = {tuple(index.get("column_names") or []) for index in inspector.get_indexes("proposed_actions")}
@@ -53,7 +59,7 @@ def test_alembic_upgrades_empty_postgres_to_current_schema(pg_engine):
         step_indexes = {tuple(index.get("column_names") or []) for index in inspector.get_indexes("run_steps")}
         assert ("run_id", "status") in step_indexes
         with pg_engine.connect() as connection:
-            assert MigrationContext.configure(connection).get_current_revision() == "0010_agent_run_request"
+            assert MigrationContext.configure(connection).get_current_revision() == "0011_pipeline_run_leases"
         assert_schema_current(pg_engine)
         # Metadata and the migration head must remain in sync; otherwise a
         # fresh production database can pass revision validation while missing
@@ -159,6 +165,44 @@ def test_head_revision_with_schema_drift_fails_validation(pg_engine):
                 )
         else:
             raise AssertionError("schema drift was not detected")
+    finally:
+        command.downgrade(cfg, "base")
+        with pg_engine.begin() as connection:
+            connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
+
+
+def test_pipeline_lease_upgrade_covers_existing_running_rows_and_can_downgrade(pg_engine):
+    Base.metadata.drop_all(pg_engine)
+    with pg_engine.begin() as connection:
+        connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
+    cfg = alembic_config(pg_engine.url.render_as_string(hide_password=False))
+    try:
+        command.upgrade(cfg, "0010_agent_run_request")
+        with pg_engine.begin() as connection:
+            for status in ("running", "completed", "failed", "cancelled"):
+                connection.execute(
+                    text(
+                        "INSERT INTO agent_runs (id, topic, content_type, style, status, user_id, request_json) "
+                        "VALUES (:id, 'retained', 'blog', 'professional', :status, :owner, '{}')"
+                    ),
+                    {"id": f"legacy_{status}", "status": status, "owner": "00000000000000000000000000000001"},
+                )
+        command.upgrade(cfg, "head")
+        with pg_engine.connect() as connection:
+            rows = (
+                connection.execute(text("SELECT status, lease_expires_at, worker_id FROM agent_runs ORDER BY id"))
+                .mappings()
+                .all()
+            )
+            assert len(rows) == 4
+            for row in rows:
+                assert (row["lease_expires_at"] is not None) == (row["status"] == "running")
+                assert row["worker_id"] is None
+        assert_schema_current(pg_engine)
+        command.downgrade(cfg, "0010_agent_run_request")
+        assert "lease_expires_at" not in {column["name"] for column in inspect(pg_engine).get_columns("agent_runs")}
+        with pg_engine.connect() as connection:
+            assert connection.execute(text("SELECT count(*) FROM agent_runs WHERE topic = 'retained'")).scalar() == 4
     finally:
         command.downgrade(cfg, "base")
         with pg_engine.begin() as connection:

@@ -45,7 +45,11 @@ export const useChatStore = defineStore('chat', {
     activeThreadId: readActiveThreadFromStorage() as string | undefined,
     messages: [] as UiMessage[],
     messageContextVersion: 0,
+    threadsRequestVersion: 0,
+    searchRequestVersion: 0,
+    threadsOffset: 0,
     threadsLoading: false,
+    threadsError: '',
     messagesLoading: false,
     sending: false,
     hasMoreThreads: false,
@@ -53,7 +57,9 @@ export const useChatStore = defineStore('chat', {
     includeArchived: false,
     searchQuery: '',
     searchResults: [] as AgentSearchHit[],
-    searching: false
+    searching: false,
+    searchError: '',
+    mutatingThreadIds: [] as string[]
   }),
   getters: {
     activeThread(state): AgentThread | undefined {
@@ -61,43 +67,69 @@ export const useChatStore = defineStore('chat', {
     }
   },
   actions: {
-    async loadThreads(options: { reset?: boolean } = {}) {
+    invalidateThreadReads() {
+      this.threadsRequestVersion += 1
+      this.threadsLoading = false
+    },
+    async loadThreads(_options: { reset?: boolean } = {}) {
+      const request = ++this.threadsRequestVersion
+      const includeArchived = this.includeArchived
       this.threadsLoading = true
+      this.threadsError = ''
       try {
-        const offset = options.reset ? 0 : 0
         const rows = await getAgentThreads({
           limit: THREAD_PAGE_SIZE,
-          offset,
-          include_archived: this.includeArchived
+          offset: 0,
+          include_archived: includeArchived
         })
+        if (request !== this.threadsRequestVersion || includeArchived !== this.includeArchived) return false
         this.threads = rows
+        this.threadsOffset = rows.length
         this.hasMoreThreads = rows.length === THREAD_PAGE_SIZE
+        return true
+      } catch (error) {
+        if (request === this.threadsRequestVersion) {
+          this.threadsError = error instanceof Error ? error.message : '会话加载失败，请重试'
+        }
+        return false
       } finally {
-        this.threadsLoading = false
+        if (request === this.threadsRequestVersion) this.threadsLoading = false
       }
     },
     async loadMoreThreads() {
-      if (!this.hasMoreThreads || this.threadsLoading) return
+      if (!this.hasMoreThreads || this.threadsLoading || this.mutatingThreadIds.length) return
+      const request = ++this.threadsRequestVersion
+      const includeArchived = this.includeArchived
       this.threadsLoading = true
+      this.threadsError = ''
       try {
         const rows = await getAgentThreads({
           limit: THREAD_PAGE_SIZE,
-          offset: this.threads.length,
-          include_archived: this.includeArchived
+          offset: this.threadsOffset,
+          include_archived: includeArchived
         })
+        if (request !== this.threadsRequestVersion || includeArchived !== this.includeArchived) return
+        this.threadsOffset += rows.length
         // Filter out any duplicates that could appear if a thread was updated
         // between requests (its updated_at could move it to an earlier page).
         const existing = new Set(this.threads.map(t => t.id))
         const fresh = rows.filter(r => !existing.has(r.id))
         this.threads.push(...fresh)
         this.hasMoreThreads = rows.length === THREAD_PAGE_SIZE
+      } catch (error) {
+        if (request === this.threadsRequestVersion) {
+          this.threadsError = error instanceof Error ? error.message : '会话加载失败，请重试'
+        }
       } finally {
-        this.threadsLoading = false
+        if (request === this.threadsRequestVersion) this.threadsLoading = false
       }
     },
     async setIncludeArchived(value: boolean) {
       if (this.includeArchived === value) return
       this.includeArchived = value
+      this.threads = []
+      this.hasMoreThreads = false
+      this.threadsOffset = 0
       await this.loadThreads({ reset: true })
     },
     async selectThread(threadId: string | undefined) {
@@ -152,6 +184,7 @@ export const useChatStore = defineStore('chat', {
     },
     async sendMessage(payload: Omit<ChatPayload, 'thread_id'>) {
       if (this.sending) return
+      this.invalidateThreadReads()
       const contextVersion = this.messageContextVersion
       const inContext = () => contextVersion === this.messageContextVersion
       const localMessage: UiMessage = {
@@ -250,7 +283,8 @@ export const useChatStore = defineStore('chat', {
           if (target) Object.assign(target, final)
           else this.messages.push(final)
         }
-        // Refresh the thread list so message counts and last_model reflect the new turn.
+        // List failures belong to the sidebar. They must never discard a reply
+        // which has already completed and been persisted by the server.
         await this.loadThreads({ reset: true })
       } catch (error) {
         localMessage.pending = false
@@ -281,38 +315,71 @@ export const useChatStore = defineStore('chat', {
       await this.patchThread(threadId, { archived: !thread.archived })
     },
     async patchThread(threadId: string, patch: UpdateThreadPatch) {
-      const updated = await updateAgentThread(threadId, patch)
-      const index = this.threads.findIndex(t => t.id === threadId)
-      if (index >= 0) this.threads[index] = updated
-      // Archiving may remove the row from the default-view list; reload to fix ordering.
-      if (patch.archived !== undefined || patch.pinned !== undefined) {
+      if (this.mutatingThreadIds.includes(threadId)) return
+      this.mutatingThreadIds.push(threadId)
+      this.invalidateThreadReads()
+      try {
+        const updated = await updateAgentThread(threadId, patch)
+        this.invalidateThreadReads()
+        this.hasMoreThreads = false
+        if (updated.archived && !this.includeArchived) {
+          this.threads = this.threads.filter(thread => thread.id !== threadId)
+        } else {
+          const index = this.threads.findIndex(t => t.id === threadId)
+          if (index >= 0) this.threads[index] = updated
+        }
+        // All edits can change ordering, including a title edit's updated_at.
         await this.loadThreads({ reset: true })
+      } finally {
+        this.mutatingThreadIds = this.mutatingThreadIds.filter(id => id !== threadId)
       }
     },
     async removeThread(threadId: string) {
-      await deleteAgentThread(threadId)
-      if (this.activeThreadId === threadId) this.startNewThread()
-      await this.loadThreads({ reset: true })
+      if (this.mutatingThreadIds.includes(threadId)) return
+      this.mutatingThreadIds.push(threadId)
+      this.invalidateThreadReads()
+      try {
+        await deleteAgentThread(threadId)
+        this.invalidateThreadReads()
+        this.hasMoreThreads = false
+        this.threads = this.threads.filter(thread => thread.id !== threadId)
+        this.searchRequestVersion += 1
+        this.searching = false
+        this.searchResults = this.searchResults.filter(hit => hit.thread_id !== threadId)
+        if (this.activeThreadId === threadId) this.startNewThread()
+        await Promise.all([
+          this.loadThreads({ reset: true }),
+          this.searchQuery ? this.runSearch(this.searchQuery) : Promise.resolve()
+        ])
+      } finally {
+        this.mutatingThreadIds = this.mutatingThreadIds.filter(id => id !== threadId)
+      }
+    },
+    prepareSearch(query: string) {
+      this.searchRequestVersion += 1
+      this.searchQuery = query.trim()
+      this.searchResults = []
+      this.searchError = ''
+      this.searching = Boolean(this.searchQuery)
     },
     async runSearch(query: string) {
-      const q = query.trim()
-      this.searchQuery = q
-      if (!q) {
-        this.searchResults = []
-        this.searching = false
-        return
-      }
-      this.searching = true
+      this.prepareSearch(query)
+      const request = this.searchRequestVersion
+      const q = this.searchQuery
+      if (!q) return
       try {
-        this.searchResults = await searchAgentMessages(q, { limit: 30 })
+        const results = await searchAgentMessages(q, { limit: 30 })
+        if (request === this.searchRequestVersion && q === this.searchQuery) this.searchResults = results
+      } catch (error) {
+        if (request === this.searchRequestVersion) {
+          this.searchError = error instanceof Error ? error.message : '搜索失败，请重试'
+        }
       } finally {
-        this.searching = false
+        if (request === this.searchRequestVersion) this.searching = false
       }
     },
     clearSearch() {
-      this.searchQuery = ''
-      this.searchResults = []
-      this.searching = false
+      this.prepareSearch('')
     }
   }
 })

@@ -13,6 +13,13 @@ from src.jobs.runner import _calculate_backoff_delay, _handle_job_error, run_job
 from src.storage import ContentStore
 
 
+@pytest.fixture(autouse=True)
+def no_live_retry_timers(monkeypatch):
+    # Each attempt is driven explicitly below; a real delayed callback could
+    # outlive its disposable database and execute against a later test's data.
+    monkeypatch.setattr("src.jobs.queue.requeue_job_with_delay", lambda *args: None)
+
+
 class TransientNetworkError(Exception):
     """Simulates a transient network error."""
 

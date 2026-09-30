@@ -1,4 +1,6 @@
 import { api } from './index'
+import { contentChanged, contentDeleted } from '../query/client'
+import { workspaceSessionId } from '../workspaceSession'
 
 export interface ContentItem {
   id: number
@@ -48,32 +50,48 @@ export async function getModels() {
 }
 
 export async function generateContent(payload: GeneratePayload) {
+  const session = workspaceSessionId.value
   const { data } = await api.post<ContentItem>('/content/generate', payload)
+  contentChanged(session, data.id)
   return data
 }
 
 export async function refineContent(payload: RefinePayload) {
+  const session = workspaceSessionId.value
   const { data } = await api.post<ContentItem>('/content/refine', payload)
+  contentChanged(session, data.id)
   return data
 }
 
-export async function getContents(params: Record<string, unknown> = {}) {
-  const { data } = await api.get<ContentItem[]>('/content', { params })
+export interface ContentListParams {
+  limit?: number
+  offset?: number
+  content_type?: string
+  status?: string
+  q?: string
+}
+
+export async function getContents(params: ContentListParams = {}, signal?: AbortSignal) {
+  const { data } = await api.get<ContentItem[]>('/content', { params, signal })
   return data
 }
 
-export async function getContent(id: number) {
-  const { data } = await api.get<ContentItem>(`/content/${id}`)
+export async function getContent(id: number, signal?: AbortSignal) {
+  const { data } = await api.get<ContentItem>(`/content/${id}`, { signal })
   return data
 }
 
 export async function archiveContent(id: number) {
+  const session = workspaceSessionId.value
   const { data } = await api.post<{ archived: boolean }>(`/content/${id}/archive`)
+  contentChanged(session, id)
   return data
 }
 
 export async function deleteContentLocal(id: number) {
+  const session = workspaceSessionId.value
   const { data } = await api.delete<{ deleted: boolean }>(`/content/${id}`)
+  contentDeleted(session, id)
   return data
 }
 

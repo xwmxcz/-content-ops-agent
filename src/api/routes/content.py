@@ -37,9 +37,10 @@ def list_contents(
     content_type: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    q: str | None = None,
     store: ContentStore = Depends(get_store),
 ) -> list[dict]:
-    return store.list_contents(status=status_filter, content_type=content_type, limit=limit, offset=offset)
+    return store.list_contents(status=status_filter, content_type=content_type, limit=limit, offset=offset, q=q)
 
 
 @router.get("/{content_id}", response_model=ContentResponse)

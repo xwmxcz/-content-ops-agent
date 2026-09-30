@@ -16,6 +16,8 @@ import './styles.css'
 import App from './App.vue'
 import router from './router'
 import { watchAccountChanges } from './api'
+import { VueQueryPlugin } from '@tanstack/vue-query'
+import { queryClient } from './query/client'
 
 const app = createApp(App)
 watchAccountChanges()
@@ -30,5 +32,5 @@ watchAccountChanges()
   app.component(component.name!, component)
 })
 
-app.use(createPinia()).use(router)
+app.use(createPinia()).use(VueQueryPlugin, { queryClient }).use(router)
 void router.isReady().then(() => app.mount('#app'))
