@@ -37,6 +37,53 @@ class StreamChunk:
     usage: tuple[int, int] | None = None
 
 
+def _is_unsupported_temperature(exc: BaseException) -> bool:
+    """Whether ``exc`` is litellm rejecting *temperature* for a reasoning model.
+
+    Matched by class name and message text rather than ``isinstance``: litellm is
+    imported lazily so the module still loads when the dependency is absent, and
+    different litellm versions raise this from different paths.
+    """
+    if type(exc).__name__ != "UnsupportedParamsError":
+        return False
+    return "temperature" in str(exc).lower()
+
+
+async def _acompletion(request: dict[str, Any], *, timeout: float | None = None) -> Any:
+    """Call ``litellm.acompletion``, retrying once without an unsupported temperature.
+
+    Reasoning models behind OpenAI-compatible gateways (NewAPI and friends) accept
+    only ``temperature=1`` while reasoning is active. litellm enforces that
+    *client-side*, so the request never reaches the provider and the step fails
+    permanently. Sub-agents carry fixed per-step temperatures (strategy 0.5, writer
+    0.85, editor 0.5), which makes every non-tool step fail while the tool-using
+    steps pass on LangChain's ChatOpenAI path -- it performs no such check.
+
+    Retrying without the parameter, rather than setting ``litellm.drop_params``
+    globally, keeps the failure loud for every other unsupported parameter: a
+    blanket drop would silently discard genuinely wrong arguments too.
+    """
+    import litellm
+
+    async def _call(payload: dict[str, Any]) -> Any:
+        coro = litellm.acompletion(**payload)
+        return await (asyncio.wait_for(coro, timeout=timeout) if timeout else coro)
+
+    try:
+        return await _call(request)
+    except TimeoutError:
+        # Not a parameter problem; the caller maps this to its own timeout message.
+        raise
+    except Exception as exc:
+        if "temperature" not in request or not _is_unsupported_temperature(exc):
+            raise
+        logger.info(
+            "[litellm] provider rejected temperature=%s while reasoning is active; retrying without it",
+            request.get("temperature"),
+        )
+        return await _call({key: value for key, value in request.items() if key != "temperature"})
+
+
 class LiteLLMClient:
     """Small adapter around LiteLLM's async completion API."""
 
@@ -85,10 +132,7 @@ class LiteLLMClient:
             request["response_format"] = response_format
 
         try:
-            response = await asyncio.wait_for(
-                litellm.acompletion(**request),
-                timeout=config.LLM_TIMEOUT_SECONDS,
-            )
+            response = await _acompletion(request, timeout=config.LLM_TIMEOUT_SECONDS)
         except TimeoutError as exc:
             raise LLMGenerationError(f"LLM request timed out after {config.LLM_TIMEOUT_SECONDS:g} seconds") from exc
         except Exception as exc:
@@ -163,7 +207,9 @@ class LiteLLMClient:
             request["api_base"] = api_base
 
         try:
-            response = await litellm.acompletion(**request)
+            # No timeout here: this call only returns the stream handle, and the
+            # consumer reads it incrementally below.
+            response = await _acompletion(request)
         except Exception as exc:  # noqa: BLE001 -- provider SDKs raise arbitrary errors; degrade to one-shot
             logger.warning(
                 "[litellm.stream] open failed, falling back to non-stream: %s: %s",
