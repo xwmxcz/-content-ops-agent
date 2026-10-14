@@ -1,12 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
+import { onBeforeRouteLeave } from 'vue-router'
 import { vLoading } from 'element-plus/es/components/loading/index'
 import { ElMessage } from 'element-plus/es/components/message/index'
+import { ElMessageBox } from 'element-plus/es/components/message-box/index'
 import { ElTabPane, ElTabs } from 'element-plus/es/components/tabs/index'
 import { ElTag } from 'element-plus/es/components/tag/index'
 import 'element-plus/es/components/loading/style/css'
 import 'element-plus/es/components/tabs/style/css'
 import 'element-plus/es/components/tag/style/css'
+import 'element-plus/es/components/message-box/style/css'
+import { useMemoryEditor } from '../composables/useMemoryEditor'
+import { workspaceSessionId } from '../workspaceSession'
 import { Search, Refresh, DocumentCopy } from '@element-plus/icons-vue'
 import {
   getAgentMemory,
@@ -15,122 +20,88 @@ import {
   saveUserMemory,
   searchSessions,
   refreshSnapshot,
-  type MemoryFile,
   type SessionSearchHit,
 } from '../api/memory'
 
 const activeTab = ref<'edit' | 'search'>('edit')
 
-const agentDraft = ref('')
-const agentMeta = ref<MemoryFile>({ content: '', char_count: 0, char_limit: 2200 })
-const agentSaving = ref(false)
-const agentLoading = ref(false)
-
-const userDraft = ref('')
-const userMeta = ref<MemoryFile>({ content: '', char_count: 0, char_limit: 1375 })
-const userSaving = ref(false)
-const userLoading = ref(false)
+const agent = useMemoryEditor('MEMORY.md', 2200, getAgentMemory, saveAgentMemory)
+const user = useMemoryEditor('USER.md', 1375, getUserMemory, saveUserMemory)
 
 const searchQuery = ref('')
 const searchThread = ref('')
 const searchResults = ref<SessionSearchHit[]>([])
 const searching = ref(false)
 const searchTouched = ref(false)
-
-const agentCount = computed(() => agentDraft.value.length)
-const agentOver = computed(() => agentCount.value > agentMeta.value.char_limit)
-const userCount = computed(() => userDraft.value.length)
-const userOver = computed(() => userCount.value > userMeta.value.char_limit)
-
-async function loadAgent() {
-  agentLoading.value = true
-  try {
-    agentMeta.value = await getAgentMemory()
-    agentDraft.value = agentMeta.value.content
-  } catch {
-    ElMessage.error('加载 MEMORY.md 失败')
-  } finally {
-    agentLoading.value = false
-  }
-}
-
-async function loadUser() {
-  userLoading.value = true
-  try {
-    userMeta.value = await getUserMemory()
-    userDraft.value = userMeta.value.content
-  } catch {
-    ElMessage.error('加载 USER.md 失败')
-  } finally {
-    userLoading.value = false
-  }
-}
-
-async function persistAgent() {
-  if (agentOver.value) {
-    ElMessage.warning('MEMORY.md 超过字符上限')
-    return
-  }
-  agentSaving.value = true
-  try {
-    agentMeta.value = await saveAgentMemory(agentDraft.value)
-    agentDraft.value = agentMeta.value.content
-    ElMessage.success('MEMORY.md 已保存(新会话生效)')
-  } catch (err: any) {
-    const detail = err?.response?.data?.detail || '保存失败'
-    ElMessage.error(detail)
-  } finally {
-    agentSaving.value = false
-  }
-}
-
-async function persistUser() {
-  if (userOver.value) {
-    ElMessage.warning('USER.md 超过字符上限')
-    return
-  }
-  userSaving.value = true
-  try {
-    userMeta.value = await saveUserMemory(userDraft.value)
-    userDraft.value = userMeta.value.content
-    ElMessage.success('USER.md 已保存(新会话生效)')
-  } catch (err: any) {
-    const detail = err?.response?.data?.detail || '保存失败'
-    ElMessage.error(detail)
-  } finally {
-    userSaving.value = false
-  }
-}
+const searchError = ref('')
+const refreshing = ref(false)
+let searchVersion = 0
+let disposed = false
 
 async function invalidateAllSnapshots() {
+  if (refreshing.value) return
+  const session = workspaceSessionId.value
+  refreshing.value = true
   try {
     await refreshSnapshot()
-    ElMessage.success('已清空冻结快照,下一条消息会重新加载')
-  } catch {
-    ElMessage.error('清空快照失败')
+    if (!disposed && session === workspaceSessionId.value) ElMessage.success('已有会话将在下一条消息加载最新记忆')
+  } catch (error) {
+    if (!disposed && session === workspaceSessionId.value) ElMessage.error((error as Error).message || '更新会话记忆失败')
+  } finally {
+    if (session === workspaceSessionId.value) refreshing.value = false
   }
 }
 
 async function runSearch() {
-  if (!searchQuery.value.trim()) {
-    searchResults.value = []
-    return
-  }
+  const version = ++searchVersion
+  const session = workspaceSessionId.value
+  const query = searchQuery.value.trim()
+  searchResults.value = []
+  searchError.value = ''
+  searchTouched.value = !!query
+  searching.value = false
+  if (!query) return
   searching.value = true
-  searchTouched.value = true
   try {
-    const r = await searchSessions(searchQuery.value, 30, searchThread.value || undefined)
-    searchResults.value = r.messages
-  } catch {
-    ElMessage.error('搜索失败')
+    const r = await searchSessions(query, 30, searchThread.value.trim() || undefined)
+    if (!disposed && version === searchVersion && session === workspaceSessionId.value) searchResults.value = r.messages
+  } catch (error) {
+    if (!disposed && version === searchVersion && session === workspaceSessionId.value) searchError.value = (error as Error).message || '搜索失败，请重试'
   } finally {
-    searching.value = false
+    if (version === searchVersion) searching.value = false
   }
 }
 
-onMounted(() => {
-  loadAgent()
-  loadUser()
+function clearSearch() {
+  searchVersion++
+  searchResults.value = []
+  searching.value = searchTouched.value = false
+  searchError.value = ''
+}
+watch([searchQuery, searchThread], clearSearch, { flush: 'sync' })
+watch(workspaceSessionId, () => {
+  searchQuery.value = searchThread.value = ''
+  refreshing.value = false
+  clearSearch()
+}, { flush: 'sync' })
+
+function beforeUnload(event: BeforeUnloadEvent) {
+  if (agent.dirty || user.dirty) { event.preventDefault(); event.returnValue = '' }
+}
+window.addEventListener('beforeunload', beforeUnload)
+onBeforeRouteLeave(async () => {
+  if (!agent.dirty && !user.dirty) return true
+  try {
+    await ElMessageBox.confirm('记忆修改尚未保存，是否离开？', '未保存的记忆', {
+      confirmButtonText: '离开', cancelButtonText: '继续编辑', type: 'warning'
+    })
+    return true
+  } catch { return false }
+})
+onBeforeUnmount(() => {
+  disposed = true
+  searchVersion++
+  window.removeEventListener('beforeunload', beforeUnload)
 })
 </script>
 
@@ -144,49 +115,57 @@ onMounted(() => {
     <el-tabs v-model="activeTab" class="mem-tabs">
       <el-tab-pane label="长期记忆" name="edit">
         <div class="edit-grid">
-          <section v-loading="agentLoading" class="pane">
+          <section v-loading="agent.loading" class="pane">
             <div class="pane-head">
               <div>
                 <span class="file-label">MEMORY.md</span>
                 <h3>工作笔记</h3>
                 <p class="pane-subtitle">项目惯例、品牌口径，以及值得记住的经验。</p>
               </div>
-              <span :class="['count', { over: agentOver }]">{{ agentCount }} / {{ agentMeta.char_limit }}</span>
+              <span :class="['count', { over: agent.over }]">{{ agent.count }} / {{ agent.meta.char_limit }}</span>
             </div>
             <el-input
-              v-model="agentDraft"
+              v-model="agent.draft"
+              aria-label="工作笔记"
+              :disabled="agent.loading || !agent.loaded"
               type="textarea"
               :rows="18"
               resize="none"
               placeholder="# 品牌口径&#10;用简洁、自然的中文表达。&#10;&#10;# 项目约定&#10;在这里记录内容规范与工作经验…"
             />
+            <p v-if="agent.error" role="alert" class="memory-error">{{ agent.error }}</p>
+            <p v-if="agent.dirty" class="draft-notice">有未保存的修改</p>
             <div class="pane-actions">
-              <el-button :icon="Refresh" plain @click="loadAgent">重新加载</el-button>
-              <el-button type="primary" :loading="agentSaving" :disabled="agentOver" @click="persistAgent">
+              <el-button :icon="Refresh" plain :disabled="agent.loading || agent.saving" @click="agent.load">重新加载</el-button>
+              <el-button type="primary" :loading="agent.saving" :disabled="agent.over || !agent.dirty || agent.loading" @click="agent.save">
                 保存
               </el-button>
             </div>
           </section>
 
-          <section v-loading="userLoading" class="pane">
+          <section v-loading="user.loading" class="pane">
             <div class="pane-head">
               <div>
                 <span class="file-label">USER.md</span>
                 <h3>我的偏好</h3>
                 <p class="pane-subtitle">如何称呼你，你喜欢的语言与写作风格。</p>
               </div>
-              <span :class="['count', { over: userOver }]">{{ userCount }} / {{ userMeta.char_limit }}</span>
+              <span :class="['count', { over: user.over }]">{{ user.count }} / {{ user.meta.char_limit }}</span>
             </div>
             <el-input
-              v-model="userDraft"
+              v-model="user.draft"
+              aria-label="我的偏好"
+              :disabled="user.loading || !user.loaded"
               type="textarea"
               :rows="18"
               resize="none"
               placeholder="# 关于我&#10;我负责的品牌是…&#10;&#10;# 写作偏好&#10;喜欢简洁口语化的表达，少用表情符号。"
             />
+            <p v-if="user.error" role="alert" class="memory-error">{{ user.error }}</p>
+            <p v-if="user.dirty" class="draft-notice">有未保存的修改</p>
             <div class="pane-actions">
-              <el-button :icon="Refresh" plain @click="loadUser">重新加载</el-button>
-              <el-button type="primary" :loading="userSaving" :disabled="userOver" @click="persistUser">
+              <el-button :icon="Refresh" plain :disabled="user.loading || user.saving" @click="user.load">重新加载</el-button>
+              <el-button type="primary" :loading="user.saving" :disabled="user.over || !user.dirty || user.loading" @click="user.save">
                 保存
               </el-button>
             </div>
@@ -198,7 +177,7 @@ onMounted(() => {
             <strong>保存后，新会话会自动使用这些记忆。</strong>
             <span>若要更新已有会话，点击右侧按钮；下一条消息会重新加载。</span>
           </p>
-          <el-button :icon="DocumentCopy" size="small" plain @click="invalidateAllSnapshots">
+          <el-button :icon="DocumentCopy" size="small" plain :loading="refreshing" @click="invalidateAllSnapshots">
             更新已有会话记忆
           </el-button>
         </div>
@@ -225,7 +204,8 @@ onMounted(() => {
         </div>
 
         <div v-loading="searching" class="search-results">
-          <div v-if="!searchTouched && !searching" class="empty-state"><strong>让过去的想法，再次派上用场。</strong><span>输入关键词，找回聊过的选题、草稿与灵感。</span></div>
+          <p v-if="searchError" role="alert" class="memory-error">{{ searchError }} <el-button text @click="runSearch">重试</el-button></p>
+          <div v-else-if="!searchTouched && !searching" class="empty-state"><strong>让过去的想法，再次派上用场。</strong><span>输入关键词，找回聊过的选题、草稿与灵感。</span></div>
           <div v-else-if="searchResults.length === 0 && !searching" class="empty-state"><strong>还没有找到相关消息</strong><span>试试更短的关键词，或清除会话 ID 后搜索。</span></div>
           <div v-for="hit in searchResults" :key="hit.id" class="hit-card">
             <div class="hit-meta">
@@ -242,6 +222,8 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.memory-error { color: var(--c-fail); line-height: 1.6; }
+.draft-notice { color: var(--c-text-secondary); font-size: 12px; }
 .memory-page {
   width: min(100%, 1440px);
   margin: 0 auto;

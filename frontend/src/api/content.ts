@@ -88,6 +88,27 @@ export async function archiveContent(id: number) {
   return data
 }
 
+export interface ContentEditPayload {
+  title: string
+  content: string
+  tags: string[]
+  expected_updated_at: string | null
+}
+
+export async function editContent(id: number, payload: ContentEditPayload) {
+  const session = workspaceSessionId.value
+  const { data } = await api.put<ContentItem>(`/content/${id}`, payload)
+  contentChanged(session, id)
+  return data
+}
+
+export async function restoreContent(id: number) {
+  const session = workspaceSessionId.value
+  const { data } = await api.post<ContentItem>(`/content/${id}/restore`)
+  contentChanged(session, id)
+  return data
+}
+
 export async function deleteContentLocal(id: number) {
   const session = workspaceSessionId.value
   const { data } = await api.delete<{ deleted: boolean }>(`/content/${id}`)

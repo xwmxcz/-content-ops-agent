@@ -26,7 +26,7 @@ def list_events(
         raise HTTPException(status_code=422, detail="start_date and end_date must be provided together")
     if start_date is None:
         start_date = date.today()
-        end_date = start_date + timedelta(days=days)
+        end_date = start_date + timedelta(days=days - 1)
     elif end_date is not None and not 0 <= (end_date - start_date).days <= 365:
         raise HTTPException(status_code=422, detail="Date range must be ordered and no longer than 366 days")
     return store.get_calendar_events(start_date, end_date)

@@ -79,6 +79,30 @@ def test_failed_asset_save_removes_uploaded_file(client, upload_store, tmp_path)
     assert existing_file.read_bytes() == b"previous upload"
 
 
+def test_oversized_image_is_rejected_and_partial_file_is_removed(client, upload_store, tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "MEDIA_MAX_IMAGE_SIZE_MB", 1)
+    response = client.post(
+        "/api/media/upload",
+        data={"content_id": 1, "media_type": "image"},
+        files={"file": ("photo.png", b"x" * (1024 * 1024 + 1), "image/png")},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Image file exceeds 1 MB"
+    upload_store.save_media_asset.assert_not_called()
+    assert not [path for path in tmp_path.rglob("*") if path.is_file()]
+
+
+def test_image_exactly_at_the_limit_is_accepted(client, upload_store, monkeypatch):
+    monkeypatch.setattr(config, "MEDIA_MAX_IMAGE_SIZE_MB", 1)
+    response = client.post(
+        "/api/media/upload",
+        data={"content_id": 1, "media_type": "image"},
+        files={"file": ("photo.png", b"x" * (1024 * 1024), "image/png")},
+    )
+    assert response.status_code == 201
+    upload_store.save_media_asset.assert_called_once()
+
+
 @pytest.mark.parametrize("error_type,http_status", [(MediaLimitExceeded, 400), (MediaContentNotFound, 404)])
 def test_rejected_upload_cleans_up_only_its_new_file(client, upload_store, tmp_path, error_type, http_status):
     existing_file = tmp_path / "1" / "image" / "previous.png"

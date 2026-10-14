@@ -96,7 +96,7 @@ def _enqueue_publication(
 ) -> dict:
     if require_future and not request.scheduled_at:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="scheduled_at is required")
-    if require_future and request.scheduled_at and _is_past(request.scheduled_at):
+    if request.scheduled_at and _is_past(request.scheduled_at):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="scheduled_at must be in the future")
 
     def create_and_enqueue() -> dict:

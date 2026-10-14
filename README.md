@@ -24,7 +24,7 @@ multi-tenant SaaS.
 | --- | --- |
 | Studio | Versioned LangGraph plan-then-execute pipeline with durable application checkpoints and researcher, strategist, writer, editor, reviewer, and fact-checker sub-agents. |
 | Chat Agent | Persistent tool-calling assistant with thread history, content tools, planning tools, memory tools, and session search. |
-| Content Library | Saved drafts, refined variants, media assets, local publication records, and searchable history. |
+| Content Library | Saved drafts, manual editing with conflict detection, archive restoration, Markdown export, media assets, and searchable history. |
 | Refinement | Rewrite or improve saved content while preserving source lineage. |
 | Calendar | Visible-month agenda, editable local plans, and a separate 60-day publishing summary. |
 | Stats | Content distribution plus platform readings, weighted engagement, data coverage, and creation-date cohort analysis. |

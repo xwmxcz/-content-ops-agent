@@ -1,6 +1,6 @@
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 from src.models import ContentStyle, ContentType
 
@@ -40,6 +40,35 @@ class SeoRequest(BaseModel):
     content_id: int = Field(..., gt=0)
     provider: str | None = None
     model: str | None = None
+
+
+class ContentEditRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(..., max_length=500)
+    content: str = Field(..., min_length=1, max_length=200_000)
+    tags: list[Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=50)]] = Field(
+        ..., max_length=30
+    )
+    # Opaque token from GET, required even for legacy rows with a null timestamp.
+    expected_updated_at: str | None = Field(..., max_length=64)
+
+    @field_validator("content")
+    @classmethod
+    def nonblank_content(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("正文不能为空")
+        return value
+
+    @field_validator("title")
+    @classmethod
+    def trim_title(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("tags")
+    @classmethod
+    def unique_tags(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(value))
 
 
 class ContentResponse(BaseModel):

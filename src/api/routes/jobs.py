@@ -1,6 +1,6 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 
-from src.api.dependencies import get_store
+from src.api.dependencies import enforce_llm_budget, get_store
 from src.api.schemas.jobs import (
     AgentRunJobRequest,
     ContentGenerationJobRequest,
@@ -20,6 +20,7 @@ def create_content_generation_job(
     request: ContentGenerationJobRequest,
     background_tasks: BackgroundTasks,
     store: ContentStore = Depends(get_store),
+    _budget: None = Depends(enforce_llm_budget),
 ) -> dict:
     return _create_job("content_generation", request.model_dump(mode="json"), background_tasks, store)
 
@@ -29,6 +30,7 @@ def create_agent_run_job(
     request: AgentRunJobRequest,
     background_tasks: BackgroundTasks,
     store: ContentStore = Depends(get_store),
+    _budget: None = Depends(enforce_llm_budget),
 ) -> dict:
     return _create_job("agent_run", request.model_dump(mode="json"), background_tasks, store)
 
@@ -38,6 +40,7 @@ def create_refine_job(
     request: RefineJobRequest,
     background_tasks: BackgroundTasks,
     store: ContentStore = Depends(get_store),
+    _budget: None = Depends(enforce_llm_budget),
 ) -> dict:
     return _create_job("refine", request.model_dump(mode="json"), background_tasks, store)
 
@@ -47,6 +50,7 @@ def create_titles_job(
     request: TitlesJobRequest,
     background_tasks: BackgroundTasks,
     store: ContentStore = Depends(get_store),
+    _budget: None = Depends(enforce_llm_budget),
 ) -> dict:
     return _create_job("titles", request.model_dump(mode="json"), background_tasks, store)
 
@@ -56,6 +60,7 @@ def create_seo_job(
     request: SeoJobRequest,
     background_tasks: BackgroundTasks,
     store: ContentStore = Depends(get_store),
+    _budget: None = Depends(enforce_llm_budget),
 ) -> dict:
     return _create_job("seo", request.model_dump(mode="json"), background_tasks, store)
 

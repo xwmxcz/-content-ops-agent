@@ -49,8 +49,8 @@ class PublicationStore:
     def update_content(self, content_id, **fields):
         self.content.update(fields)
 
-    def save_calendar_event(self, content_id, platform, scheduled_date):
-        self.events.append((content_id, platform, scheduled_date))
+    def save_calendar_event(self, content_id, platform, scheduled_date, *, status="planned"):
+        self.events.append((content_id, platform, scheduled_date, status))
 
     def claim_idempotency_key(self, *, scope, key, args, external_request_id):
         identity = (scope, key)
@@ -232,6 +232,21 @@ async def test_scheduled_job_retry_creates_only_one_calendar_event(publication_s
     await service.execute_publication(publication["id"])
 
     assert len(store.events) == mcp.publish_content.await_count == 1
+    assert store.events[0][3] == "scheduled"
+
+
+@pytest.mark.parametrize("require_future", [False, True])
+def test_past_schedule_is_rejected_on_both_publish_routes(publication_setup, require_future):
+    store, service, mcp, jobs = publication_setup
+    request = XiaohongshuPublishRequest(
+        content_id=1, publish_type="image_post", scheduled_at=datetime.now() - timedelta(minutes=1)
+    )
+    with pytest.raises(HTTPException) as error:
+        publish_routes._enqueue_publication(request, BackgroundTasks(), service, store, require_future=require_future)
+    assert error.value.status_code == 400
+    assert jobs == []
+    assert store.publications == {}
+    mcp.publish_content.assert_not_awaited()
 
 
 @pytest.mark.parametrize("error_type,http_status", [(JobCapacityError, 429), (JobQueueError, 503)])

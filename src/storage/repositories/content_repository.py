@@ -25,6 +25,10 @@ from src.storage.repositories.media_repository import MediaRepositoryMixin
 logger = logging.getLogger(__name__)
 
 
+class ContentEditConflict(ValueError):
+    """The local draft changed after the editor loaded it."""
+
+
 class ContentRepositoryMixin(MediaRepositoryMixin, RepositoryMixin):
     """Content, plus the media serializer that ``delete_content`` reports.
 
@@ -98,6 +102,39 @@ class ContentRepositoryMixin(MediaRepositoryMixin, RepositoryMixin):
             raise
         finally:
             session.close()
+
+    def edit_content(
+        self, content_id: int, *, title: str, content: str, tags: list[str], expected_updated_at: str | None
+    ) -> dict[str, Any] | None:
+        with self._get_session() as session:
+            row = session.query(Content).filter(Content.id == content_id).with_for_update().first()
+            if row is None:
+                return None
+            current_token = row.updated_at.isoformat() if row.updated_at else None
+            if current_token != expected_updated_at:
+                raise ContentEditConflict("内容已被其他操作更新，请重新加载后再保存。当前编辑内容仍保留。")
+            row.title = title
+            row.content = content
+            row.tags = json.dumps(tags, ensure_ascii=False)
+            row.version = (row.version or 1) + 1
+            row.updated_at = (
+                max(datetime.now(), row.updated_at + timedelta(microseconds=1)) if row.updated_at else datetime.now()
+            )
+            session.commit()
+            return self._content_to_dict(row)
+
+    def restore_content(self, content_id: int) -> dict[str, Any] | None:
+        """Explicitly restore an archive as a local draft; platform records stay intact."""
+        with self._get_session() as session:
+            row = session.query(Content).filter(Content.id == content_id).with_for_update().first()
+            if row is None:
+                return None
+            if row.status != "archived":
+                raise ContentEditConflict("只能将已归档内容恢复为草稿，请刷新后重试。")
+            row.status = "draft"
+            row.updated_at = datetime.now()
+            session.commit()
+            return self._content_to_dict(row)
 
     def list_contents(
         self, status=None, content_type=None, limit=50, offset=0, q: str | None = None
@@ -607,7 +644,7 @@ class ContentRepositoryMixin(MediaRepositoryMixin, RepositoryMixin):
     def archive_content(self, content_id: int) -> bool:
         session = self._get_session()
         try:
-            content = session.query(Content).filter(Content.id == content_id).first()
+            content = session.query(Content).filter(Content.id == content_id).with_for_update().first()
             if not content:
                 return False
             content.status = "archived"

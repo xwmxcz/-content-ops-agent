@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, stat
 
 from src.api.dependencies import enforce_llm_budget, get_litellm_client, get_store
 from src.api.schemas.content import (
+    ContentEditRequest,
     ContentMetricsRequest,
     ContentMetricsResponse,
     ContentResponse,
@@ -21,6 +22,7 @@ from src.api.schemas.content import (
 from src.api.services import content_service
 from src.llm.litellm_client import LiteLLMClient, LLMConfigurationError, LLMGenerationError
 from src.storage import ContentStore
+from src.storage.repositories.content_repository import ContentEditConflict
 from src.utils import config
 from src.utils.idempotency import (
     DuplicateRequestInFlight,
@@ -56,6 +58,32 @@ def archive_content(content_id: int = Path(..., gt=0), store: ContentStore = Dep
     if not store.archive_content(content_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Content not found")
     return {"archived": True}
+
+
+@router.put("/{content_id}", response_model=ContentResponse)
+def edit_content(
+    request: ContentEditRequest,
+    content_id: int = Path(..., gt=0),
+    store: ContentStore = Depends(get_store),
+) -> dict:
+    try:
+        content = store.edit_content(content_id, **request.model_dump())
+    except ContentEditConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if content is None:
+        raise HTTPException(status_code=404, detail="Content not found")
+    return content
+
+
+@router.post("/{content_id}/restore", response_model=ContentResponse)
+def restore_content(content_id: int = Path(..., gt=0), store: ContentStore = Depends(get_store)) -> dict:
+    try:
+        content = store.restore_content(content_id)
+    except ContentEditConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if content is None:
+        raise HTTPException(status_code=404, detail="Content not found")
+    return content
 
 
 @router.delete("/{content_id}", response_model=dict)

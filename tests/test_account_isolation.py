@@ -113,6 +113,24 @@ def test_content_crud_calendar_stats_and_idempotency_are_private(accounts):
     assert second.get(f"/api/content/{second_id}").status_code == 200
 
 
+def test_manual_edit_and_archive_restore_require_the_owner(accounts):
+    first, second, _, _ = accounts
+    content_id = create_content(first)
+    original = first.get(f"/api/content/{content_id}").json()
+    payload = {
+        "title": "Owned edit",
+        "content": "Private local edit",
+        "tags": [],
+        "expected_updated_at": original["updated_at"],
+    }
+    assert second.put(f"/api/content/{content_id}", json=payload).status_code == 404
+    assert first.put(f"/api/content/{content_id}", json=payload).status_code == 200
+    first.post(f"/api/content/{content_id}/archive")
+    assert second.post(f"/api/content/{content_id}/restore").status_code == 404
+    assert first.get(f"/api/content/{content_id}").json()["status"] == "archived"
+    assert first.post(f"/api/content/{content_id}/restore").json()["status"] == "draft"
+
+
 def test_chat_history_search_rename_delete_and_send_reject_foreign_threads(accounts):
     first, second, _, _ = accounts
     response = first.post("/api/agent/chat", json={"message": "private transcript marker"})

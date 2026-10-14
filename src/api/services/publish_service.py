@@ -169,7 +169,9 @@ class PublishService:
             elif final_status == "scheduled":
                 self.store.update_content(publication["content_id"], status="scheduled")
                 scheduled_date = datetime.fromisoformat(request_payload["scheduled_at"]).date()
-                self.store.save_calendar_event(publication["content_id"], "xiaohongshu", scheduled_date)
+                self.store.save_calendar_event(
+                    publication["content_id"], "xiaohongshu", scheduled_date, status="scheduled"
+                )
 
             # P2-01: Track success
             duration = time.time() - start_time

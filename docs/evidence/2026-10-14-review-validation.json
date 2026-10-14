@@ -1,0 +1,99 @@
+{
+  "date": "2026-10-14",
+  "phase": "functional-review-and-optimization",
+  "environment": "Windows; project Python venv; isolated local PostgreSQL; locked project dependencies",
+  "backend": {
+    "status": "passed",
+    "passed": 840,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 20,
+    "duration_seconds": 126.36,
+    "skip_reasons": {
+      "standalone_config_checks_run_separately": 19,
+      "gunicorn_posix_only_on_windows": 1
+    },
+    "command": "python -m pytest -q -rs --junitxml=venv/review-final-deps-20261014.xml",
+    "requires_disposable_postgres": true,
+    "executed_after_dependency_updates": true,
+    "warnings": ["Third-party Starlette test client uses the deprecated anyio.abc.BlockingPortal alias"]
+  },
+  "production_config": { "passed": 19, "failed": 0 },
+  "frontend": {
+    "suites": 30,
+    "passed": 359,
+    "failed": 0,
+    "duration_seconds": 12.58,
+    "typecheck": "passed",
+    "production_build": "passed",
+    "executed_after_npm_ci": true
+  },
+  "static_checks": {
+    "ruff_check": "passed",
+    "ruff_format": "passed",
+    "ruff_checked_files": 163,
+    "mypy_source_files": 90,
+    "mypy": "passed",
+    "git_diff_check": "passed"
+  },
+  "dependency_audit": {
+    "npm": {
+      "command": "npm audit --audit-level=high",
+      "scope": "all dependencies",
+      "known_vulnerabilities": 0,
+      "before_production_high_alerts": 3,
+      "fixes": { "vue": "3.5.44", "source-map-js": "1.2.2" }
+    },
+    "python": {
+      "command": "pip-audit -r requirements.lock --no-deps --disable-pip",
+      "scope": "108 dependencies matching the current Windows environment markers",
+      "known_vulnerabilities": 0,
+      "before_alerts": 1,
+      "fixes": { "multidict": "6.9.1" },
+      "pip_check": "passed"
+    }
+  },
+  "regression_coverage": [
+    "Manual edits retain media, calendar entries, publication records and existing status",
+    "Stale timestamps return 409 and simultaneous edits produce exactly one successful writer",
+    "Archive changes invalidate previous edit tokens; restore returns only archived content to draft",
+    "Edit and restore are isolated across two authenticated user accounts",
+    "Markdown exports use complete detail content and include title and tags",
+    "Failed memory loads cannot be saved; in-flight saves preserve subsequent typing",
+    "Unsaved memory navigation, reload confirmation, Unicode counts and stale search suppression",
+    "New and legacy accepted platform schedules cannot be edited or deleted locally",
+    "N-day calendar windows and past scheduled_at rejection on both publishing routes",
+    "All five LLM background job endpoints reject rate-limited requests before enqueue",
+    "Image upload size boundary and incomplete-file cleanup"
+  ],
+  "browser_smoke": [
+    "Authenticated test account edits and saves title, body and deduplicated tags",
+    "Markdown download read from disk confirms full text and tags",
+    "Archived test content restored to local draft",
+    "Memory dirty-navigation prompt, save and reload persistence",
+    "375x812 editor viewport has no horizontal overflow and visible footer actions",
+    "Content library reload and saved detail rendering verified after Vue dependency update"
+  ],
+  "screenshots": [
+    "docs/screenshots/review-content-20261014.jpg",
+    "docs/screenshots/review-editor-mobile-20261014.jpg"
+  ],
+  "not_executed": [
+    "Docker/TLS full deployment: Docker daemon unavailable",
+    "Real Redis/RQ worker failure injection",
+    "Live LLM providers",
+    "Live Xiaohongshu publishing: browser login status uses a test double",
+    "Load testing at production scale",
+    "Linux-only conditional Python dependency audit"
+  ],
+  "schema_migration_required": false,
+  "business_database_changed": false,
+  "deployed": false,
+  "git_commit_created": false,
+  "cleanup": {
+    "temporary_browser_tab": "closed",
+    "viewport_override": "reset",
+    "local_api_and_vite": "stopped; no listeners on the temporary ports",
+    "disposable_postgresql": "stopped; pg_ctl confirmed no server running"
+  }
+}

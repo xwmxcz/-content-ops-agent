@@ -92,14 +92,43 @@ def test_guard_still_requires_authentication(monkeypatch):
 
 def test_llm_spending_routes_declare_the_guard():
     """Regression: a new LLM-spending route must not silently skip the guard."""
-    from src.api.routes import agent, content
+    from src.api.routes import agent, content, jobs
 
-    guarded = set()
-    for module in (agent.router, content.router):
-        for route in module.routes:
-            for dependency in getattr(route, "dependencies", []) or []:
-                guarded.add(getattr(dependency, "dependency", None))
-            for param in getattr(getattr(route, "endpoint", None), "__defaults__", ()) or []:
-                guarded.add(getattr(param, "dependency", None))
+    for router, paths in (
+        (agent.router, {"/run", "/runs", "/runs/{run_id}/resume", "/chat", "/chat/stream"}),
+        (content.router, {"/generate", "/refine", "/titles", "/seo"}),
+        (jobs.router, {"/content-generation", "/agent-run", "/refine", "/titles", "/seo"}),
+    ):
+        routes = {route.path: route for route in router.routes}
+        for path in paths:
+            assert any(dep.call is enforce_llm_budget for dep in routes[path].dependant.dependencies), path
 
-    assert enforce_llm_budget in guarded, "no route declared enforce_llm_budget"
+
+@pytest.mark.parametrize(
+    "path,payload",
+    [
+        ("content-generation", {"topic": "Test", "content_type": "blog"}),
+        ("agent-run", {"topic": "Test", "content_type": "blog"}),
+        ("refine", {"content_id": 1}),
+        ("titles", {"topic": "Test"}),
+        ("seo", {"content_id": 1}),
+    ],
+)
+def test_exhausted_budget_blocks_background_jobs_before_enqueue(monkeypatch, path, payload):
+    from unittest.mock import Mock
+
+    from fastapi.testclient import TestClient
+
+    from src.api.main import app
+    from src.api.routes import jobs
+
+    monkeypatch.setattr(config, "LLM_RATE_LIMIT_PER_MINUTE", 1)
+    enforce_llm_budget(_Request())
+    create = Mock(side_effect=AssertionError("Throttled requests cannot enqueue work"))
+    monkeypatch.setattr(jobs, "_create_job", create)
+    with TestClient(app) as client:
+        response = client.post(f"/api/jobs/{path}", json=payload)
+        assert response.status_code == 429, response.text
+        assert response.headers["Retry-After"] == "60"
+        assert client.get("/api/jobs/missing").status_code == 404
+    create.assert_not_called()

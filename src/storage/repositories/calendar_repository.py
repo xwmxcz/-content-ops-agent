@@ -2,12 +2,29 @@
 
 import logging
 from datetime import date
-from typing import Any
+from typing import Any, Literal
 
-from src.storage.models import CalendarEvent, Content
+from sqlalchemy import case, exists, func
+
+from src.storage.models import CalendarEvent, Content, PlatformPublication
 from src.storage.repositories.base import RepositoryMixin, assigned_pk
 
 logger = logging.getLogger(__name__)
+
+
+def _platform_schedule_exists():
+    # Before the status fix, accepted platform schedules were saved as planned.
+    # Conservatively protect matching legacy rows, including their UI actions.
+    return (
+        exists()
+        .where(
+            PlatformPublication.content_id == CalendarEvent.content_id,
+            PlatformPublication.platform == CalendarEvent.platform,
+            PlatformPublication.status == "scheduled",
+            func.date(PlatformPublication.scheduled_at) == CalendarEvent.scheduled_date,
+        )
+        .correlate(CalendarEvent)
+    )
 
 
 class CalendarRepositoryMixin(RepositoryMixin):
@@ -17,11 +34,18 @@ class CalendarRepositoryMixin(RepositoryMixin):
     class, which is why this is a mixin rather than a standalone object.
     """
 
-    def save_calendar_event(self, content_id: int, platform: str, scheduled_date: date) -> int:
+    def save_calendar_event(
+        self,
+        content_id: int,
+        platform: str,
+        scheduled_date: date,
+        *,
+        status: Literal["planned", "scheduled"] = "planned",
+    ) -> int:
         session = self._get_session()
         try:
             event = CalendarEvent(
-                content_id=content_id, platform=platform, scheduled_date=scheduled_date, status="planned"
+                content_id=content_id, platform=platform, scheduled_date=scheduled_date, status=status
             )
             session.add(event)
             session.commit()
@@ -35,7 +59,13 @@ class CalendarRepositoryMixin(RepositoryMixin):
     def get_calendar_events(self, start_date=None, end_date=None) -> list[dict[str, Any]]:
         session = self._get_session()
         try:
-            query = session.query(CalendarEvent, Content).join(Content, CalendarEvent.content_id == Content.id)
+            effective_status = case(
+                ((CalendarEvent.status == "planned") & _platform_schedule_exists(), "scheduled"),
+                else_=CalendarEvent.status,
+            )
+            query = session.query(CalendarEvent, Content, effective_status).join(
+                Content, CalendarEvent.content_id == Content.id
+            )
             if start_date:
                 query = query.filter(CalendarEvent.scheduled_date >= start_date)
             if end_date:
@@ -48,11 +78,11 @@ class CalendarRepositoryMixin(RepositoryMixin):
                     "content_id": event.content_id,
                     "platform": event.platform,
                     "scheduled_date": event.scheduled_date.isoformat(),
-                    "status": event.status,
+                    "status": event_status,
                     "content_title": content.title,
                     "content_type": content.content_type,
                 }
-                for event, content in results
+                for event, content, event_status in results
             ]
         finally:
             session.close()
@@ -62,7 +92,12 @@ class CalendarRepositoryMixin(RepositoryMixin):
             event = session.query(CalendarEvent).filter(CalendarEvent.id == event_id).with_for_update().first()
             if event is None:
                 return False
-            if event.status != "planned":
+            if (
+                event.status != "planned"
+                or session.query(CalendarEvent.id)
+                .filter(CalendarEvent.id == event_id, _platform_schedule_exists())
+                .first()
+            ):
                 raise ValueError("Only local planned events can be edited; manage platform schedules on the platform")
             event.content_id = content_id
             event.platform = platform
@@ -75,7 +110,12 @@ class CalendarRepositoryMixin(RepositoryMixin):
             event = session.query(CalendarEvent).filter(CalendarEvent.id == event_id).with_for_update().first()
             if event is None:
                 return False
-            if event.status != "planned":
+            if (
+                event.status != "planned"
+                or session.query(CalendarEvent.id)
+                .filter(CalendarEvent.id == event_id, _platform_schedule_exists())
+                .first()
+            ):
                 raise ValueError("Only local planned events can be deleted; manage platform schedules on the platform")
             session.delete(event)
             session.commit()

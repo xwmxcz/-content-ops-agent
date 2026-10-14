@@ -1494,7 +1494,9 @@ def test_schedule_publication_marks_content_scheduled_and_creates_calendar_event
     assert store.get_content(content_id)["status"] == "scheduled"
 
     events = store.get_calendar_events(datetime.now().date(), (datetime.now() + timedelta(days=2)).date())
-    assert any(event["content_id"] == content_id and event["platform"] == "xiaohongshu" for event in events)
+    event = next(event for event in events if event["content_id"] == content_id and event["platform"] == "xiaohongshu")
+    assert event["status"] == "scheduled"
+    assert client.delete(f"/api/calendar/events/{event['event_id']}").status_code == 409
 
 
 def test_archive_content_updates_status(client, store):

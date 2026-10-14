@@ -157,6 +157,7 @@ class Config:
     # Media and MCP integration
     MEDIA_STORAGE_ROOT = os.getenv("MEDIA_STORAGE_ROOT", "data/media")
     MEDIA_MAX_IMAGE_COUNT = int(os.getenv("MEDIA_MAX_IMAGE_COUNT", "9"))
+    MEDIA_MAX_IMAGE_SIZE_MB = int(os.getenv("MEDIA_MAX_IMAGE_SIZE_MB", "20"))
     MEDIA_MAX_VIDEO_SIZE_MB = int(os.getenv("MEDIA_MAX_VIDEO_SIZE_MB", "512"))
     WEB_SEARCH_PROVIDER = os.getenv("WEB_SEARCH_PROVIDER", "auto").lower()
     SERPER_API_KEY = os.getenv("SERPER_API_KEY", "")
@@ -227,6 +228,9 @@ class Config:
             "PIPELINE_DISPATCH_TIMEOUT_SECONDS",
             "JOB_REAPER_INTERVAL_SECONDS",
             "JOB_REAPER_BATCH_SIZE",
+            "MEDIA_MAX_IMAGE_COUNT",
+            "MEDIA_MAX_IMAGE_SIZE_MB",
+            "MEDIA_MAX_VIDEO_SIZE_MB",
         ):
             if getattr(cls, name) <= 0:
                 raise ValueError(f"{name} must be positive")

@@ -51,17 +51,18 @@ def upload_media(
 
     original_name = Path(file.filename or f"{media_type}.bin")
     target_path = target_dir / f"{uuid4().hex}{original_name.suffix.lower()}"
-    max_size = config.MEDIA_MAX_VIDEO_SIZE_MB * 1024 * 1024 if media_type == "video" else None
+    size_limit_mb = config.MEDIA_MAX_VIDEO_SIZE_MB if media_type == "video" else config.MEDIA_MAX_IMAGE_SIZE_MB
+    max_size = size_limit_mb * 1024 * 1024
     size = 0
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
         with target_path.open("wb") as destination:
             while chunk := file.file.read(1024 * 1024):
                 size += len(chunk)
-                if max_size is not None and size > max_size:
+                if size > max_size:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"Video file exceeds {config.MEDIA_MAX_VIDEO_SIZE_MB} MB",
+                        detail=f"{'Video' if media_type == 'video' else 'Image'} file exceeds {size_limit_mb} MB",
                     )
                 destination.write(chunk)
         if not size:

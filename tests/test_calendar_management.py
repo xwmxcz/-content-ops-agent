@@ -1,6 +1,6 @@
 """Calendar navigation and corrections must work outside the default future window."""
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -48,6 +48,16 @@ def test_legacy_days_query_still_works(client, store):
     assert len(client.get("/api/calendar/events?days=60").json()) == 1
 
 
+@pytest.mark.parametrize("days", [1, 7, 60])
+def test_days_window_contains_exactly_the_requested_number_of_dates(client, store, days):
+    content_id = content(store)
+    for offset in range(days + 1):
+        store.save_calendar_event(content_id, "blog", date.today() + timedelta(days=offset))
+    events = client.get(f"/api/calendar/events?days={days}").json()
+    assert len(events) == days
+    assert events[-1]["scheduled_date"] == (date.today() + timedelta(days=days - 1)).isoformat()
+
+
 @pytest.mark.parametrize(
     "params",
     [
@@ -93,6 +103,33 @@ def test_platform_records_cannot_be_changed_as_local_plans(client, store, status
     assert client.put(f"/api/calendar/events/{event_id}", json=payload).status_code == 409
     assert client.delete(f"/api/calendar/events/{event_id}").status_code == 409
     assert store.get_calendar_events()[0]["status"] == status
+
+
+def test_scheduled_creation_and_legacy_platform_rows_are_protected(client, store):
+    content_id = content(store)
+    scheduled = store.save_calendar_event(content_id, "blog", date(2030, 1, 1), status="scheduled")
+    legacy = store.save_calendar_event(content_id, "xiaohongshu", date(2030, 2, 1))
+    local = store.save_calendar_event(content_id, "xiaohongshu", date(2030, 2, 2))
+    store.create_publication(
+        content_id, "xiaohongshu", "image_post", "scheduled", "Title", "Body", datetime(2030, 2, 1, 10)
+    )
+    states = {row["event_id"]: row["status"] for row in store.get_calendar_events()}
+    assert states == {scheduled: "scheduled", legacy: "scheduled", local: "planned"}
+    payload = {"content_id": content_id, "platform": "blog", "scheduled_date": "2030-03-01"}
+    for event_id in (scheduled, legacy):
+        assert client.put(f"/api/calendar/events/{event_id}", json=payload).status_code == 409
+        assert client.delete(f"/api/calendar/events/{event_id}").status_code == 409
+    assert client.delete(f"/api/calendar/events/{local}").status_code == 204
+
+
+def test_failed_platform_request_does_not_lock_a_local_plan(client, store):
+    content_id = content(store)
+    event_id = store.save_calendar_event(content_id, "xiaohongshu", date(2030, 2, 1))
+    store.create_publication(
+        content_id, "xiaohongshu", "image_post", "failed", "Title", "Body", datetime(2030, 2, 1, 10)
+    )
+    assert store.get_calendar_events()[0]["status"] == "planned"
+    assert client.delete(f"/api/calendar/events/{event_id}").status_code == 204
 
 
 def test_calendar_mutations_preserve_workspace_isolation(client, store):

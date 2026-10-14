@@ -3,19 +3,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import { defineComponent, h } from 'vue'
 import History from '../src/views/History.vue'
+import ContentEditorDialog from '../src/components/ContentEditorDialog.vue'
 import type { ContentItem } from '../src/api/content'
 import { setAuthToken } from '../src/api'
 
 const mocks = vi.hoisted(() => ({
-  getContents: vi.fn(), getContent: vi.fn(), archiveContent: vi.fn(), deleteContentLocal: vi.fn(),
+  getContents: vi.fn(), getContent: vi.fn(), archiveContent: vi.fn(), deleteContentLocal: vi.fn(), restoreContent: vi.fn(),
   getContentMedia: vi.fn(), uploadMedia: vi.fn(), deleteMedia: vi.fn(),
   getContentPublications: vi.fn(), getXiaohongshuLoginStatus: vi.fn(),
   publishToXiaohongshu: vi.fn(), scheduleXiaohongshuPublication: vi.fn(),
-  error: vi.fn(), success: vi.fn(), warning: vi.fn()
+  error: vi.fn(), success: vi.fn(), warning: vi.fn(), downloadContent: vi.fn()
 }))
 vi.mock('../src/api/content', () => mocks)
 vi.mock('../src/api/media', () => mocks)
 vi.mock('../src/api/publish', () => mocks)
+vi.mock('../src/utils/contentExport', () => mocks)
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
 vi.mock('element-plus/es/components/message/index', () => ({ ElMessage: mocks }))
 
@@ -70,6 +72,37 @@ beforeEach(() => {
 })
 
 describe('history content isolation', () => {
+  it('opens the editor with full content and reflects saved text in the detail', async () => {
+    const wrapper = mountHistory()
+    await flushPromises()
+    await wrapper.findAll('.library-card')[0].trigger('click')
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === '手动编辑')!.trigger('click')
+    const editor = wrapper.findComponent(ContentEditorDialog)
+    expect(editor.props('open')).toBe(true)
+    expect(editor.props('content')).toEqual(content(1))
+    editor.vm.$emit('saved', { ...content(1), title: '修改后标题', content: '修改后全文' })
+    await flushPromises()
+    expect(wrapper.get('.content-preview').text()).toBe('修改后全文')
+    expect(wrapper.get('.detail-section h2').text()).toBe('修改后标题')
+  })
+
+  it('restores an archived item and exports its full detail rather than its preview', async () => {
+    const full = { ...content(1), content: '完整正文'.repeat(300), status: 'archived' }
+    mocks.getContent.mockResolvedValueOnce(full)
+    mocks.restoreContent.mockResolvedValueOnce({ ...full, status: 'draft' })
+    const wrapper = mountHistory()
+    await flushPromises()
+    await wrapper.findAll('.library-card')[0].trigger('click')
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === '恢复为草稿')!.trigger('click')
+    await flushPromises()
+    expect(mocks.restoreContent).toHaveBeenCalledExactlyOnceWith(1)
+    expect(wrapper.findAll('button').some(button => button.text() === '恢复为草稿')).toBe(false)
+    await wrapper.findAll('button').find(button => button.text() === '导出 Markdown')!.trigger('click')
+    expect(mocks.downloadContent).toHaveBeenCalledWith({ ...full, status: 'draft' })
+  })
+
   it('reuses fresh details when returning to an already visited content', async () => {
     const wrapper = mountHistory()
     await flushPromises()

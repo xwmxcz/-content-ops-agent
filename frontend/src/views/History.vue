@@ -107,9 +107,12 @@
             <h2 v-if="selected">{{ selected.title || '未命名内容' }}</h2>
           </div>
           <div v-if="selected" class="detail-actions">
+            <el-button :icon="Edit" :disabled="selectionMode" @click="startEditing">手动编辑</el-button>
             <el-button type="primary" plain :icon="Edit" :disabled="!selected || selectionMode" @click="goRefine">去打磨</el-button>
             <el-button text :icon="DocumentCopy" :disabled="!selected?.content" @click="copyContent">复制</el-button>
-            <el-button text :icon="FolderDelete" :disabled="!selected || selectionMode" @click="archiveSelectedSingle">归档</el-button>
+            <el-button text :icon="Download" @click="exportSelected">导出 Markdown</el-button>
+            <el-button v-if="selected.status === 'archived'" text :loading="restoring" :disabled="selectionMode" @click="restoreSelected">恢复为草稿</el-button>
+            <el-button v-else text :icon="FolderDelete" :disabled="!selected || selectionMode" @click="archiveSelectedSingle">归档</el-button>
             <el-button text type="danger" :icon="Delete" :disabled="!selected || selectionMode" @click="deleteSelectedSingle">
               删除本地内容
             </el-button>
@@ -204,7 +207,7 @@
 
                 <div class="field">
                   <span>标题覆盖</span>
-                  <el-input v-model="publishForm.title" placeholder="可选，不填则使用当前标题" />
+                  <el-input v-model="publishForm.title" :placeholder="selected.title || '可选，不填则使用当前标题'" />
                 </div>
 
                 <div class="field field-wide">
@@ -275,6 +278,7 @@
     </section>
 
     <MetricsImportDialog v-model:open="metricsImportOpen" @imported="onMetricsImported" />
+    <ContentEditorDialog v-model:open="editorOpen" :content="editorTarget" @saved="onContentSaved" />
   </div>
 </template>
 
@@ -297,11 +301,13 @@ import 'element-plus/es/components/date-picker/style/css'
 import 'element-plus/es/components/empty/style/css'
 import 'element-plus/es/components/message-box/style/css'
 import 'element-plus/es/components/radio/style/css'
-import { Clock, DataAnalysis, Delete, Document, DocumentCopy, Edit, FolderDelete, Plus, Promotion, Refresh, Search, UploadFilled, VideoPlay } from '@element-plus/icons-vue'
+import { Clock, DataAnalysis, Delete, Document, DocumentCopy, Download, Edit, FolderDelete, Plus, Promotion, Refresh, Search, UploadFilled, VideoPlay } from '@element-plus/icons-vue'
 import ContentCard from '../components/ContentCard.vue'
 import ContentMetricsPanel from '../components/ContentMetricsPanel.vue'
 import MetricsImportDialog from '../components/MetricsImportDialog.vue'
-import { archiveContent, deleteContentLocal, getContent, getContents, type ContentListParams } from '../api/content'
+import ContentEditorDialog from '../components/ContentEditorDialog.vue'
+import { archiveContent, deleteContentLocal, getContent, getContents, restoreContent, type ContentItem, type ContentListParams } from '../api/content'
+import { downloadContent } from '../utils/contentExport'
 import { deleteMedia, getContentMedia, uploadMedia } from '../api/media'
 import { extractPublication, waitForJobResult } from '../api/jobs'
 import {
@@ -339,6 +345,9 @@ const loadingMore = contentList.isFetchingNextPage
 const hasMore = computed(() => !searchPending.value && contentList.hasNextPage.value)
 const listError = computed(() => searchPending.value ? '' : contentList.error.value?.message || '')
 const selectedId = ref<number>()
+const editorOpen = ref(false)
+const editorTarget = ref<ContentItem | null>(null)
+const restoring = ref(false)
 const detailEnabled = computed(() => workspaceSessionReady.value && selectedId.value != null)
 const detail = useQuery({
   queryKey: computed(() => workspaceKeys.content(selectedId.value ?? 0)), enabled: detailEnabled,
@@ -418,9 +427,6 @@ watch(() => query.value.trim(), () => {
   searchTimer = setTimeout(() => { void load() }, 300)
 })
 watch(detail.error, error => { if (error) ElMessage.error(error.message) })
-watch(selected, (content, previous) => {
-  if (content && content.id !== previous?.id) publishForm.title = content.title || ''
-})
 watch(workspaceSessionId, () => {
   clearTimeout(searchTimer)
   query.value = ''
@@ -429,6 +435,8 @@ watch(workspaceSessionId, () => {
   activeListParams.value = {}
   searchPending.value = false
   resetDetail()
+  editorOpen.value = false
+  editorTarget.value = null
   exitSelectionMode()
 }, { flush: 'sync' })
 
@@ -527,6 +535,37 @@ async function loadPublications(contentId: number) {
 function goRefine() {
   if (!selected.value) return
   void router.push({ path: '/refine', query: { id: String(selected.value.id) } })
+}
+
+function startEditing() {
+  if (!selected.value || selectionMode.value) return
+  editorTarget.value = selected.value
+  editorOpen.value = true
+}
+
+function onContentSaved(content: ContentItem) {
+  queryClient.setQueryData(workspaceKeys.content(content.id), content)
+}
+
+function exportSelected() {
+  if (!selected.value) return
+  try { downloadContent(selected.value) }
+  catch { ElMessage.error('导出失败，请重试或复制正文') }
+}
+
+async function restoreSelected() {
+  if (!selected.value || selected.value.status !== 'archived' || restoring.value) return
+  const session = workspaceSessionId.value
+  const id = selected.value.id
+  restoring.value = true
+  try {
+    const restored = await restoreContent(id)
+    if (session !== workspaceSessionId.value) return
+    onContentSaved(restored)
+    ElMessage.success('已恢复为本地草稿')
+  } catch (error) {
+    if (session === workspaceSessionId.value) ElMessage.error((error as Error).message)
+  } finally { restoring.value = false }
 }
 
 async function copyContent() {
