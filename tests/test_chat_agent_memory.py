@@ -101,6 +101,29 @@ def service(store, file_memory):
 
 
 class TestFrozenSystemPrompt:
+    def test_cross_worker_epoch_refresh_rebuilds_cached_prompt(self, file_memory):
+        class _StubStore:
+            user_id = "user_multi_worker"
+
+        svc = ChatAgentService(
+            store=_StubStore(),  # type: ignore[arg-type]
+            llm=FakeLLMClient(),  # type: ignore[arg-type]
+            model_factory=CapturingChatFactory(),
+            file_memory=file_memory,
+            context_engine=None,
+        )
+        first_prompt = svc._get_frozen_system_prompt("t1")
+        assert "跨进程刷新规则" not in first_prompt
+
+        # Simulate another worker saving memory and bumping the disk epoch while
+        # this worker's in-process _FROZEN_PROMPTS still holds the old entry.
+        file_memory.add(AGENT, "跨进程刷新规则:统一使用二级标题")
+        assert "跨进程刷新规则" not in svc._get_frozen_system_prompt("t1")
+
+        file_memory.bump_snapshot_epoch("t1")
+        refreshed_prompt = svc._get_frozen_system_prompt("t1")
+        assert "跨进程刷新规则" in refreshed_prompt
+
     @pytest.mark.asyncio
     async def test_two_turns_share_same_frozen_prefix(self, service):
         svc, factory = service

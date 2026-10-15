@@ -22,6 +22,7 @@ export function onWorkspaceSessionReset(listener: () => void) {
 }
 
 const ACTIVE_THREAD_STORAGE_KEY = 'chat:activeThreadId'
+export const ACTIVE_STUDIO_SESSION_KEY = 'studio:activeSession'
 
 export function readActiveThreadFromStorage(): string | undefined {
   try {
@@ -45,4 +46,9 @@ export function clearWorkspaceSession() {
   sessionId.value = newSessionId()
   resetListeners.forEach(listener => listener())
   writeActiveThreadToStorage(undefined)
+  try {
+    sessionStorage.removeItem(ACTIVE_STUDIO_SESSION_KEY)
+  } catch {
+    // Ignore storage errors when disabled.
+  }
 }

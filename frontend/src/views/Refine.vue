@@ -321,32 +321,36 @@ onBeforeUnmount(() => { sourceRequest += 1 })
 <style scoped>
 .refine-page {
   display: grid;
-  gap: 28px;
-  max-width: 1520px;
-  padding: 32px 36px 40px;
-  background: var(--c-bg);
+  gap: 24px;
+  width: 100%;
+  max-width: 1760px;
+  padding: 28px 36px 44px;
+  background: transparent;
 }
 
 .refine-hero {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
-  gap: 16px;
+  gap: 20px;
+  padding: 4px 0 22px;
+  border-bottom: 1px solid var(--c-border);
 }
 
 .refine-hero .page-title {
   margin: 0;
+  color: var(--c-text);
   font-family: var(--font-display);
-  font-size: 30px;
-  font-weight: 600;
-  letter-spacing: -0.6px;
-  line-height: 1.3;
+  font-size: clamp(23px, 2.1vw, 29px);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  line-height: 1.25;
 }
 
 .refine-hero .page-subtitle {
-  margin-top: 8px;
+  margin-top: 6px;
   color: var(--c-text-secondary);
-  font-size: 14px;
+  font-size: 13.5px;
 }
 
 .hero-actions {
@@ -358,16 +362,10 @@ onBeforeUnmount(() => { sourceRequest += 1 })
 
 .refine-grid {
   display: grid;
-  /* A hard right-column cap rather than `1fr`: on a 1600px page the right column
-     otherwise took roughly three times the left and the textarea stretched to a
-     measure that is unpleasant to read and write in. */
-  grid-template-columns: minmax(270px, 340px) minmax(0, 760px);
+  grid-template-columns: minmax(340px, 410px) minmax(0, 1fr);
   grid-template-areas: 'source action' 'source result';
   gap: 24px;
   align-items: start;
-  /* Keeps the two columns optically together on very wide screens instead of
-     pinning the left column to the page edge. */
-  justify-content: center;
 }
 
 .source-section,
@@ -390,40 +388,39 @@ onBeforeUnmount(() => { sourceRequest += 1 })
 
 .result-section {
   grid-area: result;
-  /* Tall enough that the empty state has room to sit centred. The panel's height
-     is otherwise content-driven, so a smaller floor made `1fr` a no-op and left
-     the copy pinned near the top. */
   min-height: 420px;
   align-content: stretch;
-  /* Header on the first row; the body or empty state takes the remaining height. */
   grid-template-rows: auto minmax(0, 1fr);
 }
 
 .section-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--c-border-soft);
 }
 
 .section-head h2 {
   margin: 0;
   color: var(--c-text);
-  font-size: 17px;
-  font-weight: 600;
-  letter-spacing: 0;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
 }
 
 .section-pill {
   display: inline-flex;
   align-items: center;
   min-height: 25px;
-  padding: 2px 9px;
-  border: 1px solid var(--c-border-soft);
+  padding: 2px 10px;
+  border: 1px solid var(--c-border);
   border-radius: 999px;
   color: var(--c-text-secondary);
-  background: var(--c-bg-soft);
+  background: #faf9f6;
   font-size: 12px;
+  font-weight: 600;
   letter-spacing: 0;
 }
 
@@ -446,7 +443,7 @@ onBeforeUnmount(() => { sourceRequest += 1 })
 
 .recent-list {
   display: grid;
-  gap: 8px;
+  gap: 10px;
   max-height: 380px;
   overflow-y: auto;
   padding-right: 4px;
@@ -470,38 +467,40 @@ onBeforeUnmount(() => { sourceRequest += 1 })
 
 .recent-card {
   display: grid;
-  gap: 7px;
-  padding: 14px;
-  border: 1px solid var(--c-border-soft);
-  border-radius: var(--r-control);
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
   color: var(--c-text);
-  background: var(--c-surface);
+  background: #faf9f6;
   text-align: left;
   cursor: pointer;
-  transition: border-color 100ms ease, background-color 100ms ease;
+  transition: border-color 150ms ease, box-shadow 150ms ease, background-color 150ms ease;
 }
 
 .recent-card:hover {
-  border-color: var(--c-accent);
-  background: var(--c-bg-soft);
+  border-color: var(--c-border-hover);
+  background: #ffffff;
+  box-shadow: 0 4px 12px -4px rgba(24, 24, 27, 0.06);
 }
 
 .recent-card:focus-visible {
-  outline: 2px solid var(--c-accent);
+  outline: 2px solid var(--c-text);
   outline-offset: -2px;
 }
 
 .recent-card.active {
-  border-color: var(--c-accent);
-  background: var(--c-accent-soft);
+  border-color: var(--c-text);
+  background: #ffffff;
+  box-shadow: inset 3px 0 0 var(--c-text), 0 4px 12px -4px rgba(24, 24, 27, 0.07);
 }
 
 .recent-card strong {
   color: var(--c-text);
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 600;
   letter-spacing: 0;
-  line-height: 1.55;
+  line-height: 1.5;
 }
 
 .recent-card span,
@@ -524,9 +523,9 @@ onBeforeUnmount(() => { sourceRequest += 1 })
 
 .source-preview {
   padding: 16px;
-  border: 1px solid var(--c-border-soft);
+  border: 1px solid var(--c-border);
   border-radius: var(--r-control);
-  background: var(--c-bg-soft);
+  background: #faf9f6;
   max-height: 320px;
   overflow-y: auto;
   font-size: 13px;
@@ -586,7 +585,7 @@ onBeforeUnmount(() => { sourceRequest += 1 })
 }
 
 .model-settings summary:focus-visible {
-  outline: 2px solid var(--c-accent);
+  outline: 2px solid var(--c-text);
   outline-offset: 4px;
 }
 
@@ -607,37 +606,40 @@ onBeforeUnmount(() => { sourceRequest += 1 })
   display: grid;
   justify-items: center;
   align-content: center;
-  /* Stretches to the grid row so the copy sits optically centred instead of at
-     the top of a fixed-height box, which left dead space beneath it. */
-  min-height: 260px;
-  padding: 24px 16px;
+  min-height: 280px;
+  padding: 32px 20px;
+  border: 1px dashed var(--c-border-hover);
+  border-radius: 12px;
+  background: #faf9f6;
   text-align: center;
 }
 
 .result-icon {
   display: grid;
   place-items: center;
-  width: 54px;
+  width: 56px;
   height: 60px;
-  margin-bottom: 20px;
+  margin-bottom: 18px;
   border: 1px solid var(--c-border);
   border-radius: 12px;
-  color: var(--c-accent);
-  background: var(--c-bg-soft);
+  color: var(--c-text);
+  background: #ffffff;
+  box-shadow: 0 6px 18px -4px rgba(24, 24, 27, 0.06);
   font-size: 24px;
 }
 
 .result-empty h3 {
   margin: 0;
-  font-family: var(--font-editorial);
-  font-size: 22px;
-  font-weight: 500;
-  line-height: 1.5;
+  color: var(--c-text);
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: 650;
+  line-height: 1.4;
 }
 
 .result-empty p {
-  margin: 12px 0 0;
-  color: var(--c-text-tertiary);
+  margin: 8px 0 0;
+  color: var(--c-text-secondary);
   font-size: 13px;
   line-height: 1.7;
 }
@@ -683,7 +685,7 @@ onBeforeUnmount(() => { sourceRequest += 1 })
   }
 
   .result-empty h3 {
-    font-size: 20px;
+    font-size: 18px;
   }
 }
 </style>

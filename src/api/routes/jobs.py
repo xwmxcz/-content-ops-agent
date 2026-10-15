@@ -1,10 +1,12 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 
 from src.api.dependencies import enforce_llm_budget, get_store
 from src.api.schemas.jobs import (
     AgentRunJobRequest,
     ContentGenerationJobRequest,
     JobResponse,
+    JobStatus,
+    JobType,
     RefineJobRequest,
     SeoJobRequest,
     TitlesJobRequest,
@@ -13,6 +15,16 @@ from src.jobs.queue import JobCapacityError, JobQueueError, create_and_enqueue_j
 from src.storage import ContentStore
 
 router = APIRouter()
+
+
+@router.get("", response_model=list[JobResponse])
+def list_jobs(
+    status_filter: JobStatus | None = Query(default=None, alias="status"),
+    job_type: JobType | None = Query(default=None),
+    limit: int = Query(default=30, ge=1, le=100),
+    store: ContentStore = Depends(get_store),
+) -> list[dict]:
+    return store.list_jobs(status=status_filter, job_type=job_type, limit=limit)
 
 
 @router.post("/content-generation", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)

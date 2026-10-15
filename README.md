@@ -22,14 +22,15 @@ multi-tenant SaaS.
 
 | Area | Capability |
 | --- | --- |
-| Studio | Versioned LangGraph plan-then-execute pipeline with durable application checkpoints and researcher, strategist, writer, editor, reviewer, and fact-checker sub-agents. |
-| Chat Agent | Persistent tool-calling assistant with thread history, content tools, planning tools, memory tools, and session search. |
-| Content Library | Saved drafts, manual editing with conflict detection, archive restoration, Markdown export, media assets, and searchable history. |
-| Refinement | Rewrite or improve saved content while preserving source lineage. |
-| Calendar | Visible-month agenda, editable local plans, and a separate 60-day publishing summary. |
-| Stats | Content distribution plus platform readings, weighted engagement, data coverage, and creation-date cohort analysis. |
-| Memory | Hermes-style file memory using `MEMORY.md` and `USER.md`, plus context compression and curator support. |
-| Docker | One Compose stack for frontend, API, worker, PostgreSQL, and Redis. |
+| **Studio** | Versioned LangGraph plan-then-execute pipeline with durable application checkpoints, SSE live streaming with polling fallback, and researcher, strategist, writer, editor, reviewer, and fact-checker sub-agents. |
+| **Chat Agent** | Persistent tool-calling assistant with thread history, content tools, planning tools, memory tools, session search, and context compression. |
+| **Content Library** | Saved drafts, manual editing with optimistic conflict detection, archive restoration, Markdown export, media assets, and searchable history. |
+| **Refinement** | Rewrite, polish, expand, or condense saved content while preserving source lineage. |
+| **Calendar** | Visible-month agenda, editable local plans, and a separate 60-day publishing summary. |
+| **Stats** | Content distribution plus platform readings, weighted engagement, data coverage, and creation-date cohort analysis. |
+| **Memory** | Hermes-style 4-layer file memory using `MEMORY.md` and `USER.md`, ETag (`If-Match`) optimistic concurrency protection, context compression, and curator support. |
+| **Editorial Paper UI** | Refined warm-paper light theme (`#f7f6f2` alabaster canvas, `#f2f0ea` linen navigation, `#ffffff` crisp cards, `#18181b` charcoal ink) crafted for distraction-free long-form reading and operations. |
+| **Docker** | One Compose stack for `frontend`, `migrate`, `api`, `worker`, `reaper`, `postgres`, and `redis`. |
 
 ## Architecture
 
@@ -107,7 +108,7 @@ LLM_PROVIDER=deepseek
 DEEPSEEK_API_KEY=your_deepseek_key_here
 ```
 
-Replace every `CHANGE_ME` credential in `.env.docker.example`; Docker uses the fail-closed production profile. Authentication is always required. Strong independent signing/PostgreSQL/Redis secrets, migration validation, and an explicit HTTPS public origin are required; account passwords are set during registration. Stable web-search keys remain optional.
+Replace every `CHANGE_ME` credential in `.env.docker.example`; Docker uses the fail-closed production profile. Authentication is always required. Strong independent signing/PostgreSQL/Redis secrets, migration validation, and an explicit public origin are required; account passwords are set during registration. Stable web-search keys remain optional.
 
 ```env
 AUTH_SECRET_KEY=<random 32+ characters>
@@ -116,7 +117,14 @@ REDIS_PASSWORD=<independent random value>
 CORS_ORIGINS=https://content.example.com
 ```
 
-Put TLS in front of the frontend before exposing it. See [Phase 0 security and migration operations](docs/PHASE0_SECURITY_AND_MIGRATIONS.md).
+> **💡 Local Browser Trial Tip (HTTP on `localhost:8088` without TLS proxy)**:
+> If you are testing locally in your browser at `http://localhost:8088` without a TLS reverse proxy in front of Nginx, set these two values in `.env`:
+> ```env
+> ENFORCE_HTTPS=false
+> CORS_ORIGINS=http://localhost:8088
+> ```
+
+Put TLS in front of the frontend before exposing it publicly. See [Phase 0 security and migration operations](docs/PHASE0_SECURITY_AND_MIGRATIONS.md).
 
 3. Start the full stack:
 

@@ -47,6 +47,26 @@ class AccountStore:
             user = session.query(User).filter(User.username == username.strip().lower()).first()
             return self._user_dict(user) if user else None
 
+    def get_user_by_id(self, user_id: str) -> dict | None:
+        with self.store._get_session() as session:
+            user = session.query(User).filter(User.id == user_id).first()
+            return self._user_dict(user) if user else None
+
+    def update_password_and_revoke_sessions(
+        self, user_id: str, new_password_hash: str, *, keep_session_id: str | None = None
+    ) -> bool:
+        with self.store._get_session() as session:
+            user = session.query(User).filter(User.id == user_id, User.is_active.is_(True)).with_for_update().first()
+            if not user:
+                return False
+            user.password_hash = new_password_hash
+            query = session.query(AuthSession).filter(AuthSession.user_id == user_id)
+            if keep_session_id:
+                query = query.filter(AuthSession.id != keep_session_id)
+            query.delete(synchronize_session=False)
+            session.commit()
+            return True
+
     def create_session(self, user_id: str, minutes: int) -> tuple[str, int]:
         now = utcnow()
         expires_at = now + timedelta(minutes=max(minutes, 1))

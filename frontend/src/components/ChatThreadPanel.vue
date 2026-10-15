@@ -168,7 +168,8 @@ const emit = defineEmits<{
   padding: 20px 12px 12px;
   min-height: 0;
   overflow: hidden;
-  background: var(--c-bg-soft);
+  background: #faf9f6;
+  box-shadow: var(--shadow-panel);
 }
 
 .panel-head {
@@ -193,8 +194,8 @@ const emit = defineEmits<{
 .panel-head strong {
   padding: 1px 8px;
   border-radius: var(--r-pill);
-  background: var(--c-surface);
-  color: var(--c-text-tertiary);
+  background: var(--c-bg-soft);
+  color: var(--c-text-secondary);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
@@ -210,7 +211,7 @@ const emit = defineEmits<{
 
 .thread-toggle input {
   margin: 0;
-  accent-color: var(--c-accent);
+  accent-color: var(--c-text);
 }
 
 .thread-list, .search-results {
@@ -252,13 +253,14 @@ const emit = defineEmits<{
 }
 
 .thread-item:hover {
-  background: var(--c-surface);
+  background: rgba(24, 24, 27, 0.04);
+  border-color: var(--c-border-soft);
 }
 
 .thread-item.active {
-  background: var(--c-surface);
+  background: #ffffff;
   border-color: var(--c-border);
-  box-shadow: inset 3px 0 var(--c-accent);
+  box-shadow: inset 3px 0 var(--c-text), 0 2px 8px rgba(24, 24, 27, 0.05);
 }
 
 .thread-item.archived {

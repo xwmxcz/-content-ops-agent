@@ -14,6 +14,7 @@ from src.storage.file_memory import (
     USER,
     FileMemory,
     MemoryAmbiguous,
+    MemoryEditConflict,
     MemoryLimitExceeded,
     MemoryLockTimeout,
     MemoryNotFound,
@@ -99,6 +100,27 @@ class TestFileMemoryCRUD:
         fm.save(USER, "u" * 100)
         with pytest.raises(MemoryLimitExceeded):
             fm.save(USER, "u" * 101)
+
+    def test_save_enforces_expected_etag(self, fm):
+        fm.save(AGENT, "v1")
+        etag_v1 = fm.etag(AGENT)
+        fm.add(AGENT, "concurrent agent note")
+        with pytest.raises(MemoryEditConflict):
+            fm.save(AGENT, "v2 from stale editor", expected_etag=etag_v1)
+        assert "concurrent agent note" in fm.load(AGENT)
+        fm.save(AGENT, "v2 after reload", expected_etag=fm.etag(AGENT))
+        assert fm.load(AGENT) == "v2 after reload"
+
+    def test_snapshot_epoch_tracks_global_and_thread_refreshes(self, fm):
+        assert fm.snapshot_epoch("t1") == 0
+        e1 = fm.bump_snapshot_epoch("t1")
+        assert e1 > 0
+        assert fm.snapshot_epoch("t1") == e1
+        assert fm.snapshot_epoch("t2") == 0
+        e2 = fm.bump_snapshot_epoch(None)
+        assert e2 > e1
+        assert fm.snapshot_epoch("t1") == e2
+        assert fm.snapshot_epoch("t2") == e2
 
 
 def _entries(fm: FileMemory) -> list[str]:

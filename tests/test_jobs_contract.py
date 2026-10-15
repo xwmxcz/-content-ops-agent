@@ -260,3 +260,85 @@ def test_starting_retry_clears_previous_attempt_failure_metadata(store):
     assert started["error"] is None
     assert started["error_type"] is None
     assert started["next_retry_at"] is None
+
+
+def test_list_jobs_and_pipeline_runs_routes():
+    class FakeStore:
+        def __init__(self):
+            self.reaped = []
+
+        def list_jobs(self, *, status=None, job_type=None, limit=20):
+            return [
+                {
+                    "id": "job_active_1",
+                    "job_type": job_type or "agent_run",
+                    "status": status or "running",
+                    "progress": 50,
+                    "attempts": 1,
+                    "max_retries": 3,
+                    "provider": "siliconflow",
+                    "model": "Qwen/Qwen2.5-7B-Instruct",
+                    "payload": {"topic": "恢复工作流主题"},
+                    "result": None,
+                    "error": None,
+                    "error_type": None,
+                    "next_retry_at": None,
+                    "started_at": "2026-04-01T10:00:00",
+                    "completed_at": None,
+                    "created_at": "2026-04-01T10:00:00",
+                    "updated_at": "2026-04-01T10:01:00",
+                }
+            ][:limit]
+
+        def find_expired_run_leases(self, limit=20):
+            return [{"id": "run_expired_1"}][:limit]
+
+        def fail_expired_run(self, run_id):
+            self.reaped.append(run_id)
+            return True
+
+        def list_runs(self, *, thread_id=None, limit=20, status=None):
+            return [
+                {
+                    "id": "run_expired_1",
+                    "thread_id": thread_id,
+                    "topic": "恢复流水线主题",
+                    "content_type": "xiaohongshu",
+                    "style": "professional",
+                    "status": status or "failed",
+                    "plan": [],
+                    "revision_count": 0,
+                    "total_prompt_tokens": 100,
+                    "total_completion_tokens": 50,
+                    "total_cost": 0.001,
+                    "saved_content_id": None,
+                    "error": "worker_lost: execution lease expired before the run finished",
+                    "started_at": "2026-04-01T10:00:00",
+                    "completed_at": "2026-04-01T10:02:00",
+                    "updated_at": "2026-04-01T10:02:00",
+                    "lease_expires_at": None,
+                    "request": {"topic": "恢复流水线主题"},
+                }
+            ][:limit]
+
+    fake_store = FakeStore()
+    app.dependency_overrides[get_store] = lambda: fake_store
+    try:
+        client = TestClient(app)
+        jobs_resp = client.get("/api/jobs", params={"status": "running", "job_type": "agent_run", "limit": 5})
+        runs_resp = client.get("/api/agent/runs", params={"limit": 5})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert jobs_resp.status_code == 200
+    jobs_data = jobs_resp.json()
+    assert len(jobs_data) == 1
+    assert jobs_data[0]["id"] == "job_active_1"
+    assert jobs_data[0]["payload"]["topic"] == "恢复工作流主题"
+
+    assert runs_resp.status_code == 200
+    runs_data = runs_resp.json()
+    assert len(runs_data) == 1
+    assert runs_data[0]["id"] == "run_expired_1"
+    assert runs_data[0]["status"] == "failed"
+    assert fake_store.reaped == ["run_expired_1"]

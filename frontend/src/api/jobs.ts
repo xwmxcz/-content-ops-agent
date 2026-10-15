@@ -13,6 +13,7 @@ export interface JobResponse {
   job_type: JobType
   status: JobStatus
   progress: number
+  payload?: Record<string, unknown> | null
   result?: Record<string, unknown> | null
   error?: string | null
   provider?: string
@@ -25,6 +26,17 @@ export interface JobResponse {
   updated_at?: string
   started_at?: string
   completed_at?: string
+}
+
+export interface ListJobsParams {
+  status?: JobStatus
+  job_type?: JobType
+  limit?: number
+}
+
+export async function listJobs(params: ListJobsParams = {}) {
+  const { data } = await api.get<JobResponse[]>('/jobs', { params })
+  return data
 }
 
 export async function createContentGenerationJob(payload: GeneratePayload) {

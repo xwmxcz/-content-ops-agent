@@ -4,6 +4,7 @@ export interface MemoryFile {
   content: string
   char_count: number
   char_limit: number
+  etag?: string
 }
 
 export interface SessionSearchHit {
@@ -27,8 +28,9 @@ export async function getAgentMemory() {
   return data
 }
 
-export async function saveAgentMemory(content: string) {
-  const { data } = await api.put<MemoryFile>('/memory/agent', { content })
+export async function saveAgentMemory(content: string, expectedEtag?: string) {
+  const payload = expectedEtag !== undefined ? { content, expected_etag: expectedEtag } : { content }
+  const { data } = await api.put<MemoryFile>('/memory/agent', payload)
   return data
 }
 
@@ -37,8 +39,9 @@ export async function getUserMemory() {
   return data
 }
 
-export async function saveUserMemory(content: string) {
-  const { data } = await api.put<MemoryFile>('/memory/user', { content })
+export async function saveUserMemory(content: string, expectedEtag?: string) {
+  const payload = expectedEtag !== undefined ? { content, expected_etag: expectedEtag } : { content }
+  const { data } = await api.put<MemoryFile>('/memory/user', payload)
   return data
 }
 

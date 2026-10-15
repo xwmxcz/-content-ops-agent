@@ -16,18 +16,19 @@ FastAPI、Vue 3、TanStack Vue Query、LangGraph 编排、LiteLLM、LangChain �
 Agent 编排、后台任务、前端工作流和部署工程，而不是声称自己已经是成熟的
 多租户商业 SaaS。
 
-## 项目能力
+## 项目能力与设计亮点
 
 | 模块 | 能力 |
 | --- | --- |
-| 内容工作台 | 带引擎版本与持久断点的 LangGraph 动态内容流水线，包含 researcher、strategy、writer、editor、reviewer、fact-checker 等子 Agent。 |
-| Chat Agent | 持久化工具型对话助手，支持线程历史、内容工具、规划工具、记忆工具和会话搜索。 |
-| 内容库 | 保存草稿、手动编辑（含并发冲突检查）、归档恢复、Markdown 导出、媒体素材和可搜索历史。 |
-| 内容打磨 | 对已保存内容进行改写或优化，并保留来源关系。 |
-| 发布日历 | 可见月份议程、可编辑本地计划，以及独立的未来 60 天发布汇总。 |
-| 统计分析 | 内容类型/状态分布、平台累计读数、加权互动率、覆盖率和按创建日期分组的效果分析。 |
-| 长期记忆 | Hermes 风格文件记忆：`MEMORY.md`、`USER.md`、上下文压缩和 curator。 |
-| Docker | 一套 Compose 启动前端、API、worker、PostgreSQL 和 Redis。 |
+| **内容工作台 (Studio)** | 带引擎版本与持久断点的 LangGraph 动态内容流水线，包含 Researcher、Strategy、Writer、Editor、Reviewer、Fact-Checker 等子 Agent，支持 SSE 实时流式推送与断线轮询回退。 |
+| **对话工作台 (Chat Agent)** | 持久化工具型对话助手，支持线程历史、内容工具、规划工具、记忆工具、会话搜索与长上下文自动压缩。 |
+| **内容库 (Content Library)** | 保存草稿、手动编辑（含乐观锁并发冲突检查）、归档恢复、Markdown 导出、媒体素材管理与多维筛选。 |
+| **内容打磨 (Refinement)** | 对已保存内容进行精修、润色、扩写、缩写与多平台改写，并完整保留来源血缘关系。 |
+| **发布日历 (Calendar)** | 可见月份排期议程、可编辑本地发布计划，以及独立的未来 60 天发布汇总。 |
+| **统计分析 (Stats)** | 内容类型/状态分布、平台累计读数、加权互动率、数据覆盖率和按创建日期分组的效果分析（Cohort Analysis）。 |
+| **长期记忆 (Memory)** | Hermes 风格四层文件记忆（`MEMORY.md`、`USER.md`）、ETag (`If-Match`) 并发防覆盖保护、上下文压缩和自动 Curator。 |
+| **视觉与交互体验** | 采用 **温润宣纸白 · 现代编辑部浅色设计系统（Editorial Paper Light Theme）**，摒弃廉价霓虹渐变与模板化“AI 味”，提供安静、耐看、高信息密度的专业创作体验。 |
+| **Docker 全栈编排** | 一套 Compose 编排 `frontend`、`migrate`、`api`、`worker`、`reaper`、`postgres` 与 `redis` 七大服务组件。 |
 
 ## 技术架构
 
@@ -102,7 +103,14 @@ LLM_PROVIDER=deepseek
 DEEPSEEK_API_KEY=your_deepseek_key_here
 ```
 
-必须替换 `.env.docker.example` 中全部 `CHANGE_ME` 凭据。Docker 默认使用 fail-closed 生产模式，鉴权始终开启，要求独立强随机的签名/PostgreSQL/Redis 密钥、迁移校验和明确的 HTTPS 公网来源；账号密码在注册时设置；网页搜索 key 仍是可选项。对外暴露前必须在前端之前配置 TLS。详见 [`docs/PHASE0_SECURITY_AND_MIGRATIONS.md`](docs/PHASE0_SECURITY_AND_MIGRATIONS.md)。
+必须替换 `.env.docker.example` 中全部 `CHANGE_ME` 凭据。Docker 默认使用 fail-closed 生产模式，鉴权始终开启，要求独立强随机的签名/PostgreSQL/Redis 密钥、迁移校验和明确的公网来源；账号密码在登录页首次注册时设置；网页搜索 key 为可选项。对外暴露前必须在前端之前配置 TLS。详见 [`docs/PHASE0_SECURITY_AND_MIGRATIONS.md`](docs/PHASE0_SECURITY_AND_MIGRATIONS.md)。
+
+> **💡 本机浏览器直接体验提示（无反向代理 / HTTP 模式）**：
+> 如果你只是在本机通过 `http://localhost:8088` 直接访问 Docker 容器（未架设 HTTPS 反向代理），请在 `.env` 中将以下两项调整为本地 HTTP 配置：
+> ```env
+> ENFORCE_HTTPS=false
+> CORS_ORIGINS=http://localhost:8088
+> ```
 
 3. 启动完整栈：
 

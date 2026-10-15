@@ -27,6 +27,17 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=128)
 
 
+class ChangePasswordRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def new_password_valid(cls, value: str) -> str:
+        return validate_password(value)
+
+
 class PublicUser(BaseModel):
     id: str
     username: str

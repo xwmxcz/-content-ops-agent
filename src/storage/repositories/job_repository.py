@@ -73,6 +73,25 @@ class JobRepositoryMixin(RepositoryMixin):
         finally:
             session.close()
 
+    def list_jobs(
+        self,
+        *,
+        status: str | None = None,
+        job_type: str | None = None,
+        limit: int = 30,
+    ) -> list[dict[str, Any]]:
+        session = self._get_session()
+        try:
+            query = session.query(Job).filter(Job.archived_at.is_(None))
+            if status:
+                query = query.filter(Job.status == status)
+            if job_type:
+                query = query.filter(Job.job_type == job_type)
+            jobs = query.order_by(Job.created_at.desc(), Job.id.desc()).limit(limit).all()
+            return [self._job_to_dict(job) for job in jobs]
+        finally:
+            session.close()
+
     def update_job(
         self,
         job_id: str,

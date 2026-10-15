@@ -19,7 +19,7 @@ from src.storage.models import (
     MediaAsset,
     PlatformPublication,
 )
-from src.storage.repositories.base import RepositoryMixin, assigned_pk
+from src.storage.repositories.base import ILIKE_ESCAPE, RepositoryMixin, assigned_pk, ilike_contains_pattern
 from src.storage.repositories.media_repository import MediaRepositoryMixin
 
 logger = logging.getLogger(__name__)
@@ -149,10 +149,12 @@ class ContentRepositoryMixin(MediaRepositoryMixin, RepositoryMixin):
             if q and q.strip():
                 # Match literal text in the complete article before pagination
                 # and preview truncation; '%' and '_' are not user wildcards.
-                escaped = q.strip().replace("/", "//").replace("%", "/%").replace("_", "/_")
-                pattern = f"%{escaped}%"
+                pattern = ilike_contains_pattern(q)
                 query = query.filter(
-                    or_(Content.title.ilike(pattern, escape="/"), Content.content.ilike(pattern, escape="/"))
+                    or_(
+                        Content.title.ilike(pattern, escape=ILIKE_ESCAPE),
+                        Content.content.ilike(pattern, escape=ILIKE_ESCAPE),
+                    )
                 )
             query = query.order_by(Content.created_at.desc(), Content.id.desc()).limit(limit).offset(offset)
             contents = query.all()
@@ -174,16 +176,16 @@ class ContentRepositoryMixin(MediaRepositoryMixin, RepositoryMixin):
     def search_contents(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
         if not query or not query.strip():
             return []
-        pattern = f"%{query.strip()}%"
+        pattern = ilike_contains_pattern(query)
         session = self._get_session()
         try:
             rows = (
                 session.query(Content)
                 .filter(
                     or_(
-                        Content.title.ilike(pattern),
-                        Content.content.ilike(pattern),
-                        Content.keywords.ilike(pattern),
+                        Content.title.ilike(pattern, escape=ILIKE_ESCAPE),
+                        Content.content.ilike(pattern, escape=ILIKE_ESCAPE),
+                        Content.keywords.ilike(pattern, escape=ILIKE_ESCAPE),
                     )
                 )
                 .order_by(Content.created_at.desc())
@@ -324,6 +326,46 @@ class ContentRepositoryMixin(MediaRepositoryMixin, RepositoryMixin):
                 )[:10],
             }
 
+    @staticmethod
+    def _latest_metrics_by_content(metrics_rows: list[ContentMetrics]) -> dict[int, ContentMetrics]:
+        """Deduplicate readings by ``(content_id, platform)`` keeping the latest
+        ``(recorded_at DESC NULLS LAST, id DESC)`` reading per platform, then sum
+        across platforms per content so multi-platform articles match
+        :meth:`get_performance_stats`.
+        """
+        latest_per_platform: dict[tuple[int, str], ContentMetrics] = {}
+
+        def _order_key(row: ContentMetrics) -> tuple[bool, datetime, int]:
+            return (row.recorded_at is not None, row.recorded_at or datetime.min, row.id or 0)
+
+        for row in metrics_rows:
+            if row.content_id is None:
+                continue
+            key = (row.content_id, (row.platform or "unknown").strip().lower() or "unknown")
+            existing = latest_per_platform.get(key)
+            if existing is None or _order_key(row) > _order_key(existing):
+                latest_per_platform[key] = row
+
+        aggregated: dict[int, ContentMetrics] = {}
+        for (content_id, _platform), row in latest_per_platform.items():
+            current = aggregated.get(content_id)
+            if current is None:
+                aggregated[content_id] = ContentMetrics(
+                    content_id=content_id,
+                    platform=row.platform,
+                    views=row.views or 0,
+                    likes=row.likes or 0,
+                    comments=row.comments or 0,
+                    shares=row.shares or 0,
+                    recorded_at=row.recorded_at,
+                )
+            else:
+                current.views = (current.views or 0) + (row.views or 0)
+                current.likes = (current.likes or 0) + (row.likes or 0)
+                current.comments = (current.comments or 0) + (row.comments or 0)
+                current.shares = (current.shares or 0) + (row.shares or 0)
+        return aggregated
+
     def aggregate_performance(self, days: int = 30) -> dict[str, Any]:
         """Group contents from the last `days` days by content_type + style and aggregate
         engagement metrics. Used by the chat Agent's analyze_content_performance tool.
@@ -357,12 +399,7 @@ class ContentRepositoryMixin(MediaRepositoryMixin, RepositoryMixin):
                 }
             content_ids = [c.id for c in contents]
             metrics_rows = session.query(ContentMetrics).filter(ContentMetrics.content_id.in_(content_ids)).all()
-            metrics_by_content: dict[int, ContentMetrics] = {}
-            for m in metrics_rows:
-                # If multiple metric rows exist per content, keep the one with highest views.
-                existing = metrics_by_content.get(m.content_id)
-                if existing is None or (m.views or 0) > (existing.views or 0):
-                    metrics_by_content[m.content_id] = m
+            metrics_by_content = self._latest_metrics_by_content(metrics_rows)
 
             def _engagement_rate(m: ContentMetrics | None) -> float:
                 if m is None or not m.views:
@@ -470,11 +507,7 @@ class ContentRepositoryMixin(MediaRepositoryMixin, RepositoryMixin):
             if criteria == "underperforming":
                 contents = session.query(Content).all()
                 metric_rows = session.query(ContentMetrics).all()
-                metrics_by_content: dict[int, ContentMetrics] = {}
-                for m in metric_rows:
-                    existing = metrics_by_content.get(m.content_id)
-                    if existing is None or (m.views or 0) > (existing.views or 0):
-                        metrics_by_content[m.content_id] = m
+                metrics_by_content = self._latest_metrics_by_content(metric_rows)
                 if not metrics_by_content:
                     return []
                 rates: list[tuple[Content, ContentMetrics, float]] = []

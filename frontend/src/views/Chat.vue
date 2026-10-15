@@ -540,6 +540,8 @@ onBeforeUnmount(() => {
 .chat-topline {
   align-items: flex-end;
   flex-shrink: 0;
+  padding: 4px 0 18px;
+  border-bottom: 1px solid var(--c-border);
 }
 
 .hero-actions {
@@ -551,15 +553,17 @@ onBeforeUnmount(() => {
   color: var(--c-text-tertiary);
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: .08em;
+  letter-spacing: .04em;
 }
 
 .chat-topline .page-title {
-  margin: 0 0 8px;
+  margin: 0 0 6px;
+  color: var(--c-text);
   font-family: var(--font-display);
-  font-size: var(--fs-h1);
-  line-height: 1.3;
-  letter-spacing: -.04em;
+  font-size: clamp(22px, 2vw, 28px);
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -.025em;
 }
 
 .chat-topline .page-subtitle {
@@ -571,7 +575,7 @@ onBeforeUnmount(() => {
 .chat-workbench {
   display: grid;
   flex: 1;
-  grid-template-columns: 236px minmax(0, 1fr);
+  grid-template-columns: 244px minmax(0, 1fr);
   gap: 20px;
   min-height: 0;
 }
@@ -594,8 +598,8 @@ onBeforeUnmount(() => {
 }
 
 .load-older:hover:not(:disabled) {
-  color: var(--c-accent);
-  border-color: var(--c-accent);
+  color: var(--c-text);
+  border-color: var(--c-text);
 }
 
 .load-older:disabled {
@@ -611,7 +615,9 @@ onBeforeUnmount(() => {
 }
 
 .dialog-head {
-  padding: 19px 26px;
+  padding: 18px 26px;
+  background: #faf9f6;
+  border-bottom: 1px solid var(--c-border-soft);
 }
 
 .dialog-head > div:first-child {
@@ -621,8 +627,8 @@ onBeforeUnmount(() => {
 .dialog-head strong {
   display: block;
   margin-top: 4px;
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 15.5px;
+  font-weight: 650;
   overflow-wrap: anywhere;
 }
 
@@ -653,6 +659,7 @@ onBeforeUnmount(() => {
   min-height: 42px;
   color: var(--c-text-secondary);
   font-size: 12px;
+  font-weight: 600;
   cursor: pointer;
   list-style: none;
 }
@@ -675,7 +682,8 @@ onBeforeUnmount(() => {
 }
 
 .control-panel summary small {
-  color: var(--c-text-tertiary);
+  color: var(--c-text-secondary);
+  font-family: var(--font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -704,16 +712,19 @@ onBeforeUnmount(() => {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 8px 18px;
-  margin-top: 12px;
-  color: var(--c-text-tertiary);
-  font-size: 11px;
+  gap: 10px;
+  margin-top: 14px;
+  color: var(--c-text-secondary);
+  font-size: 12px;
 }
 
-.empty-capabilities span::before {
-  content: '·';
-  margin-right: 8px;
-  color: var(--c-accent);
+.empty-capabilities span {
+  padding: 6px 13px;
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+  background: #faf9f6;
+  color: var(--c-text-secondary);
+  font-weight: 500;
 }
 
 .message-row {
@@ -734,9 +745,11 @@ onBeforeUnmount(() => {
 .message-row.user .message-bubble {
   width: auto;
   max-width: 88%;
-  padding: 16px 20px;
+  padding: 15px 18px;
+  border: 1px solid var(--c-border);
   border-radius: 16px 16px 4px 16px;
-  background: var(--c-accent-soft);
+  background: #f2f0ea;
+  box-shadow: 0 2px 6px rgba(24, 24, 27, 0.04);
 }
 
 .message-meta {
@@ -746,7 +759,7 @@ onBeforeUnmount(() => {
 .message-meta span {
   font-size: 12px;
   font-weight: 600;
-  color: var(--c-accent);
+  color: var(--c-text);
 }
 
 .message-meta small {
@@ -811,7 +824,7 @@ onBeforeUnmount(() => {
   padding: 12px;
   border: 1px solid var(--c-border);
   border-radius: var(--r-control);
-  background: var(--c-accent-soft);
+  background: #faf9f6;
   color: var(--c-text-secondary);
   font-size: 12px;
 }
@@ -922,7 +935,7 @@ onBeforeUnmount(() => {
 }
 
 summary:focus-visible, .load-older:focus-visible {
-  outline: 2px solid var(--c-accent);
+  outline: 2px solid var(--c-text);
   outline-offset: 3px;
   border-radius: var(--r-control);
 }
@@ -1094,18 +1107,21 @@ summary:focus-visible, .load-older:focus-visible {
 }
 
 .empty-label {
-  padding: 7px 13px;
-  background: var(--c-accent-soft);
-  color: var(--c-accent);
+  padding: 6px 12px;
+  border: 1px solid var(--c-border);
+  background: #faf9f6;
+  color: var(--c-text-secondary);
   border-radius: var(--r-pill);
   font-size: 11px;
+  font-weight: 600;
 }
 
 .chat-empty strong {
-  font-family: var(--font-editorial);
-  font-size: clamp(25px, 2.5vw, 34px);
-  font-weight: 500;
-  letter-spacing: -.03em;
+  color: var(--c-text);
+  font-family: var(--font-display);
+  font-size: clamp(22px, 2.2vw, 28px);
+  font-weight: 700;
+  letter-spacing: -.025em;
 }
 
 .chat-empty p {

@@ -150,4 +150,15 @@ describe('memory draft and search reliability', () => {
     expect(wrapper.get('[role="alert"]').text()).toContain('搜索服务暂时不可用')
     expect(wrapper.text()).not.toContain('还没有找到相关消息')
   })
+
+  it('forwards expectedEtag when loaded memory metadata includes an etag', async () => {
+    mocks.getAgentMemory.mockResolvedValueOnce({ content: '初始内容', char_count: 4, char_limit: 2200, etag: 'etag-v1' })
+    mocks.saveAgentMemory.mockResolvedValueOnce({ content: '更新内容', char_count: 4, char_limit: 2200, etag: 'etag-v2' })
+    const wrapper = mountMemory()
+    await flushPromises()
+    await wrapper.get('[aria-label="工作笔记"]').setValue('更新内容')
+    await save(wrapper).trigger('click')
+    await flushPromises()
+    expect(mocks.saveAgentMemory).toHaveBeenCalledWith('更新内容', 'etag-v1')
+  })
 })

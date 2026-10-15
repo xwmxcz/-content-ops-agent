@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 from src.api.dependencies import get_current_user, get_file_memory, get_store
 from src.api.services.chat_agent import ChatAgentService
 from src.storage import ContentStore
-from src.storage.file_memory import AGENT, USER, FileMemory, MemoryLimitExceeded
+from src.storage.file_memory import AGENT, USER, FileMemory, MemoryEditConflict, MemoryLimitExceeded
 
 router = APIRouter()
 
@@ -35,10 +35,12 @@ class MemoryFile(BaseModel):
     content: str = Field(default="")
     char_count: int
     char_limit: int
+    etag: str = Field(default="")
 
 
 class MemoryFileUpdate(BaseModel):
     content: str = Field(default="")
+    expected_etag: str | None = None
 
 
 class SessionSearchRequest(BaseModel):
@@ -69,7 +71,8 @@ def _require_memory(file_memory: FileMemory | None) -> FileMemory:
 
 
 def _stats(file_memory: FileMemory, target: str) -> dict:
-    return file_memory.stats(target)
+    data = file_memory.stats(target)
+    return {**data, "etag": FileMemory.compute_etag(data["content"])}
 
 
 # ─── MEMORY.md (agent notes) ───────────────────────────────────────────────
@@ -87,7 +90,9 @@ def write_agent_memory(
 ):
     fm = _require_memory(file_memory)
     try:
-        fm.save(AGENT, req.content)
+        fm.save(AGENT, req.content, expected_etag=req.expected_etag)
+    except MemoryEditConflict as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     except MemoryLimitExceeded as exc:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc))
     return _stats(fm, AGENT)
@@ -108,7 +113,9 @@ def write_user_memory(
 ):
     fm = _require_memory(file_memory)
     try:
-        fm.save(USER, req.content)
+        fm.save(USER, req.content, expected_etag=req.expected_etag)
+    except MemoryEditConflict as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     except MemoryLimitExceeded as exc:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc))
     return _stats(fm, USER)
@@ -134,11 +141,12 @@ def refresh_snapshot(
     req: RefreshSnapshotRequest,
     store: ContentStore = Depends(get_store),
     user: dict = Depends(get_current_user),
+    file_memory: FileMemory | None = Depends(get_file_memory),
 ):
     if req.thread_id and not store.get_agent_thread(req.thread_id):
         raise HTTPException(status_code=404, detail="Thread not found")
     # Take the workspace id from the authenticated request rather than
     # store.user_id, which is Optional because an unscoped system store has no
     # owner. A scoped request store always has one.
-    ChatAgentService.invalidate_frozen(req.thread_id, user_id=user["id"])
+    ChatAgentService.invalidate_frozen(req.thread_id, user_id=user["id"], file_memory=file_memory)
     return {"refreshed": True, "thread_id": req.thread_id}

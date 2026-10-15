@@ -140,13 +140,21 @@ class RunRepositoryMixin(RepositoryMixin):
         finally:
             session.close()
 
-    def list_runs(self, thread_id: str | None = None, limit: int = 30) -> list[dict[str, Any]]:
+    def list_runs(
+        self,
+        thread_id: str | None = None,
+        limit: int = 30,
+        *,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
         session = self._get_session()
         try:
             query = session.query(AgentRun)
             if thread_id:
                 query = query.filter(AgentRun.thread_id == thread_id)
-            runs = query.order_by(AgentRun.created_at.desc()).limit(limit).all()
+            if status:
+                query = query.filter(AgentRun.status == status)
+            runs = query.order_by(AgentRun.created_at.desc(), AgentRun.id.desc()).limit(limit).all()
             return [self._agent_run_to_dict(run) for run in runs]
         finally:
             session.close()

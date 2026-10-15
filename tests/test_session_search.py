@@ -57,3 +57,19 @@ class TestSessionSearch:
         seeded.delete_agent_thread("t1")
         rows = seeded.search_agent_messages("小红书")
         assert rows == []
+
+    def test_search_escapes_like_wildcards(self, seeded):
+        seeded.save_agent_message(
+            thread_id="t1", role="user", content="转化率提升 25% 的 v1_final/方案", provider="claude", model="m"
+        )
+        assert len(seeded.search_agent_messages("25%")) == 1
+        assert len(seeded.search_agent_messages("v1_final/方案")) == 1
+        assert seeded.search_agent_messages("99%") == []
+
+
+def test_ilike_contains_pattern_escapes_wildcards_and_escape_char():
+    from src.storage.repositories.base import ilike_contains_pattern
+
+    assert ilike_contains_pattern("  25% off_today/now  ") == "%25/% off/_today//now%"
+    assert ilike_contains_pattern("%") == "%/%%"
+    assert ilike_contains_pattern("_") == "%/_%"

@@ -32,15 +32,15 @@
       </span>
     </div>
 
-    <div class="selector-grid compact">
+      <div class="selector-grid compact">
       <div class="selector-field">
-        <span title="值越高，表达越多样">创意程度</span>
+        <span title="值越高，表达越多样">创意程度 ({{ local.temperature.toFixed(1) }})</span>
         <el-slider v-model="local.temperature" :min="0" :max="1" :step="0.1" />
       </div>
 
       <div class="selector-field">
-        <span title="单次模型回复的最大 token 数">输出上限</span>
-        <el-input-number v-model="local.max_tokens" :min="128" :max="8192" :step="256" />
+        <span title="单次模型回复的最大 token 数">输出上限 (Tokens)</span>
+        <el-input-number v-model="local.max_tokens" :min="128" :max="8192" :step="256" controls-position="right" />
       </div>
     </div>
   </section>
@@ -107,17 +107,57 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.model-selector { display: grid; gap: 16px; min-width: 0; }
-.selector-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
-.selector-grid.compact { align-items: start; }
-.selector-field { display: grid; gap: 8px; min-width: 0; align-content: start; }
-.selector-field > span { color: var(--c-text-secondary); font-size: 11px; font-weight: 500; }
-.selector-field .selector-field-caption { font-family: var(--font-mono); font-size: 10px; font-weight: 400; color: var(--c-text-tertiary); overflow-wrap: anywhere; line-height: 1.5; }
-.selector-status { display: flex; align-items: center; gap: 7px; padding: 0; font-size: 11px; }
-.selector-status-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
-.selector-status-dot.ready { background: var(--c-ok); }
-.selector-status-dot.warn { background: var(--c-warn); }
-.selector-status-text { color: var(--c-text-secondary); }
-.selector-status-meta { margin-left: auto; color: var(--c-text-tertiary); font-size: 10px; }
-@media (max-width: 480px) { .selector-grid { grid-template-columns: 1fr; } .selector-grid.compact { grid-template-columns: 1fr 1fr; } }
+.model-selector { display: grid; gap: 14px; min-width: 0; }
+.selector-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+.selector-grid.compact {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  padding-top: 4px;
+}
+.selector-field { display: grid; gap: 6px; min-width: 0; align-content: start; }
+.selector-field > span {
+  color: var(--c-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+.selector-field .selector-field-caption {
+  display: inline-block;
+  justify-self: start;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--c-bg-soft);
+  border: 1px solid var(--c-border-soft);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--c-text-secondary);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+.selector-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 9px;
+  background: var(--c-bg-soft);
+  border: 1px solid var(--c-border-soft);
+  font-size: 12px;
+}
+.selector-status-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.selector-status-dot.ready {
+  background: var(--c-ok);
+  box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.16);
+}
+.selector-status-dot.warn {
+  background: var(--c-warn);
+  box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.16);
+}
+.selector-status-text { color: var(--c-text); font-weight: 600; }
+.selector-status-meta { margin-left: auto; color: var(--c-text-tertiary); font-size: 11.5px; font-weight: 500; }
+@media (max-width: 480px) { .selector-grid.compact { grid-template-columns: 1fr; } }
 </style>

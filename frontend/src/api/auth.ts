@@ -41,6 +41,13 @@ export async function register(username: string, password: string) {
   return data
 }
 
+export async function changePassword(currentPassword: string, newPassword: string) {
+  await api.post('/auth/change-password', {
+    current_password: currentPassword,
+    new_password: newPassword
+  })
+}
+
 export async function logout() {
   // Stop account reads immediately, even if server-side token revocation is slow.
   clearWorkspaceSession()
@@ -54,3 +61,4 @@ export async function logout() {
     }
   }
 }
+

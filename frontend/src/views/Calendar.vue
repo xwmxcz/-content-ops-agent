@@ -440,27 +440,41 @@ onBeforeUnmount(() => { disposed = true; loadVersion++ })
 }
 
 .calendar-hero {
+  position: relative;
+  overflow: hidden;
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
   gap: 24px;
-  margin-bottom: 28px;
+  margin-bottom: 24px;
+  padding: 4px 0 22px;
+  border-bottom: 1px solid var(--c-border);
 }
 
 .hero-copy { min-width: 0; }
 .hero-copy h1 {
-  margin: 0 0 10px;
-  font: 650 var(--fs-h1)/1.25 var(--font-display);
-  letter-spacing: -0.035em;
+  margin: 0 0 6px;
+  color: var(--c-text);
+  font: 700 clamp(23px, 2.1vw, 29px)/1.25 var(--font-display);
+  letter-spacing: -0.025em;
 }
 .hero-copy p {
   margin: 0;
   color: var(--c-text-secondary);
-  font-size: 13px;
+  font-size: 13.5px;
   line-height: 1.7;
 }
-.hero-copy p span { margin-left: 12px; color: var(--c-text-tertiary); }
-.hero-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.hero-copy p span {
+  display: inline-flex;
+  margin-left: 10px;
+  padding: 2px 9px;
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+  background: #faf9f6;
+  color: var(--c-text-secondary);
+  font-size: 11.5px;
+}
+.hero-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .hero-actions :deep(.el-button + .el-button) { margin-left: 0; }
 
 .signal-grid {
@@ -471,18 +485,20 @@ onBeforeUnmount(() => { disposed = true; loadVersion++ })
   border: 1px solid var(--c-border);
   border-radius: var(--r-card);
   background: var(--c-surface);
+  box-shadow: var(--shadow-panel);
 }
-.signal-card { min-width: 0; padding: 0 24px; }
+.signal-card { min-width: 0; padding: 4px 24px; }
 .signal-card + .signal-card { border-left: 1px solid var(--c-border-soft); }
 .signal-card span,
 .signal-card small { display: block; color: var(--c-text-tertiary); font-size: 12px; }
+.signal-card span { color: var(--c-text-secondary); font-weight: 600; }
 .signal-card strong {
   display: block;
   margin: 7px 0 4px;
   color: var(--c-text);
-  font: 600 30px/1.2 var(--font-display);
+  font: 700 30px/1.2 var(--font-display);
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.04em;
+  letter-spacing: -0.035em;
 }
 
 .calendar-shell {
@@ -523,14 +539,15 @@ onBeforeUnmount(() => { disposed = true; loadVersion++ })
   white-space: nowrap;
 }
 
-.calendar-panel :deep(.el-calendar) { --el-calendar-border: 1px solid var(--c-border-soft); }
+.calendar-panel :deep(.el-calendar) { --el-calendar-border: 1px solid var(--c-border-soft); --el-fill-color-blank: transparent; background: transparent; }
 .calendar-panel :deep(.el-calendar__header) { align-items: center; gap: 12px; padding: 0 0 20px; border: 0; }
 .calendar-panel :deep(.el-calendar__title) { color: var(--c-text); font-size: 16px; font-weight: 600; }
 .calendar-panel :deep(.el-calendar__body) { padding: 0; }
 .calendar-panel :deep(.el-calendar-table) { width: 100%; table-layout: fixed; }
 .calendar-panel :deep(.el-calendar-table thead th) { padding: 12px 0; color: var(--c-text-tertiary); font-size: 11px; font-weight: 500; }
 .calendar-panel :deep(.el-calendar-table td) { border-color: var(--c-border-soft); }
-.calendar-panel :deep(.el-calendar-table td.is-selected) { background: transparent; }
+.calendar-panel :deep(.el-calendar-table td.is-selected),
+.calendar-panel :deep(.el-calendar-table .el-calendar-day:hover) { background: transparent; }
 .calendar-panel :deep(.el-calendar-day) { height: 126px; padding: 0; }
 .calendar-cell {
   display: grid;

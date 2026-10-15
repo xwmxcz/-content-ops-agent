@@ -35,16 +35,40 @@ const styleLabel = computed(() => getStyleLabel(props.item.style))
 </script>
 
 <style scoped>
-.content-card { display: grid; gap: 12px; min-width: 0; padding: 18px; border: 1px solid var(--c-border); border-radius: 12px; background: var(--c-surface); transition: border-color .15s, background-color .15s; }
-.content-card:hover { border-color: var(--c-border-strong); background: var(--c-accent-soft); }
+.content-card {
+  position: relative;
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--c-border);
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: var(--shadow-panel);
+  transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}
+.content-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--c-border-strong);
+  box-shadow: var(--shadow-hover);
+}
 .card-topline, .card-footer, .card-tags { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
-.card-type { color: var(--c-accent); font-size: 11px; font-weight: 500; }
-.card-type::before { content: ''; display: inline-block; width: 5px; height: 5px; margin: 0 6px 2px 0; background: currentColor; border-radius: 50%; }
-.card-status { color: var(--c-text-tertiary); font-size: 10px; padding: 2px 7px; background: var(--c-bg-soft); border-radius: 5px; }
-.card-title { display: -webkit-box; overflow: hidden; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 14px; font-weight: 600; line-height: 1.65; }
-.card-body { margin: 0; color: var(--c-text-tertiary); font-size: 12px; line-height: 1.8; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.card-tags { justify-content: flex-start; gap: 10px; }
-.card-chip { color: var(--c-text-tertiary); font-size: 10px; }
-.card-chip + .card-chip { padding-left: 10px; border-left: 1px solid var(--c-border); }
-.card-footer { padding-top: 10px; border-top: 1px solid var(--c-border-soft); color: var(--c-text-tertiary); font-size: 10px; }
+.card-type {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+.card-type::before { content: ''; display: inline-block; width: 5px; height: 5px; margin: 0 6px 0 0; background: currentColor; border-radius: 50%; }
+.card-status { color: var(--c-text-secondary); font-size: 11px; font-weight: 500; padding: 2px 8px; background: var(--c-bg-soft); border-radius: 999px; }
+.card-title { display: -webkit-box; overflow: hidden; -webkit-line-clamp: 2; -webkit-box-orient: vertical; color: var(--c-text); font-size: 15px; font-weight: 650; line-height: 1.5; letter-spacing: -0.01em; }
+.card-body { margin: 0; color: var(--c-text-secondary); font-size: 13px; line-height: 1.75; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.card-tags { justify-content: flex-start; gap: 6px; }
+.card-chip { color: var(--c-text-secondary); font-size: 11px; font-family: var(--font-mono); padding: 2px 8px; border: 1px solid var(--c-border-soft); border-radius: 6px; background: #faf9f6; }
+.card-chip + .card-chip { border-left: 0; }
+.card-footer { padding-top: 10px; border-top: 1px solid var(--c-border-soft); color: var(--c-text-tertiary); font-size: 11px; font-variant-numeric: tabular-nums; }
 </style>

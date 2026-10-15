@@ -68,6 +68,8 @@ AVAILABLE_TOOL_NAMES = [
 
 
 _FROZEN_PROMPTS: dict[tuple[str | None, str], str] = {}
+_FROZEN_PROMPT_META: dict[tuple[str | None, str], tuple[str, int]] = {}
+_MAX_FROZEN_PROMPTS = 512
 PLANNER_SYSTEM_PROMPT = (
     "You are a planner. Given the user's request and the available tools, "
     "output a JSON array of steps.\n"
@@ -876,20 +878,36 @@ class ChatAgentService:
         externally, e.g. by the /refresh-snapshot endpoint).
         """
         key = (self.store.user_id, thread_id or "_anonymous")
+        today = datetime.now().date().isoformat()
+        current_epoch = self.file_memory.snapshot_epoch(thread_id) if self.file_memory else 0
         cached = _FROZEN_PROMPTS.get(key)
-        if cached is not None:
+        meta = _FROZEN_PROMPT_META.get(key)
+        if cached is not None and (meta is None or (meta[0] == today and meta[1] >= current_epoch)):
             return cached
         snapshot = self.file_memory.snapshot() if self.file_memory else None
         prompt = _build_system_prompt(snapshot)
+        if key not in _FROZEN_PROMPTS and len(_FROZEN_PROMPTS) >= _MAX_FROZEN_PROMPTS:
+            oldest_key = next(iter(_FROZEN_PROMPTS))
+            _FROZEN_PROMPTS.pop(oldest_key, None)
+            _FROZEN_PROMPT_META.pop(oldest_key, None)
         _FROZEN_PROMPTS[key] = prompt
+        _FROZEN_PROMPT_META[key] = (today, current_epoch)
         return prompt
 
     @staticmethod
-    def invalidate_frozen(thread_id: str | None = None, *, user_id: str) -> None:
+    def invalidate_frozen(
+        thread_id: str | None = None,
+        *,
+        user_id: str,
+        file_memory: FileMemory | None = None,
+    ) -> None:
         """Drop only the current user's selected or complete prompt snapshots."""
         for key in list(_FROZEN_PROMPTS):
             if key[0] == user_id and (thread_id is None or key[1] == thread_id):
                 _FROZEN_PROMPTS.pop(key, None)
+                _FROZEN_PROMPT_META.pop(key, None)
+        if file_memory is not None:
+            file_memory.bump_snapshot_epoch(thread_id)
 
     @staticmethod
     def _create_chat_model(provider: str, model: str, temperature: float, max_tokens: int):

@@ -259,3 +259,34 @@ def test_missing_signing_key_fails_closed(store, monkeypatch):
         assert client.post("/api/auth/register", json=payload).status_code == 503
         assert client.post("/api/auth/login", json=payload).status_code == 503
         assert client.get("/api/content").status_code == 503
+
+
+def test_change_password_updates_credentials_and_revokes_other_sessions(store):
+    new_password = "Updated-local-password-99!"
+    with TestClient(app) as client:
+        first_session = register(client, "pw_changer")
+        second_session = client.post("/api/auth/login", json={"username": "pw_changer", "password": PASSWORD}).json()
+
+        wrong = client.post(
+            "/api/auth/change-password",
+            headers=bearer(first_session),
+            json={"current_password": "wrong-password-123!", "new_password": new_password},
+        )
+        assert wrong.status_code == 400
+
+        changed = client.post(
+            "/api/auth/change-password",
+            headers=bearer(first_session),
+            json={"current_password": PASSWORD, "new_password": new_password},
+        )
+        assert changed.status_code == 204
+
+        # Current session stays active; other sessions are revoked immediately.
+        assert client.get("/api/content", headers=bearer(first_session)).status_code == 200
+        assert client.get("/api/content", headers=bearer(second_session)).status_code == 401
+
+        # Old password fails; new password logs in.
+        assert client.post("/api/auth/login", json={"username": "pw_changer", "password": PASSWORD}).status_code == 401
+        assert (
+            client.post("/api/auth/login", json={"username": "pw_changer", "password": new_password}).status_code == 200
+        )

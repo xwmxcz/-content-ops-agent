@@ -183,3 +183,72 @@ def test_frontend_proxy_logs_strip_query_strings_and_compose_is_loopback_only():
     assert "TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-172.16.0.0/12}" in compose
     assert "proxy_headers=False" in (root / "server.py").read_text(encoding="utf-8")
     assert 'forwarded_allow_ips = ""' in (root / "gunicorn.conf.py").read_text(encoding="utf-8")
+
+
+def test_change_password_verifies_current_password_and_revokes_other_sessions():
+    from src.api.dependencies import get_account_store, get_current_user
+    from src.api.main import app
+    from src.api.passwords import hash_password, verify_password
+
+    current_pw = "Current-Password-2026!"
+    new_pw = "Updated-Password-2026!"
+
+    class FakeAccountStore:
+        def __init__(self):
+            self.user = {
+                "id": "a" * 32,
+                "username": "alice",
+                "password_hash": hash_password(current_pw),
+                "is_active": True,
+            }
+            self.kept_session_id = None
+
+        def check_rate_limit(self, scope, client, *, limit, seconds):
+            return True
+
+        def get_user_by_id(self, user_id):
+            return self.user if user_id == self.user["id"] else None
+
+        def update_password_and_revoke_sessions(self, user_id, new_password_hash, *, keep_session_id=None):
+            if user_id != self.user["id"]:
+                return False
+            self.user["password_hash"] = new_password_hash
+            self.kept_session_id = keep_session_id
+            return True
+
+    fake_accounts = FakeAccountStore()
+    app.dependency_overrides[get_account_store] = lambda: fake_accounts
+    app.dependency_overrides[get_current_user] = lambda: {
+        "id": "a" * 32,
+        "username": "alice",
+        "session_id": "session_current_1",
+    }
+    try:
+        client = TestClient(app)
+        wrong_resp = client.post(
+            "/api/auth/change-password",
+            json={"current_password": "Wrong-Password-123!", "new_password": new_pw},
+        )
+        same_resp = client.post(
+            "/api/auth/change-password",
+            json={"current_password": current_pw, "new_password": current_pw},
+        )
+        weak_resp = client.post(
+            "/api/auth/change-password",
+            json={"current_password": current_pw, "new_password": "short"},
+        )
+        ok_resp = client.post(
+            "/api/auth/change-password",
+            json={"current_password": current_pw, "new_password": new_pw},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert wrong_resp.status_code == 400
+    assert wrong_resp.json()["detail"] == "当前密码不正确"
+    assert same_resp.status_code == 400
+    assert same_resp.json()["detail"] == "新密码不能与当前密码相同"
+    assert weak_resp.status_code == 422
+    assert ok_resp.status_code == 204
+    assert verify_password(fake_accounts.user["password_hash"], new_pw)
+    assert fake_accounts.kept_session_id == "session_current_1"

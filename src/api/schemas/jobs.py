@@ -14,6 +14,7 @@ class JobResponse(BaseModel):
     job_type: JobType
     status: JobStatus
     progress: int = Field(0, ge=0, le=100)
+    payload: dict[str, Any] | None = None
     result: dict[str, Any] | None = None
     error: str | None = None
     provider: str | None = None

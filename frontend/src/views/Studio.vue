@@ -2,6 +2,7 @@
   <div class="studio-page">
     <section class="studio-banner">
       <div class="banner-copy">
+        <span class="surface-kicker">CONTENT STUDIO · 多智能体协同创作</span>
         <h1>{{ modeTitle }}</h1>
         <p>{{ modeDescription }}</p>
       </div>
@@ -55,7 +56,19 @@
           <div class="field-stack">
             <div class="field-block">
               <span>内容主题</span>
-              <el-input v-model="form.topic" type="textarea" :rows="5" placeholder="例如：周末徒步路线推荐" />
+              <el-input v-model="form.topic" type="textarea" :rows="4" placeholder="例如：周末徒步路线推荐，附新手装备清单与避坑建议" />
+              <div class="quick-prompts">
+                <button
+                  v-for="prompt in quickPrompts"
+                  :key="prompt"
+                  type="button"
+                  class="prompt-chip"
+                  :disabled="running"
+                  @click="form.topic = prompt"
+                >
+                  {{ prompt }}
+                </button>
+              </div>
             </div>
             <div class="field-grid">
               <div class="field-block">
@@ -79,7 +92,7 @@
             </div>
             <div class="field-block">
               <span>关键词</span>
-              <el-input v-model="keywordsText" placeholder="徒步, 周末, 避坑" />
+              <el-input v-model="keywordsText" placeholder="徒步, 周末, 避坑（多个词用逗号分隔）" />
             </div>
           </div>
         </section>
@@ -192,12 +205,18 @@
 
           <div v-if="!plan.length && !running" class="timeline-empty">
             <div v-if="mode === 'workflow'" class="flow-preview" aria-label="创作流程：策略、初稿、润色、审核">
-              <span><small>01</small> 策略</span>
-              <span><small>02</small> 初稿</span>
-              <span><small>03</small> 润色</span>
-              <span><small>04</small> 审核</span>
+              <span><small>STEP 01</small><strong>内容策略</strong><em>受众定位与切入角度</em></span>
+              <span><small>STEP 02</small><strong>结构初稿</strong><em>展开论点与核心正文</em></span>
+              <span><small>STEP 03</small><strong>编辑润色</strong><em>优化节奏与平台语感</em></span>
+              <span><small>STEP 04</small><strong>质量审核</strong><em>事实把关与发布建议</em></span>
             </div>
-            <p>{{ mode === 'dynamic' ? '填写主题并点击“运行”，自动规划研究步骤，边查证边创作。' : '填写左侧创作配置，点击“运行”开始。你可以随时查看每一步的内容。' }}</p>
+            <div v-else class="flow-preview" aria-label="研究流程：规划、检索、撰稿、核验">
+              <span><small>STEP 01</small><strong>动态规划</strong><em>拆解调研问题与路径</em></span>
+              <span><small>STEP 02</small><strong>多源检索</strong><em>查证网页与历史内容库</em></span>
+              <span><small>STEP 03</small><strong>深度撰稿</strong><em>融合一手依据生成初稿</em></span>
+              <span><small>STEP 04</small><strong>事实核验</strong><em>交叉比对与润色定稿</em></span>
+            </div>
+            <p>{{ mode === 'dynamic' ? '填写主题并点击右上角“运行”，Agent 将自动规划研究步骤，边查证边创作。' : '在左侧填写主题或点击灵感示例，再点击“运行”开始。你可以随时点开每一步查看详情。' }}</p>
           </div>
 
           <ol v-else class="timeline">
@@ -269,8 +288,8 @@
         <section v-else class="studio-surface draft-placeholder">
           <div class="draft-icon"><el-icon><DocumentCopy /></el-icon></div>
           <h2>{{ running ? '好内容，正在成稿' : '从一个想法，写出下一篇' }}</h2>
-          <p>{{ running ? '创作完成后，最终稿件会显示在这里。' : '告诉我们你想写什么，剩下的交给创作工作流。' }}</p>
-          <span>最终稿件 · 可复制与继续打磨</span>
+          <p>{{ running ? '创作完成后，最终稿件会实时呈现在这里。' : '在左侧输入选题或点击快捷灵感，剩下的交给多智能体创作工作流。' }}</p>
+          <span>多步协同 · 自动入库 · 支持在 Chat 与打磨页二次精修</span>
         </section>
       </main>
     </div>
@@ -307,9 +326,11 @@ import {
   cancelPipelineRun,
   createPipelineRun,
   getPipelineRun,
+  listPipelineRuns,
   resumePipelineRun,
   type PipelinePlanStep,
   type PipelineRunPayload,
+  type PipelineRunSnapshot,
   type SubAgentId,
   type SubAgentToolEvent
 } from '../api/agent'
@@ -321,6 +342,7 @@ import {
 } from '../api/jobs'
 import { useJobPolling } from '../composables/useJobPolling'
 import { usePipelineStream, type StreamConnectionState } from '../composables/usePipelineStream'
+import { ACTIVE_STUDIO_SESSION_KEY } from '../workspaceSession'
 import {
   agentLabel,
   contentTypeOptions,
@@ -471,6 +493,7 @@ const pipelineStream = usePipelineStream({
     revisionCount.value = revision
   },
   onRunComplete(event) {
+    clearActiveSession()
     finalContent.value = event.final_content
     savedContentId.value = event.saved_content_id ?? null
     totalPromptTokens.value = event.total_prompt_tokens
@@ -494,6 +517,7 @@ const pipelineStream = usePipelineStream({
     closeStream()
   },
   onRunCancelled() {
+    clearActiveSession()
     status.value = 'cancelled'
     running.value = false
     errorMessage.value = '已停止运行'
@@ -553,6 +577,7 @@ async function reconcileRun() {
     revisionCount.value = snapshot.revision_count ?? revisionCount.value
 
     if (snapshot.status === 'completed') {
+      clearActiveSession()
       savedContentId.value = snapshot.saved_content_id ?? null
       status.value = 'completed'
       running.value = false
@@ -563,6 +588,7 @@ async function reconcileRun() {
       errorMessage.value = snapshot.error || '运行失败'
       streamExhausted.value = false
     } else if (snapshot.status === 'cancelled') {
+      clearActiveSession()
       status.value = 'cancelled'
       running.value = false
       errorMessage.value = snapshot.error || '已停止运行'
@@ -697,6 +723,12 @@ const keywordList = computed(() =>
     .filter(Boolean)
 )
 
+const quickPrompts = computed(() =>
+  mode.value === 'dynamic'
+    ? ['2026 主流降噪耳机横评与选购建议', 'AI 编程工具对比与团队落地实践', '近期高互动小红书图文结构拆解']
+    : ['周末徒步路线与新手装备避坑指南', '远程办公效率翻倍的 5 个工作流习惯', '新消费品牌如何写好第一篇种草笔记']
+)
+
 const hasOutput = computed(() => !!finalContent.value || plan.value.length > 0 || !!errorMessage.value)
 
 const totalToolCalls = computed(() =>
@@ -735,8 +767,43 @@ function scrollToStep(index: number): void {
   stepDialogOpen.value = true
 }
 
+function activeSessionKey() {
+  return ACTIVE_STUDIO_SESSION_KEY
+}
+
+function saveActiveSession(activeMode: StudioMode, id: string) {
+  try {
+    window.sessionStorage?.setItem(activeSessionKey(), JSON.stringify({ mode: activeMode, id }))
+  } catch {
+    /* ignore storage quota or privacy-mode errors */
+  }
+}
+
+function clearActiveSession() {
+  try {
+    window.sessionStorage?.removeItem(activeSessionKey())
+  } catch {
+    /* ignore storage errors */
+  }
+}
+
+function readActiveSession(): { mode: StudioMode; id: string } | null {
+  try {
+    const raw = window.sessionStorage?.getItem(activeSessionKey())
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { mode?: string; id?: string }
+    if ((parsed.mode === 'dynamic' || parsed.mode === 'workflow') && typeof parsed.id === 'string' && parsed.id) {
+      return { mode: parsed.mode, id: parsed.id }
+    }
+  } catch {
+    /* ignore malformed storage */
+  }
+  return null
+}
+
 function resetWorkspace() {
   if (running.value) return
+  clearActiveSession()
   closeStream()
   workflowJobId = null
   workflowPolling.reset()
@@ -761,6 +828,7 @@ function closeStream() {
 }
 
 function stop() {
+  clearActiveSession()
   if (mode.value === 'dynamic') {
     const id = runId.value
     if (id) {
@@ -826,6 +894,7 @@ async function runDynamic() {
   try {
     const handle = await createPipelineRun(payload)
     runId.value = handle.run_id
+    saveActiveSession('dynamic', handle.run_id)
     await subscribe(handle.run_id)
   } catch (error) {
     running.value = false
@@ -839,8 +908,7 @@ async function subscribe(id: string) {
   await pipelineStream.subscribe(id)
 }
 
-async function runWorkflow() {
-  const attempt = workflowPolling.reset()
+function initWorkflowPlan() {
   plan.value = ['strategy', 'writer', 'editor', 'review'].map((id, idx) => ({
     index: idx + 1,
     agent_id: id as SubAgentId,
@@ -854,6 +922,11 @@ async function runWorkflow() {
     completion_tokens: 0,
     cost_estimate: 0
   }))
+}
+
+async function runWorkflow() {
+  const attempt = workflowPolling.reset()
+  initWorkflowPlan()
   status.value = 'running'
 
   const payload: AgentRunPayload = {
@@ -874,11 +947,13 @@ async function runWorkflow() {
     if (workflowPolling.isAborted(attempt)) return
     workflowJobId = job.id
     runId.value = job.id
+    saveActiveSession('workflow', job.id)
     const result = await pollWorkflowJob(job.id)
     if (workflowPolling.isAborted(attempt)) return
     applyWorkflowResult(result)
   } catch (error) {
     if (workflowPolling.isAborted(attempt)) return
+    clearActiveSession()
     running.value = false
     status.value = 'failed'
     errorMessage.value = (error as Error).message
@@ -895,6 +970,9 @@ async function pollWorkflowJob(jobId: string): Promise<AgentRunResponse> {
 
 function advanceWorkflowSteps(job: JobResponse) {
   if (!plan.value.length) return
+  if (!form.topic && job.payload && typeof job.payload.topic === 'string') {
+    form.topic = job.payload.topic
+  }
   const expected = Math.min(plan.value.length, Math.max(1, Math.floor(((job.progress || 0) / 100) * plan.value.length)))
   for (let i = 0; i < plan.value.length; i++) {
     const step = plan.value[i]
@@ -907,6 +985,7 @@ function advanceWorkflowSteps(job: JobResponse) {
 }
 
 function applyWorkflowResult(result: AgentRunResponse) {
+  clearActiveSession()
   result.steps.forEach((step: AgentStep, idx: number) => {
     const target = plan.value[idx]
     if (!target) return
@@ -929,6 +1008,86 @@ function applyWorkflowResult(result: AgentRunResponse) {
   ElMessage.success(savedContentId.value ? `已完成，已保存 #${savedContentId.value}` : '已完成')
 }
 
+async function applyPipelineSnapshot(snapshot: PipelineRunSnapshot) {
+  mode.value = 'dynamic'
+  runId.value = snapshot.id
+  const req = (snapshot.request || {}) as Record<string, unknown>
+  if (!form.topic) {
+    const restoredTopic = (typeof req.topic === 'string' && req.topic) || snapshot.topic || ''
+    if (restoredTopic) form.topic = restoredTopic
+  }
+  if (typeof req.content_type === 'string' && req.content_type) form.content_type = req.content_type
+  else if (snapshot.content_type) form.content_type = snapshot.content_type
+  if (typeof req.style === 'string' && req.style) form.style = req.style
+  else if (snapshot.style) form.style = snapshot.style
+  if (typeof req.length === 'string' && req.length) form.length = req.length
+  if (Array.isArray(req.keywords) && !keywordsText.value) {
+    keywordsText.value = req.keywords.filter((k): k is string => typeof k === 'string').join(', ')
+  }
+  if (typeof req.use_web_search === 'boolean') research.use_web_search = req.use_web_search
+  if (typeof req.use_history_search === 'boolean') research.use_history_search = req.use_history_search
+  if (typeof req.research_focus === 'string' && !research.research_focus) research.research_focus = req.research_focus
+
+  if (snapshot.plan?.length) {
+    plan.value = snapshot.plan.map(step => ({ ...step }))
+    snapshot.plan.forEach(step => {
+      if (step.output) streamingOutputs[step.index] = step.output
+      if (step.tool_events?.length) stepToolEvents[step.index] = step.tool_events
+    })
+  }
+  totalPromptTokens.value = snapshot.total_prompt_tokens ?? 0
+  totalCompletionTokens.value = snapshot.total_completion_tokens ?? 0
+  totalCost.value = snapshot.total_cost ?? 0
+  revisionCount.value = snapshot.revision_count ?? 0
+  savedContentId.value = snapshot.saved_content_id ?? null
+
+  if (snapshot.status === 'running') {
+    saveActiveSession('dynamic', snapshot.id)
+    running.value = true
+    status.value = snapshot.plan?.length ? 'running' : 'planning'
+    await subscribe(snapshot.id)
+  } else if (snapshot.status === 'failed') {
+    saveActiveSession('dynamic', snapshot.id)
+    running.value = false
+    status.value = 'failed'
+    errorMessage.value = snapshot.error || '运行失败'
+  } else {
+    clearActiveSession()
+    running.value = false
+    status.value = snapshot.status === 'completed' ? 'completed' : 'cancelled'
+  }
+}
+
+async function restorePipelineRun(id: string) {
+  try {
+    const snapshot = await getPipelineRun(id)
+    await applyPipelineSnapshot(snapshot)
+  } catch {
+    clearActiveSession()
+  }
+}
+
+async function restoreWorkflowJob(id: string) {
+  const attempt = workflowPolling.reset()
+  mode.value = 'workflow'
+  workflowJobId = id
+  runId.value = id
+  running.value = true
+  status.value = 'running'
+  initWorkflowPlan()
+  try {
+    const result = await pollWorkflowJob(id)
+    if (workflowPolling.isAborted(attempt)) return
+    applyWorkflowResult(result)
+  } catch (error) {
+    if (workflowPolling.isAborted(attempt)) return
+    clearActiveSession()
+    running.value = false
+    status.value = 'failed'
+    errorMessage.value = (error as Error).message
+  }
+}
+
 async function copyFinal() {
   if (!finalContent.value?.content) return
   try {
@@ -948,15 +1107,39 @@ function optimizeInChat() {
   router.push({ path: '/chat', query: { seed } })
 }
 
-onMounted(() => {
+onMounted(async () => {
   const topic = typeof route.query.topic === 'string' ? route.query.topic.trim() : ''
   const researchFocus = typeof route.query.research_focus === 'string' ? route.query.research_focus.trim() : ''
+  const queryRunId = typeof route.query.run_id === 'string' ? route.query.run_id.trim() : ''
   if (topic) form.topic = topic
   if (researchFocus) research.research_focus = researchFocus
-  if (topic || researchFocus) {
+  if (topic || researchFocus || queryRunId) {
     const nextQuery: Record<string, string> = {}
     if (typeof route.query.mode === 'string' && route.query.mode) nextQuery.mode = route.query.mode
     void router.replace({ query: nextQuery })
+  }
+  if (queryRunId) {
+    await restorePipelineRun(queryRunId)
+    return
+  }
+  if (topic || researchFocus) return
+
+  const saved = readActiveSession()
+  if (saved) {
+    if (saved.mode === 'dynamic') await restorePipelineRun(saved.id)
+    else await restoreWorkflowJob(saved.id)
+    return
+  }
+  if (mode.value === 'dynamic' && typeof listPipelineRuns === 'function') {
+    try {
+      const recent = await listPipelineRuns({ limit: 5 })
+      const recoverable = recent?.find(item => item.status === 'running' || item.status === 'failed')
+      if (recoverable && !running.value && !runId.value) {
+        await applyPipelineSnapshot(recoverable)
+      }
+    } catch {
+      /* recovery discovery is best-effort */
+    }
   }
 })
 
@@ -969,61 +1152,58 @@ onBeforeUnmount(() => {
 <!-- STYLE_PLACEHOLDER -->
 
 <style scoped>
-
-
-
 .studio-page {
-  max-width: 1520px;
+  width: 100%;
+  max-width: 1680px;
   margin: 0 auto;
-  padding: 32px 36px 40px;
-  background: var(--c-bg);
+  padding: 28px 40px 48px;
+  background: transparent;
   color: var(--c-text);
 }
 
 .studio-banner {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
   gap: 24px;
-  margin-bottom: 24px;
+  margin-bottom: 20px;
+  padding: 4px 0 22px;
+  border-bottom: 1px solid var(--c-border);
 }
 
 .banner-copy {
-  max-width: 760px;
+  max-width: 740px;
 }
 
 .surface-kicker {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
   color: var(--c-text-tertiary);
   font-size: 12px;
   font-weight: 500;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 
 .banner-copy h1 {
-  margin: 0 0 8px;
+  margin: 0 0 6px;
   color: var(--c-text);
   font-family: var(--font-display);
-  font-size: 30px;
-  font-weight: 600;
-  line-height: 1.3;
-  letter-spacing: -0.6px;
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.025em;
 }
 
 .banner-copy p {
   margin: 0;
   color: var(--c-text-secondary);
   font-size: 14px;
-  line-height: 1.55;
+  line-height: 1.65;
 }
 
 .mode-toggle {
   flex-shrink: 0;
-  padding: 5px;
-  border: 1px solid var(--c-border);
-  border-radius: 12px;
-  background: var(--c-surface);
 }
 
 .run-strip {
@@ -1032,10 +1212,11 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   gap: 20px;
   margin-bottom: 24px;
-  padding: 14px 18px;
+  padding: 14px 20px;
   border: 1px solid var(--c-border);
   border-radius: var(--r-card);
-  background: var(--c-surface);
+  background: #ffffff;
+  box-shadow: var(--shadow-panel);
 }
 
 .run-actions {
@@ -1043,12 +1224,12 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
-  min-width: 176px;
+  min-width: 196px;
 }
 
 .run-actions:has(.run-progress) {
   flex: 1;
-  max-width: 380px;
+  max-width: 400px;
 }
 
 .ghost-action {
@@ -1056,42 +1237,42 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 6px;
   height: 36px;
-  padding: 0 12px;
+  padding: 0 14px;
   border: 1px solid var(--c-border);
   border-radius: var(--r-control);
-  color: var(--c-text);
-  background: var(--c-surface);
+  color: var(--c-text-secondary);
+  background: #ffffff;
   cursor: pointer;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 550;
   font-family: var(--font-ui);
-  transition: border-color 100ms ease;
+  transition: border-color 140ms ease, background-color 140ms ease, color 140ms ease;
 }
 
-.ghost-action:hover {
-  border-color: var(--c-accent);
-  background: var(--c-bg-soft);
+.ghost-action:hover:not(:disabled) {
+  border-color: var(--c-border-strong);
+  color: var(--c-text);
+  background: #faf9f6;
 }
 
 .ghost-action:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: default;
 }
 
 .ghost-action:focus-visible,
-
 .stop-action:focus-visible {
-  outline: 2px solid var(--c-accent);
-  outline-offset: 3px;
+  outline: 2px solid var(--c-border-focus);
+  outline-offset: 2px;
 }
 
 .ghost-action.accent {
-  border-color: var(--c-accent);
-  color: var(--c-accent);
+  border-color: var(--c-text);
+  color: var(--c-text);
 }
 
 .ghost-action.accent:hover {
-  background: var(--c-accent-soft);
+  background: var(--c-bg-soft);
 }
 
 .ghost-action :deep(.el-icon) {
@@ -1114,7 +1295,7 @@ onBeforeUnmount(() => {
 
 .progress-bar-fill {
   height: 100%;
-  background: var(--c-accent);
+  background: var(--c-text);
   transition: width 240ms ease;
 }
 
@@ -1128,9 +1309,8 @@ onBeforeUnmount(() => {
 
 .progress-state {
   font-family: var(--font-ui);
-  color: var(--c-accent);
+  color: var(--c-text);
   font-weight: 600;
-  letter-spacing: 0;
 }
 
 .progress-count {
@@ -1145,13 +1325,13 @@ onBeforeUnmount(() => {
   gap: 6px;
   height: 36px;
   padding: 0 14px;
-  border: 1px solid var(--c-fail);
+  border: 1px solid rgba(185, 28, 28, 0.25);
   border-radius: var(--r-control);
   color: var(--c-fail);
   background: var(--c-fail-soft);
   cursor: pointer;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
   font-family: var(--font-ui);
 }
 
@@ -1162,14 +1342,18 @@ onBeforeUnmount(() => {
 .signal-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px 24px;
+  gap: 8px;
   min-width: 0;
 }
 
 .signal-card {
-  display: flex;
-  align-items: baseline;
+  display: inline-flex;
+  align-items: center;
   gap: 8px;
+  padding: 6px 14px;
+  border: 1px solid var(--c-border-soft);
+  border-radius: 9px;
+  background: #faf9f6;
 }
 
 .signal-card span {
@@ -1181,16 +1365,15 @@ onBeforeUnmount(() => {
 .signal-card strong {
   color: var(--c-text);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 650;
   line-height: 1.2;
-  letter-spacing: 0;
   font-feature-settings: 'tnum';
   font-variant-numeric: tabular-nums;
 }
 
 .studio-grid {
   display: grid;
-  grid-template-columns: minmax(290px, 340px) minmax(0, 1fr);
+  grid-template-columns: minmax(350px, 410px) minmax(0, 1fr);
   align-items: start;
   gap: 24px;
   margin: 0 auto;
@@ -1215,29 +1398,32 @@ onBeforeUnmount(() => {
   padding: 24px;
   border: 1px solid var(--c-border);
   border-radius: var(--r-card);
-  background: var(--c-surface);
+  background: #ffffff;
   box-shadow: var(--shadow-panel);
 }
 
 .surface-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 20px;
+  margin-bottom: 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--c-border-soft);
 }
 
 .surface-head.compact {
-  margin-bottom: 12px;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
 }
 
 .surface-head h2 {
   margin: 0;
   color: var(--c-text);
-  font-size: 17px;
-  font-weight: 600;
-  line-height: 1.5;
-  letter-spacing: 0;
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
 }
 
 .surface-actions {
@@ -1250,40 +1436,39 @@ onBeforeUnmount(() => {
 .surface-pill {
   display: inline-flex;
   align-items: center;
-  min-height: 25px;
-  padding: 2px 9px;
-  border: 1px solid var(--c-border-soft);
+  min-height: 24px;
+  padding: 2px 10px;
+  border: 1px solid var(--c-border);
   border-radius: 999px;
   color: var(--c-text-secondary);
-  background: var(--c-bg-soft);
+  background: #faf9f6;
   font-size: 12px;
   font-weight: 500;
   font-family: var(--font-ui);
-  letter-spacing: 0;
   white-space: nowrap;
 }
 
 .surface-pill.success {
   color: var(--c-ok);
-  border-color: var(--c-ok-soft);
+  border-color: rgba(21, 128, 61, 0.2);
   background: var(--c-ok-soft);
 }
 
 .surface-pill.running {
   color: var(--c-warn);
-  border-color: var(--c-warn-soft);
+  border-color: rgba(180, 83, 9, 0.2);
   background: var(--c-warn-soft);
 }
 
 .surface-pill.failed {
   color: var(--c-fail);
-  border-color: var(--c-fail-soft);
+  border-color: rgba(185, 28, 28, 0.2);
   background: var(--c-fail-soft);
 }
 
 .surface-pill.warn {
   color: var(--c-warn);
-  border-color: var(--c-warn-soft);
+  border-color: rgba(180, 83, 9, 0.2);
   background: var(--c-warn-soft);
 }
 
@@ -1306,12 +1491,12 @@ onBeforeUnmount(() => {
 
 .field-stack {
   display: grid;
-  gap: 20px;
+  gap: 18px;
 }
 
 .field-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
   gap: 12px;
 }
 
@@ -1322,43 +1507,59 @@ onBeforeUnmount(() => {
 
 .field-block > span {
   color: var(--c-text-secondary);
-  font-size: 13px;
-  font-weight: 500;
-  letter-spacing: 0.01em;
+  font-size: 12.5px;
+  font-weight: 600;
 }
 
 .quick-prompts {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+  margin-top: 2px;
 }
 
 .prompt-chip {
   min-height: 26px;
-  padding: 4px 10px;
+  padding: 4px 11px;
   border: 1px solid var(--c-border);
   border-radius: 999px;
   color: var(--c-text-secondary);
-  background: var(--c-surface);
+  background: #faf9f6;
   cursor: pointer;
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.4;
   text-align: left;
   white-space: normal;
   word-break: break-word;
   font-family: var(--font-ui);
-  transition: border-color 100ms ease, color 100ms ease;
+  transition: border-color 140ms ease, color 140ms ease, background-color 140ms ease;
 }
 
-.prompt-chip:hover {
+.prompt-chip:hover:not(:disabled) {
   border-color: var(--c-border-strong);
   color: var(--c-text);
+  background: var(--c-bg-soft);
+}
+
+.prompt-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .length-group,
-
 .style-segmented {
   width: 100%;
+}
+
+.length-group :deep(.el-radio-button) {
+  flex: 1;
+}
+
+.length-group :deep(.el-radio-button__inner) {
+  width: 100%;
+  padding-left: 0;
+  padding-right: 0;
 }
 
 .timeline-empty {
@@ -1369,31 +1570,49 @@ onBeforeUnmount(() => {
 }
 
 .timeline-empty p {
-  margin: 18px 0 0;
+  margin: 16px 0 0;
+  color: var(--c-text-secondary);
   line-height: 1.7;
 }
 
 .flow-preview {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
+  gap: 12px;
 }
 
 .flow-preview > span {
   display: grid;
-  gap: 8px;
-  padding: 16px 8px;
+  gap: 6px;
+  padding: 18px 16px;
   border: 1px solid var(--c-border-soft);
-  border-radius: var(--r-control);
-  color: var(--c-text-secondary);
-  background: var(--c-bg-soft);
+  border-radius: 11px;
+  color: var(--c-text);
+  background: #faf9f6;
+  text-align: left;
   font-size: 14px;
 }
 
 .flow-preview small {
-  color: var(--c-accent);
+  display: inline-flex;
+  justify-self: start;
+  color: var(--c-text-tertiary);
   font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.flow-preview strong {
+  color: var(--c-text);
+  font-size: 14.5px;
+  font-weight: 650;
+}
+
+.flow-preview em {
+  font-style: normal;
+  color: var(--c-text-secondary);
   font-size: 12px;
+  line-height: 1.55;
 }
 
 .timeline {
@@ -1407,32 +1626,28 @@ onBeforeUnmount(() => {
 .timeline-step {
   display: grid;
   gap: 4px;
-  padding: 13px 14px;
-  border: 1px solid var(--c-border-soft);
-  border-radius: var(--r-control);
+  padding: 14px 16px;
+  border: 1px solid var(--c-border);
+  border-radius: 11px;
   background: var(--c-surface);
   cursor: pointer;
   outline: none;
-  transition: border-color 120ms ease, background-color 120ms ease, transform 80ms ease;
+  transition: border-color 120ms ease, background-color 120ms ease;
 }
 
 .timeline-step:hover {
-  border-color: var(--c-border-strong, var(--c-accent));
-  background: var(--c-bg-soft);
+  border-color: var(--c-border-strong);
+  background: #faf9f6;
 }
 
 .timeline-step:focus-visible {
-  border-color: var(--c-accent);
-  box-shadow: 0 0 0 2px var(--c-accent-soft);
-}
-
-.timeline-step:active {
-  transform: translateY(1px);
+  border-color: var(--c-border-focus);
+  box-shadow: 0 0 0 2px var(--c-accent-ring);
 }
 
 .timeline-step.running {
-  border-color: var(--c-accent);
-  background: var(--c-accent-soft);
+  border-color: var(--c-text);
+  background: #faf9f6;
 }
 
 .timeline-step.completed {
@@ -1462,8 +1677,8 @@ onBeforeUnmount(() => {
 .research-glyph {
   display: inline-grid;
   place-items: center;
-  width: 17px;
-  height: 17px;
+  width: 18px;
+  height: 18px;
   margin-right: 5px;
   border: 1px solid var(--c-accent);
   border-radius: 999px;
@@ -1493,22 +1708,22 @@ onBeforeUnmount(() => {
 .tool-pill {
   display: inline-flex;
   align-items: center;
-  height: 18px;
-  padding: 0 7px;
+  height: 20px;
+  padding: 0 8px;
   border-radius: 999px;
   background: var(--c-accent-soft);
   color: var(--c-accent);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0;
 }
 
 .timeline-head {
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr) auto;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
 }
 
 .timeline-name {
@@ -1524,20 +1739,20 @@ onBeforeUnmount(() => {
 .timeline-index {
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   border-radius: 999px;
   border: 1px solid var(--c-border);
   background: var(--c-bg-soft);
   color: var(--c-text-secondary);
   font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 11.5px;
+  font-weight: 700;
 }
 
 .timeline-step.running .timeline-index {
-  border-color: var(--c-accent);
-  color: var(--c-accent);
+  border-color: var(--c-text);
+  color: var(--c-text);
   background: var(--c-surface);
 }
 
@@ -1556,12 +1771,12 @@ onBeforeUnmount(() => {
 .timeline-meta {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
 .timeline-meta small {
   color: var(--c-text-tertiary);
-  font-size: 11px;
+  font-size: 11.5px;
   font-family: var(--font-mono);
   font-feature-settings: 'tnum';
   font-variant-numeric: tabular-nums;
@@ -1603,7 +1818,7 @@ onBeforeUnmount(() => {
 }
 
 .step-surface.running {
-  border-color: var(--c-accent);
+  border-color: var(--c-text);
 }
 
 .step-surface.failed {
@@ -1618,8 +1833,6 @@ onBeforeUnmount(() => {
 .step-surface.is-research.completed {
   border-color: var(--c-accent);
 }
-
-/* Dialog header that replaces the inline step card surface-head. */
 
 .research-surface {
   border-color: var(--c-border);
@@ -1651,10 +1864,10 @@ onBeforeUnmount(() => {
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 12px;
-  padding: 10px 12px;
+  padding: 11px 14px;
   border: 1px solid var(--c-border);
   border-radius: var(--r-control);
-  background: var(--c-surface);
+  background: #faf9f6;
   cursor: pointer;
   user-select: none;
   transition: border-color 120ms ease, background-color 120ms ease;
@@ -1665,13 +1878,13 @@ onBeforeUnmount(() => {
 }
 
 .research-toggle:focus-visible {
-  outline: 2px solid var(--c-accent);
+  outline: 2px solid var(--c-border-focus);
   outline-offset: 2px;
 }
 
 .research-toggle.active {
-  border-color: var(--c-border);
-  background: var(--c-accent-soft);
+  border-color: var(--c-border-strong);
+  background: #ffffff;
 }
 
 .toggle-copy strong {
@@ -1689,8 +1902,6 @@ onBeforeUnmount(() => {
   font-size: 11.5px;
 }
 
-
-
 .final-surface {
   padding: 28px;
   border-color: var(--c-border);
@@ -1698,71 +1909,102 @@ onBeforeUnmount(() => {
 
 .final-body {
   margin: 0;
-  padding: 24px 0 0;
+  padding: 20px 0 0;
   max-height: 680px;
   overflow-y: auto;
   border-top: 1px solid var(--c-border-soft);
-  background: var(--c-surface);
+  background: transparent;
   color: var(--c-text);
   white-space: pre-wrap;
   word-break: break-word;
   font-family: var(--font-editorial);
-  font-size: 15px;
+  font-size: 15.5px;
   line-height: 1.95;
 }
 
 .draft-placeholder {
-  min-height: 380px;
+  min-height: 420px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   text-align: center;
+  border: 1px solid var(--c-border);
+  background-color: #ffffff;
+  background-image: radial-gradient(#e5e2dc 1px, transparent 1px);
+  background-size: 22px 22px;
 }
 
 .draft-icon {
+  position: relative;
+  z-index: 1;
   display: grid;
   place-items: center;
-  width: 56px;
-  height: 64px;
-  margin-bottom: 24px;
+  width: 64px;
+  height: 74px;
+  margin-bottom: 22px;
   border: 1px solid var(--c-border);
   border-radius: 12px;
-  color: var(--c-accent);
-  background: var(--c-bg-soft);
-  font-size: 25px;
-  transform: rotate(-5deg);
+  color: var(--c-text);
+  background: #ffffff;
+  box-shadow: 0 8px 24px -6px rgba(24, 24, 27, 0.08);
+  font-size: 24px;
+}
+
+.draft-icon::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+  border: 1px solid var(--c-border);
+  background: #faf9f6;
+  z-index: -1;
+  transform: rotate(6deg) translate(8px, 3px);
 }
 
 .draft-placeholder h2 {
   margin: 0;
+  color: var(--c-text);
   font-family: var(--font-editorial);
-  font-size: 23px;
-  font-weight: 500;
-  line-height: 1.5;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.45;
 }
 
 .draft-placeholder p {
-  max-width: 340px;
-  margin: 12px 0 32px;
+  max-width: 440px;
+  margin: 10px 0 22px;
   color: var(--c-text-secondary);
-  font-size: 14px;
-  line-height: 1.7;
+  font-size: 13.5px;
+  line-height: 1.8;
 }
 
 .draft-placeholder > span {
-  color: var(--c-text-tertiary);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--c-border);
+  background: #faf9f6;
+  color: var(--c-text-secondary);
   font-size: 12px;
+  font-weight: 500;
 }
 
-@media (max-width: 1100px) {
+@media (max-width: 1180px) {
   .studio-page {
-    padding: 28px 24px;
+    padding: 24px;
   }
 
   .studio-grid {
-    grid-template-columns: minmax(270px, 310px) minmax(0, 1fr);
+    grid-template-columns: minmax(310px, 350px) minmax(0, 1fr);
     gap: 18px;
+  }
+
+  .flow-preview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .studio-surface {
@@ -1778,18 +2020,22 @@ onBeforeUnmount(() => {
   }
 }
 
-
-@media (max-width: 800px) {
+@media (max-width: 840px) {
   .studio-page {
-    padding: 24px 18px;
+    padding: 20px 16px;
   }
 
   .studio-banner {
     align-items: flex-start;
     flex-direction: column;
+    padding: 22px 20px;
   }
 
   .studio-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .flow-preview {
     grid-template-columns: 1fr;
   }
 
@@ -1798,12 +2044,11 @@ onBeforeUnmount(() => {
   }
 
   .run-strip {
-    gap: 18px;
+    gap: 16px;
   }
 
   .signal-row {
     width: 100%;
-    gap: 10px 18px;
   }
 
   .run-actions:has(.run-progress) {
@@ -1819,14 +2064,16 @@ onBeforeUnmount(() => {
   }
 }
 
-
 @media (prefers-reduced-motion: reduce) {
   .progress-bar-fill,
   .timeline-step,
-  .timeline-chevron {
+  .timeline-chevron,
+  .flow-preview > span {
     transition: none;
   }
 
+  .draft-icon {
+    animation: none;
+  }
 }
-
 </style>

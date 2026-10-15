@@ -207,6 +207,18 @@ async def resume_pipeline_run(
     )
 
 
+@router.get("/runs", response_model=list[dict])
+def list_pipeline_runs(
+    thread_id: str | None = Query(default=None, max_length=80),
+    status_filter: str | None = Query(default=None, alias="status", max_length=20),
+    limit: int = Query(default=20, ge=1, le=100),
+    store: ContentStore = Depends(get_store),
+) -> list[dict]:
+    for expired in store.find_expired_run_leases(limit=limit):
+        store.fail_expired_run(expired["id"])
+    return store.list_runs(thread_id=thread_id, limit=limit, status=status_filter)
+
+
 @router.get("/runs/{run_id}", response_model=dict)
 def get_pipeline_run(run_id: str, store: ContentStore = Depends(get_store)) -> dict:
     # Development background mode may not have a separate reaper process.

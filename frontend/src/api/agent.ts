@@ -427,6 +427,12 @@ export function pipelineStreamUrl(runId: string, afterSeq?: number) {
 export interface PipelineRunSnapshot {
   id: string
   thread_id: string
+  topic?: string
+  content_type?: string
+  style?: string
+  provider?: string | null
+  model?: string | null
+  request?: Record<string, unknown> | null
   status: 'running' | 'completed' | 'failed' | 'cancelled' | string
   plan: PipelinePlanStep[]
   revision_count: number
@@ -438,6 +444,17 @@ export interface PipelineRunSnapshot {
   next_event_seq: number
   created_at?: string | null
   completed_at?: string | null
+}
+
+export interface ListPipelineRunsParams {
+  thread_id?: string
+  status?: string
+  limit?: number
+}
+
+export async function listPipelineRuns(params: ListPipelineRunsParams = {}) {
+  const { data } = await api.get<PipelineRunSnapshot[]>('/agent/runs', { params })
+  return data
 }
 
 /**

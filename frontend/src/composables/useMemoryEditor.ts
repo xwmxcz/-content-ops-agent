@@ -4,7 +4,12 @@ import { ElMessageBox } from 'element-plus/es/components/message-box/index'
 import type { MemoryFile } from '../api/memory'
 import { workspaceSessionId, workspaceSessionReady } from '../workspaceSession'
 
-export function useMemoryEditor(name: string, limit: number, read: () => Promise<MemoryFile>, write: (content: string) => Promise<MemoryFile>) {
+export function useMemoryEditor(
+  name: string,
+  limit: number,
+  read: () => Promise<MemoryFile>,
+  write: (content: string, expectedEtag?: string) => Promise<MemoryFile>
+) {
   const draft = ref('')
   const meta = ref<MemoryFile>({ content: '', char_count: 0, char_limit: limit })
   const loading = ref(false)
@@ -51,10 +56,11 @@ export function useMemoryEditor(name: string, limit: number, read: () => Promise
     const session = workspaceSessionId.value
     const current = ++generation
     const submitted = draft.value
+    const expectedEtag = meta.value.etag
     saving.value = true
     error.value = ''
     try {
-      const result = await write(submitted)
+      const result = expectedEtag !== undefined ? await write(submitted, expectedEtag) : await write(submitted)
       if (current !== generation || session !== workspaceSessionId.value) return
       meta.value = result
       // Edits typed while the save was in flight remain unsaved in the editor.

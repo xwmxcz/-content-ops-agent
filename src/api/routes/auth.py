@@ -9,7 +9,14 @@ from pydantic import BaseModel
 
 from src.api.dependencies import get_account_store, get_current_user, get_store
 from src.api.passwords import DUMMY_PASSWORD_HASH, hash_password, verify_password
-from src.api.schemas.auth import AuthStatusResponse, LoginRequest, PublicUser, RegisterRequest, SessionResponse
+from src.api.schemas.auth import (
+    AuthStatusResponse,
+    ChangePasswordRequest,
+    LoginRequest,
+    PublicUser,
+    RegisterRequest,
+    SessionResponse,
+)
 from src.api.security import (
     RESOURCE_SESSION_COOKIE,
     authenticate_request,
@@ -105,6 +112,34 @@ def resource_ticket(
     if not owned:
         raise HTTPException(status_code=404, detail="Resource not found")
     return {"access_ticket": token, "expires_at": expiry}
+
+
+@router.post("/change-password", status_code=204)
+def change_password(
+    payload: ChangePasswordRequest,
+    request: Request,
+    response: Response,
+    user: dict = Depends(get_current_user),
+    accounts: AccountStore = Depends(get_account_store),
+) -> Response:
+    _throttle(accounts, request, "change-password", 10)
+    record = accounts.get_user_by_id(user["id"])
+    valid = verify_password(
+        record["password_hash"] if record and record["is_active"] else DUMMY_PASSWORD_HASH,
+        payload.current_password,
+    )
+    if not record or not valid or not record["is_active"]:
+        raise HTTPException(status_code=400, detail="当前密码不正确")
+    if payload.current_password == payload.new_password:
+        raise HTTPException(status_code=400, detail="新密码不能与当前密码相同")
+    if not accounts.update_password_and_revoke_sessions(
+        user["id"],
+        hash_password(payload.new_password),
+        keep_session_id=user.get("session_id"),
+    ):
+        raise HTTPException(status_code=401, detail="账户已失效")
+    response.status_code = 204
+    return response
 
 
 @router.post("/logout", status_code=204)

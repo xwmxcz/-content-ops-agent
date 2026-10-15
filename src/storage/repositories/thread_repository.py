@@ -13,7 +13,7 @@ from src.storage.models import (
     AgentThread,
     ProposedAction,
 )
-from src.storage.repositories.base import RepositoryMixin, assigned_pk
+from src.storage.repositories.base import ILIKE_ESCAPE, RepositoryMixin, assigned_pk, ilike_contains_pattern
 
 logger = logging.getLogger(__name__)
 
@@ -90,8 +90,13 @@ class ThreadRepositoryMixin(RepositoryMixin):
             if not include_archived:
                 query = query.filter(AgentThread.archived.is_(False))
             if q and q.strip():
-                pattern = f"%{q.strip()}%"
-                query = query.filter(or_(AgentThread.title.ilike(pattern), AgentThread.id.ilike(pattern)))
+                pattern = ilike_contains_pattern(q)
+                query = query.filter(
+                    or_(
+                        AgentThread.title.ilike(pattern, escape=ILIKE_ESCAPE),
+                        AgentThread.id.ilike(pattern, escape=ILIKE_ESCAPE),
+                    )
+                )
 
             query = (
                 query.group_by(AgentThread.id)
@@ -238,9 +243,10 @@ class ThreadRepositoryMixin(RepositoryMixin):
         query = (query or "").strip()
         if not query:
             return []
+        pattern = ilike_contains_pattern(query)
         session = self._get_session()
         try:
-            q = session.query(AgentMessage).filter(AgentMessage.content.ilike(f"%{query}%"))
+            q = session.query(AgentMessage).filter(AgentMessage.content.ilike(pattern, escape=ILIKE_ESCAPE))
             if thread_id:
                 q = q.filter(AgentMessage.thread_id == thread_id)
             messages = q.order_by(AgentMessage.created_at.desc()).limit(limit).all()

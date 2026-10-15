@@ -198,3 +198,50 @@ def test_top_contents_are_bounded_and_sorted_by_views(client, store):
 @pytest.mark.parametrize("params", [{"days": 0}, {"days": 366}, {"days": "bad"}, {"platform": "p" * 51}])
 def test_invalid_performance_filters_are_rejected(client, params):
     assert client.get("/api/stats/performance", params=params).status_code == 422
+
+
+def test_latest_metrics_by_content_prefers_latest_reading_and_sums_platforms():
+    from src.storage.repositories.content_repository import ContentRepositoryMixin
+
+    now = datetime(2026, 4, 10, 12, 0, 0)
+    rows = [
+        ContentMetrics(
+            id=1,
+            content_id=10,
+            platform="xiaohongshu",
+            views=50000,
+            likes=500,
+            comments=50,
+            shares=10,
+            recorded_at=now - timedelta(days=1),
+        ),
+        # Newer corrected reading on the same platform has lower views; must win over id=1.
+        ContentMetrics(
+            id=2,
+            content_id=10,
+            platform="xiaohongshu",
+            views=5000,
+            likes=200,
+            comments=20,
+            shares=5,
+            recorded_at=now,
+        ),
+        # Second platform reading for the same content; must be summed with latest xiaohongshu reading.
+        ContentMetrics(
+            id=3,
+            content_id=10,
+            platform="wechat",
+            views=3000,
+            likes=100,
+            comments=10,
+            shares=5,
+            recorded_at=now,
+        ),
+    ]
+    aggregated = ContentRepositoryMixin._latest_metrics_by_content(rows)
+    assert set(aggregated.keys()) == {10}
+    metric = aggregated[10]
+    assert metric.views == 8000
+    assert metric.likes == 300
+    assert metric.comments == 30
+    assert metric.shares == 10

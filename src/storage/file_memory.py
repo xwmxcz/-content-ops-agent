@@ -21,6 +21,8 @@ the old file or the new file, never a truncated one.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import sys
@@ -39,6 +41,7 @@ _VALID_TARGETS = {AGENT, USER}
 _SECTION = "§"
 
 _LOCK_FILE = ".lock"
+_EPOCH_FILE = ".snapshot_epoch"
 _LOCK_TIMEOUT_SECONDS = 10.0
 _LOCK_POLL_SECONDS = 0.02
 _REPLACE_ATTEMPTS = 10
@@ -86,6 +89,10 @@ class MemoryLockTimeout(TimeoutError):
     """Raised when another writer held the memory directory lock for too long."""
 
 
+class MemoryEditConflict(ValueError):
+    """Raised when a memory file changed after the editor loaded it."""
+
+
 class FileMemory:
     """Process-safe reader/writer for MEMORY.md and USER.md."""
 
@@ -105,15 +112,26 @@ class FileMemory:
 
     # ─── Public API ────────────────────────────────────────────────────────
 
+    @staticmethod
+    def compute_etag(content: str) -> str:
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+
+    def etag(self, target: str) -> str:
+        return self.compute_etag(self.load(target))
+
     def load(self, target: str) -> str:
         path = self._path_for(target)
         if not path.exists():
             return ""
         return path.read_text(encoding="utf-8")
 
-    def save(self, target: str, content: str) -> None:
+    def save(self, target: str, content: str, *, expected_etag: str | None = None) -> None:
         self._check_limit(target, content)
         with self._exclusive():
+            if expected_etag is not None:
+                current_etag = self.compute_etag(self.load(target))
+                if current_etag != expected_etag:
+                    raise MemoryEditConflict("记忆文件已被其他页面或助手更新，请重新加载后再保存。当前编辑内容仍保留。")
             self._write(target, content)
 
     # add/replace/remove read the file and write back a derived value, so the
@@ -173,6 +191,47 @@ class FileMemory:
             "user": self.load(USER),
         }
 
+    def bump_snapshot_epoch(self, thread_id: str | None = None) -> int:
+        """Record an explicit snapshot refresh so all Gunicorn workers drop stale frozen prompts."""
+        epoch_path = self.dir / _EPOCH_FILE
+        with self._exclusive():
+            data = self._read_epoch_data(epoch_path)
+            raw_threads = data.get("threads")
+            threads: dict[str, int] = (
+                {str(k): int(v) for k, v in raw_threads.items() if isinstance(v, int)}
+                if isinstance(raw_threads, dict)
+                else {}
+            )
+            highest = max([int(data.get("all") or 0), *threads.values()])
+            next_epoch = max(highest + 1, time.time_ns())
+            if thread_id is None:
+                payload = {"all": next_epoch, "threads": {}}
+            else:
+                threads[thread_id] = next_epoch
+                payload = {"all": int(data.get("all") or 0), "threads": threads}
+            self._write_path(epoch_path, json.dumps(payload, ensure_ascii=False))
+            return next_epoch
+
+    def snapshot_epoch(self, thread_id: str | None = None) -> int:
+        """Return the latest explicit refresh epoch affecting ``thread_id``."""
+        data = self._read_epoch_data(self.dir / _EPOCH_FILE)
+        global_epoch = int(data.get("all") or 0)
+        if not thread_id:
+            return global_epoch
+        threads = data.get("threads")
+        thread_epoch = int(threads.get(thread_id) or 0) if isinstance(threads, dict) else 0
+        return max(global_epoch, thread_epoch)
+
+    @staticmethod
+    def _read_epoch_data(path: Path) -> dict[str, Any]:
+        if not path.exists():
+            return {}
+        try:
+            parsed = json.loads(path.read_text(encoding="utf-8"))
+            return parsed if isinstance(parsed, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
     def limit_for(self, target: str) -> int:
         self._validate_target(target)
         return self.memory_limit if target == AGENT else self.user_limit
@@ -199,7 +258,9 @@ class FileMemory:
 
     def _write(self, target: str, content: str) -> None:
         """Replace the file in one step. The caller holds the writer lock."""
-        path = self._path_for(target)
+        self._write_path(self._path_for(target), content)
+
+    def _write_path(self, path: Path, content: str) -> None:
         fd, tmp_name = tempfile.mkstemp(dir=self.dir, prefix=f".{path.name}.", suffix=".tmp")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:

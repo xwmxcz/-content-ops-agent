@@ -59,3 +59,21 @@ def assigned_pk(instance: object, field: str) -> int:
     if value is None:
         raise RuntimeError(f"{type(instance).__name__}.{field} is unset after flush")
     return int(value)
+
+
+ILIKE_ESCAPE = "/"
+
+
+def ilike_contains_pattern(raw: str) -> str:
+    """Build an escaped substring pattern for ``Column.ilike(pattern, escape=ILIKE_ESCAPE)``.
+
+    User search terms are literal text, never SQL ``LIKE`` wildcards: ``%``, ``_``,
+    and the escape character itself are escaped before wrapping in ``%...%``.
+    """
+    escaped = (
+        raw.strip()
+        .replace(ILIKE_ESCAPE, ILIKE_ESCAPE * 2)
+        .replace("%", f"{ILIKE_ESCAPE}%")
+        .replace("_", f"{ILIKE_ESCAPE}_")
+    )
+    return f"%{escaped}%"
