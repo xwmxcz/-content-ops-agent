@@ -77,4 +77,3 @@ describe('Studio workflow attempt isolation', () => {
     expect(window.sessionStorage.getItem('studio:activeSession')).toBeNull()
   })
 })
-

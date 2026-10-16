@@ -97,6 +97,20 @@ describe('usePipelineStream', () => {
       expect(FakeEventSource.last.withCredentials).toBe(true)
     })
 
+    it('prepares a restored run at the snapshot cursor before manual resume', async () => {
+      const { handlers } = makeHandlers()
+      const stream = usePipelineStream(handlers)
+
+      stream.prepare('run-restored', 42)
+      expect(FakeEventSource.openCount).toBe(0)
+
+      stream.resume()
+
+      expect(FakeEventSource.openCount).toBe(1)
+      expect(FakeEventSource.last.url).toContain('/agent/runs/run-restored/stream')
+      expect(FakeEventSource.last.afterSeqParam).toBe(42)
+    })
+
     it('routes each run event to its handler', async () => {
       const { handlers } = makeHandlers()
       const stream = usePipelineStream(handlers)

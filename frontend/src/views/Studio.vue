@@ -1045,12 +1045,18 @@ async function applyPipelineSnapshot(snapshot: PipelineRunSnapshot) {
     saveActiveSession('dynamic', snapshot.id)
     running.value = true
     status.value = snapshot.plan?.length ? 'running' : 'planning'
-    await subscribe(snapshot.id)
+    // The snapshot already contains every event through next_event_seq - 1.
+    // Replaying from zero would double-count totals while restoring a page.
+    pipelineStream.prepare(snapshot.id, Math.max(0, (snapshot.next_event_seq ?? 1) - 1))
+    pipelineStream.resume()
   } else if (snapshot.status === 'failed') {
     saveActiveSession('dynamic', snapshot.id)
     running.value = false
     status.value = 'failed'
     errorMessage.value = snapshot.error || '运行失败'
+    // Keep the run identity and cursor so a resume after a page refresh opens
+    // the stream after the historical failure event.
+    pipelineStream.prepare(snapshot.id, Math.max(0, (snapshot.next_event_seq ?? 1) - 1))
   } else {
     clearActiveSession()
     running.value = false

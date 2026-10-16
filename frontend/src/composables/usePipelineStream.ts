@@ -360,6 +360,21 @@ export function usePipelineStream(
   }
 
   /**
+   * Attach to a run restored from an authoritative snapshot without opening
+   * the stream yet. The caller can seed the replay cursor at the snapshot's
+   * latest event and then call `resume()` when it is ready to reconnect.
+   */
+  function prepare(runId: string, afterSeq = 0) {
+    close()
+    session = workspaceSessionId.value
+    currentRunId = runId
+    terminal = false
+    attempt = 0
+    lastSeq = Number.isFinite(afterSeq) ? Math.max(0, Math.floor(afterSeq)) : 0
+    state = 'idle'
+  }
+
+  /**
    * Reopens a subscription that gave up, keeping the resume cursor so the server
    * replays only what was missed. Used by the manual reconnect affordance after
    * automatic retries are exhausted.
@@ -379,6 +394,7 @@ export function usePipelineStream(
   return {
     close,
     subscribe,
+    prepare,
     resume,
     getStatus: () => status()
   }
